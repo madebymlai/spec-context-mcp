@@ -1,4 +1,6 @@
-# Create spec-context-mcp: Unified MCP Server #54
+# Create spec-context-mcp: Unified MCP Server
+
+**Repository:** https://github.com/madebymlai/spec-context-mcp
 
 ## Summary
 
