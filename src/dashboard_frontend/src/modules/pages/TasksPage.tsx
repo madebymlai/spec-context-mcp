@@ -469,7 +469,7 @@ function TaskList({ specName }: { specName: string }) {
   const pendingStatusUpdatesRef = useRef<Set<string>>(new Set());
 
   // Storage key for per-spec preferences
-  const storageKey = useMemo(() => `spec-workflow:task-preferences:${specName}`, [specName]);
+  const storageKey = useMemo(() => `spec-context:task-preferences:${specName}`, [specName]);
 
   // Load preferences from localStorage
   useEffect(() => {
@@ -1315,7 +1315,7 @@ function Content() {
 
   // Create project-scoped storage key
   const storageKey = useMemo(() =>
-    info?.projectName ? `spec-workflow:${info.projectName}:selectedSpec` : null,
+    info?.projectName ? `spec-context:${info.projectName}:selectedSpec` : null,
     [info?.projectName]
   );
 

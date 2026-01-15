@@ -490,7 +490,7 @@ export function LogsPage() {
 
   // Create storage key for per-spec sort preferences
   const storageKey = useMemo(() =>
-    selectedSpec ? `spec-workflow:logs-preferences:${selectedSpec}` : null,
+    selectedSpec ? `spec-context:logs-preferences:${selectedSpec}` : null,
     [selectedSpec]
   );
 

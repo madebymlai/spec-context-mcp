@@ -119,19 +119,7 @@ function Content() {
           
           <div className="flex items-center justify-center gap-4">
             <a
-              href="https://www.npmjs.com/package/@pimzino/spec-workflow-mcp"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0H1.763zM5.13 5.323l13.837.019-.009 5.183H13.82v-1.67h3.532V6.875H5.113v3.28h5.605v1.671H5.122l.008-6.503zm6.98 5.579h3.532v-2.489H12.11v2.489z"/>
-              </svg>
-              {t('links.npm')}
-            </a>
-            
-            <a
-              href="https://github.com/Pimzino/spec-workflow-mcp"
+              href="https://github.com/madebymlai/spec-context-mcp"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 dark:bg-gray-700 dark:hover:bg-gray-600 text-white text-sm font-medium rounded-lg transition-colors"

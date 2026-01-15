@@ -91,15 +91,6 @@ function Header({ toggleSidebar }: { toggleSidebar: () => void }) {
                 {theme === 'dark' ? t('theme.dark') : t('theme.light')}
               </button>
 
-              <a
-                href="https://buymeacoffee.com/pimzino"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1.5 bg-yellow-400 hover:bg-yellow-500 text-yellow-900 text-sm font-medium rounded-lg transition-colors"
-                title={t('support.project')}
-              >
-                {t('support.me')}
-              </a>
             </div>
 
             {/* Mobile/Tablet Settings Menu Button */}
@@ -162,17 +153,6 @@ function Header({ toggleSidebar }: { toggleSidebar: () => void }) {
                   </button>
                 </div>
 
-                <div className="pt-2">
-                  <a
-                    href="https://buymeacoffee.com/pimzino"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full inline-flex items-center justify-center px-4 py-3 bg-yellow-400 hover:bg-yellow-500 text-yellow-900 text-sm font-medium rounded-lg transition-colors"
-                    title={t('support.project')}
-                  >
-                    {t('support.me')}
-                  </a>
-                </div>
 
                 {info?.version && (
                   <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
@@ -212,7 +192,7 @@ function AppInner() {
   const { currentProjectId } = useProjects();
   const [sidebarOpen, setSidebarOpen] = useState(true); // Default open on desktop
 
-  const SIDEBAR_COLLAPSE_KEY = 'spec-workflow-sidebar-collapsed';
+  const SIDEBAR_COLLAPSE_KEY = 'spec-context-sidebar-collapsed';
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem(SIDEBAR_COLLAPSE_KEY);
