@@ -547,7 +547,7 @@ Steps 4-6 are the core new work. Most other code is adaptation from existing rep
 OPENROUTER_API_KEY=sk-or-xxx
 EMBEDDING_MODEL=qwen/qwen3-embedding-8b
 EMBEDDING_DIMENSION=4096
-QDRANT_URL=http://<your-qdrant-server>:6333
+QDRANT_URL=http://46.62.233.229:6333
 ```
 
 ## Usage Example
@@ -561,7 +561,7 @@ QDRANT_URL=http://<your-qdrant-server>:6333
       "args": ["spec-context-mcp"],
       "env": {
         "OPENROUTER_API_KEY": "sk-or-xxx",
-        "QDRANT_URL": "http://<your-qdrant-server>:6333"
+        "QDRANT_URL": "http://46.62.233.229:6333"
       }
     }
   }

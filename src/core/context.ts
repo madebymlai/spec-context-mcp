@@ -7,6 +7,7 @@ import type { VectorDatabase, VectorDocument } from './vectordb/types.js';
 import type { EmbeddingProvider } from './embedding/types.js';
 import type { Splitter, CodeChunk } from './splitter/types.js';
 import type { SemanticSearchResult } from './types.js';
+import { FileSynchronizer } from './sync/synchronizer.js';
 
 export interface IndexingProgress {
     phase: 'scanning' | 'splitting' | 'embedding' | 'inserting' | 'done';
@@ -19,6 +20,13 @@ export interface IndexingResult {
     indexedFiles: number;
     totalChunks: number;
     collectionName: string;
+}
+
+export interface SyncResult {
+    added: number;
+    removed: number;
+    modified: number;
+    totalChunks: number;
 }
 
 // Language detection by file extension
@@ -290,6 +298,147 @@ export class Context {
     async isIndexed(projectPath: string): Promise<boolean> {
         const collectionName = this.getCollectionName(projectPath);
         return this.vectorDb.hasCollection(collectionName);
+    }
+
+    /**
+     * Sync codebase - incremental update of changed files only
+     */
+    async syncCodebase(
+        projectPath: string,
+        options?: {
+            ignorePatterns?: string[];
+            onProgress?: (progress: IndexingProgress) => void;
+        }
+    ): Promise<SyncResult> {
+        const collectionName = this.getCollectionName(projectPath);
+
+        // Check if collection exists
+        const exists = await this.vectorDb.hasCollection(collectionName);
+        if (!exists) {
+            // If not indexed, do full index
+            const result = await this.indexCodebase(projectPath, {
+                force: true,
+                ignorePatterns: options?.ignorePatterns,
+                onProgress: options?.onProgress,
+            });
+            return {
+                added: result.indexedFiles,
+                removed: 0,
+                modified: 0,
+                totalChunks: result.totalChunks,
+            };
+        }
+
+        // Initialize synchronizer
+        const synchronizer = new FileSynchronizer(projectPath, options?.ignorePatterns || []);
+        await synchronizer.initialize();
+
+        // Check for changes
+        const changes = await synchronizer.checkForChanges();
+
+        if (changes.added.length === 0 && changes.removed.length === 0 && changes.modified.length === 0) {
+            return { added: 0, removed: 0, modified: 0, totalChunks: 0 };
+        }
+
+        // Process removed files - delete their chunks
+        if (changes.removed.length > 0) {
+            const idsToDelete: string[] = [];
+            for (const file of changes.removed) {
+                // We need to query for chunks with this relativePath
+                const results = await this.vectorDb.query(
+                    collectionName,
+                    `relativePath == "${file}"`,
+                    ['id']
+                );
+                for (const r of results) {
+                    if (r.id) idsToDelete.push(r.id as string);
+                }
+            }
+            if (idsToDelete.length > 0) {
+                await this.vectorDb.delete(collectionName, idsToDelete);
+            }
+        }
+
+        // Process modified files - delete old chunks, add new ones
+        if (changes.modified.length > 0) {
+            const idsToDelete: string[] = [];
+            for (const file of changes.modified) {
+                const results = await this.vectorDb.query(
+                    collectionName,
+                    `relativePath == "${file}"`,
+                    ['id']
+                );
+                for (const r of results) {
+                    if (r.id) idsToDelete.push(r.id as string);
+                }
+            }
+            if (idsToDelete.length > 0) {
+                await this.vectorDb.delete(collectionName, idsToDelete);
+            }
+        }
+
+        // Process added and modified files - create new chunks
+        const filesToProcess = [...changes.added, ...changes.modified];
+        const newChunks: VectorDocument[] = [];
+
+        for (const relativePath of filesToProcess) {
+            const fullPath = path.join(projectPath, relativePath);
+            try {
+                const content = await fs.promises.readFile(fullPath, 'utf-8');
+                const ext = path.extname(relativePath);
+                const language = EXTENSION_TO_LANGUAGE[ext] || 'text';
+
+                const chunks = await this.splitter.split(content, language, relativePath);
+
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i];
+                    const id = `${relativePath}:${chunk.metadata.startLine}:${chunk.metadata.endLine}:${i}`;
+
+                    newChunks.push({
+                        id,
+                        vector: [],
+                        content: chunk.content,
+                        relativePath,
+                        startLine: chunk.metadata.startLine,
+                        endLine: chunk.metadata.endLine,
+                        fileExtension: ext,
+                        metadata: {
+                            language,
+                            projectPath,
+                            chunkIndex: i,
+                        },
+                    });
+                }
+            } catch (error) {
+                console.warn(`[Context] Failed to process ${fullPath}:`, error);
+            }
+        }
+
+        // Generate embeddings for new chunks
+        if (newChunks.length > 0) {
+            const batchSize = 50;
+            for (let i = 0; i < newChunks.length; i += batchSize) {
+                const batch = newChunks.slice(i, i + batchSize);
+                const texts = batch.map((c) => c.content);
+                const embeddings = await this.embedding.embed(texts);
+
+                for (let j = 0; j < batch.length; j++) {
+                    batch[j].vector = embeddings[j];
+                }
+            }
+
+            // Insert new chunks
+            await this.vectorDb.insert(collectionName, newChunks);
+        }
+
+        console.log(`[Context] Synced: ${changes.added.length} added, ${changes.removed.length} removed, ${changes.modified.length} modified`);
+
+        return {
+            added: changes.added.length,
+            removed: changes.removed.length,
+            modified: changes.modified.length,
+            totalChunks: newChunks.length,
+        };
     }
 
     /**

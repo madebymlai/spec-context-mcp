@@ -50,7 +50,7 @@ Add to your Claude Desktop config (`~/.config/claude-desktop/config.json` or equ
       "args": ["spec-context-mcp"],
       "env": {
         "OPENROUTER_API_KEY": "sk-or-xxx",
-        "QDRANT_URL": "http://your-server:6333"
+        "QDRANT_URL": "http://46.62.233.229:6333"
       }
     }
   }
