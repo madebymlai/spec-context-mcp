@@ -43,14 +43,15 @@ Add to your Claude Code config (`.mcp.json` in project root):
 
 ### Environment Variables
 
-| Variable              | Required | Description                                            |
-|-----------------------|----------|--------------------------------------------------------|
-| `OPENROUTER_API_KEY`  | Yes      | OpenRouter API key for embeddings                      |
-| `QDRANT_URL`          | Yes      | Qdrant server URL                                      |
-| `DASHBOARD_URL`       | No       | Dashboard URL for approval links                       |
+| Variable              | Required | Description                                               |
+|-----------------------|----------|-----------------------------------------------------------|
+| `OPENROUTER_API_KEY`  | Yes      | OpenRouter API key for embeddings                         |
+| `QDRANT_URL`          | Yes      | Qdrant server URL                                         |
+| `DASHBOARD_URL`       | No       | Dashboard URL for remote registration                     |
+| `DASHBOARD_API_KEY`   | No       | API key for dashboard authentication                      |
 | `EMBEDDING_MODEL`     | No       | Model for embeddings (default: `qwen/qwen3-embedding-8b`) |
-| `EMBEDDING_DIMENSION` | No       | Vector dimension (default: `4096`)                     |
-| `QDRANT_API_KEY`      | No       | Qdrant API key if auth enabled                         |
+| `EMBEDDING_DIMENSION` | No       | Vector dimension (default: `4096`)                        |
+| `QDRANT_API_KEY`      | No       | Qdrant API key if auth enabled                            |
 
 ## Tools
 

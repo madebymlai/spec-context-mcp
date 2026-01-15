@@ -50,7 +50,7 @@ For Claude Desktop, add to your config:
 
     // Cleanup on exit
     const cleanup = async () => {
-        await cleanupDashboardRegistrations();
+        await cleanupDashboardRegistrations(config.dashboardApiKey);
         process.exit(0);
     };
     process.on('SIGINT', cleanup);

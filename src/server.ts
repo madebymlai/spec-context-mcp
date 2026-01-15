@@ -148,9 +148,14 @@ export class SpecContextServer {
         const dashboardUrl = this.config.dashboardUrl!;
 
         try {
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (this.config.dashboardApiKey) {
+                headers['Authorization'] = `Bearer ${this.config.dashboardApiKey}`;
+            }
+
             const response = await fetch(`${dashboardUrl}/api/projects/add`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify({ projectPath }),
             });
 
@@ -178,11 +183,16 @@ export class SpecContextServer {
 /**
  * Cleanup function to unregister from all dashboards on exit
  */
-export async function cleanupDashboardRegistrations(): Promise<void> {
+export async function cleanupDashboardRegistrations(apiKey?: string): Promise<void> {
     for (const { dashboardUrl, projectId } of registeredProjects) {
         try {
+            const headers: Record<string, string> = {};
+            if (apiKey) {
+                headers['Authorization'] = `Bearer ${apiKey}`;
+            }
             await fetch(`${dashboardUrl}/api/projects/${projectId}`, {
                 method: 'DELETE',
+                headers,
             });
         } catch {
             // Ignore cleanup errors

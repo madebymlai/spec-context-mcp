@@ -39,6 +39,7 @@ export interface MultiDashboardOptions {
   bindAddress?: string; // Network binding address
   allowExternalAccess?: boolean; // Explicit opt-in for non-localhost binding
   security?: Partial<SecurityConfig>; // Security features configuration
+  apiKey?: string; // API key for authentication (from DASHBOARD_API_KEY env var)
 }
 
 export class MultiProjectDashboardServer {
@@ -61,8 +62,10 @@ export class MultiProjectDashboardServer {
   // Debounce spec broadcasts to coalesce rapid updates
   private pendingSpecBroadcasts: Map<string, NodeJS.Timeout> = new Map();
   private readonly SPEC_BROADCAST_DEBOUNCE_MS = 300;
+  private apiKey?: string;
 
   constructor(options: MultiDashboardOptions = {}) {
+    this.apiKey = options.apiKey || process.env.DASHBOARD_API_KEY;
     this.options = options;
     this.projectManager = new ProjectManager();
     this.jobScheduler = new JobScheduler(this.projectManager);
@@ -91,20 +94,20 @@ export class MultiProjectDashboardServer {
     // Security warning if binding to non-localhost address
     if (!isLocalhostAddress(this.bindAddress)) {
       console.error('');
-      console.error('⚠️  ═══════════════════════════════════════════════════════════');
-      console.error(`⚠️  SECURITY WARNING: Dashboard binding to ${this.bindAddress}`);
-      console.error('⚠️  This exposes your dashboard to network-based attacks!');
-      console.error('⚠️  Recommendation: Use 127.0.0.1 for localhost-only access');
-      console.error('⚠️  ═══════════════════════════════════════════════════════════');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error(`SECURITY WARNING: Dashboard binding to ${this.bindAddress}`);
+      console.error('This exposes your dashboard to network-based attacks!');
+      console.error('Recommendation: Use 127.0.0.1 for localhost-only access');
+      console.error('═══════════════════════════════════════════════════════════');
       console.error('');
     }
 
     // Display security status
-    console.error('🔒 Security Configuration:');
+    console.error('Security Configuration:');
     console.error(`   - Bind Address: ${this.bindAddress}`);
-    console.error(`   - Rate Limiting: ${this.securityConfig.rateLimitEnabled ? 'ENABLED ✓' : 'DISABLED ⚠️'}`);
-    console.error(`   - Audit Logging: ${this.securityConfig.auditLogEnabled ? 'ENABLED ✓' : 'DISABLED ⚠️'}`);
-    console.error(`   - CORS: ${this.securityConfig.corsEnabled ? 'ENABLED ✓' : 'DISABLED ⚠️'}`);
+    console.error(`   - Rate Limiting: ${this.securityConfig.rateLimitEnabled ? 'ENABLED' : 'DISABLED'}`);
+    console.error(`   - Audit Logging: ${this.securityConfig.auditLogEnabled ? 'ENABLED' : 'DISABLED'}`);
+    console.error(`   - CORS: ${this.securityConfig.corsEnabled ? 'ENABLED' : 'DISABLED'}`);
     console.error(`   - Allowed Origins: ${this.securityConfig.allowedOrigins.join(', ')}`);
     console.error('');
 
@@ -159,6 +162,24 @@ export class MultiProjectDashboardServer {
 
     if (this.auditLogger) {
       this.app.addHook('onRequest', this.auditLogger.middleware());
+    }
+
+    // API key authentication for /api routes (except static files and websocket)
+    if (this.apiKey) {
+      console.error(`   - API Key Auth: ENABLED`);
+      this.app.addHook('onRequest', async (request, reply) => {
+        const url = request.url;
+        // Only check API routes, skip static files and websocket
+        if (url.startsWith('/api/')) {
+          const authHeader = request.headers['authorization'];
+          const providedKey = authHeader?.replace('Bearer ', '');
+          if (providedKey !== this.apiKey) {
+            return reply.code(401).send({ error: 'Unauthorized: Invalid or missing API key' });
+          }
+        }
+      });
+    } else {
+      console.error(`   - API Key Auth: DISABLED (set DASHBOARD_API_KEY to enable)`);
     }
 
     // Register plugins
