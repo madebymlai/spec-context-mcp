@@ -1,5 +1,7 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 
 export const specWorkflowGuideTool: Tool = {
   name: 'spec-workflow-guide',
@@ -20,11 +22,15 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
     `Monitor progress on dashboard: ${context.dashboardUrl}` :
     'Please start the dashboard with: spec-workflow-mcp --dashboard';
 
+  // Read steering docs if they exist
+  const steeringContent = getSteeringDocsContent(context.projectPath);
+
   return {
     success: true,
     message: 'Complete spec workflow guide loaded - follow this workflow exactly',
     data: {
       guide: getSpecWorkflowGuide(),
+      steering: steeringContent,
       dashboardUrl: context.dashboardUrl,
       dashboardAvailable: !!context.dashboardUrl
     },
@@ -36,6 +42,30 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
       dashboardMessage
     ]
   };
+}
+
+function getSteeringDocsContent(projectPath: string): { product?: string; tech?: string; structure?: string } | null {
+  const steeringDir = join(projectPath, '.spec-context', 'steering');
+
+  if (!existsSync(steeringDir)) {
+    return null;
+  }
+
+  const result: { product?: string; tech?: string; structure?: string } = {};
+
+  const docs = ['product', 'tech', 'structure'] as const;
+  for (const doc of docs) {
+    const docPath = join(steeringDir, `${doc}.md`);
+    if (existsSync(docPath)) {
+      try {
+        result[doc] = readFileSync(docPath, 'utf-8');
+      } catch {
+        // Skip if can't read
+      }
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 function getSpecWorkflowGuide(): string {
