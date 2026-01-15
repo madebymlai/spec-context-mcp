@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import 'dotenv/config';
 import { MultiProjectDashboardServer } from './multi-server.js';
 import { DashboardSessionManager } from '../core/workflow/dashboard-session.js';
 
