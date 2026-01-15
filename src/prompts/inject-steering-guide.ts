@@ -56,7 +56,4 @@ Please acknowledge that you've reviewed this steering workflow guide and confirm
 export const injectSteeringGuidePrompt: PromptDefinition = {
   prompt,
   handler,
-  _metadata: {
-    preferredModel: 'sonnet'  // Just loads guide
-  }
 };

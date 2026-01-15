@@ -231,7 +231,4 @@ The tasks.md has been updated to reflect current requirements while preserving a
 export const refreshTasksPrompt: PromptDefinition = {
   prompt,
   handler,
-  _metadata: {
-    preferredModel: 'sonnet'  // Structured comparison
-  }
 };

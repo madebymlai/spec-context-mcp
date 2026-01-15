@@ -5,14 +5,9 @@ export interface PromptHandler {
   (args: Record<string, any>, context: ToolContext): Promise<PromptMessage[]>;
 }
 
-export interface PromptMetadata {
-  preferredModel: 'opus' | 'sonnet';
-}
-
 export interface PromptDefinition {
   prompt: Prompt;
   handler: PromptHandler;
-  _metadata?: PromptMetadata;
 }
 
 export interface PromptResponse {

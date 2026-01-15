@@ -80,7 +80,4 @@ Please provide a comprehensive status report that helps understand the current s
 export const specStatusPrompt: PromptDefinition = {
   prompt,
   handler,
-  _metadata: {
-    preferredModel: 'sonnet'  // Simple status check
-  }
 };

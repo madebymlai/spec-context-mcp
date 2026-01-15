@@ -175,7 +175,4 @@ Please proceed with implementing ${taskId ? `task ${taskId}` : 'the next task'} 
 export const implementTaskPrompt: PromptDefinition = {
   prompt,
   handler,
-  _metadata: {
-    preferredModel: 'opus'  // Complex multi-step reasoning
-  }
 };

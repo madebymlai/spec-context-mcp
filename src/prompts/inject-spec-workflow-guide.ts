@@ -52,7 +52,4 @@ Please acknowledge that you've reviewed this workflow guide and are ready to hel
 export const injectSpecWorkflowGuidePrompt: PromptDefinition = {
   prompt,
   handler,
-  _metadata: {
-    preferredModel: 'sonnet'  // Just loads guide
-  }
 };

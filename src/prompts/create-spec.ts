@@ -101,7 +101,4 @@ Please read the ${documentType} template and create the comprehensive document a
 export const createSpecPrompt: PromptDefinition = {
   prompt,
   handler,
-  _metadata: {
-    preferredModel: 'sonnet'  // Template-based creation
-  }
 };

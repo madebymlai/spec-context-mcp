@@ -81,7 +81,4 @@ Please read the ${docType} template and create a comprehensive steering document
 export const createSteeringDocPrompt: PromptDefinition = {
   prompt,
   handler,
-  _metadata: {
-    preferredModel: 'sonnet'  // Template-based creation
-  }
 };
