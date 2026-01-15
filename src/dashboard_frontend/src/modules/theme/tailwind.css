@@ -1,0 +1,47 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@variant dark (.dark &);
+
+:root {
+  color-scheme: light dark;
+}
+
+.card {
+  @apply bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm;
+}
+
+.card-hover {
+  @apply transition-transform duration-200 hover:-translate-y-0.5 hover:shadow-md;
+}
+
+.btn {
+  @apply inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-transparent bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition;
+}
+
+.btn-secondary {
+  @apply inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition;
+}
+
+.muted { @apply text-gray-500 dark:text-gray-400; }
+
+/* Drag and Drop utilities */
+.draggable {
+  @apply touch-none select-none;
+}
+
+.dragging {
+  @apply cursor-grabbing opacity-75 scale-105 rotate-1 z-50;
+}
+
+.drag-overlay {
+  @apply pointer-events-none;
+}
+
+.drop-zone {
+  @apply transition-colors duration-200;
+}
+
+.drop-zone-active {
+  @apply ring-2 ring-blue-400 bg-blue-50 dark:bg-blue-900/10;
+}
