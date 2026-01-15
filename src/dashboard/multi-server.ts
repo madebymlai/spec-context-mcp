@@ -164,13 +164,15 @@ export class MultiProjectDashboardServer {
       this.app.addHook('onRequest', this.auditLogger.middleware());
     }
 
-    // API key authentication for /api routes (except static files and websocket)
+    // API key authentication for write /api routes (POST, PUT, DELETE)
+    // Read-only routes (GET) are allowed without auth for dashboard UI
     if (this.apiKey) {
-      console.error(`   - API Key Auth: ENABLED`);
+      console.error(`   - API Key Auth: ENABLED (write operations)`);
       this.app.addHook('onRequest', async (request, reply) => {
         const url = request.url;
-        // Only check API routes, skip static files and websocket
-        if (url.startsWith('/api/')) {
+        const method = request.method;
+        // Only check write operations on API routes
+        if (url.startsWith('/api/') && ['POST', 'PUT', 'DELETE'].includes(method)) {
           const authHeader = request.headers['authorization'];
           const providedKey = authHeader?.replace('Bearer ', '');
           if (providedKey !== this.apiKey) {
