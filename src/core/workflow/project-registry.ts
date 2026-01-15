@@ -14,6 +14,7 @@ export interface ProjectRegistryEntry {
   projectPath: string;
   projectName: string;
   instances: ProjectInstance[];
+  persistent?: boolean;  // If true, project stays in registry even with no active instances
 }
 
 /**
@@ -151,8 +152,9 @@ export class ProjectRegistry {
    * Register a project in the global registry
    * Self-healing: If a project exists with dead PIDs, cleans them up and adds new PID
    * Multi-instance: Allows unlimited MCP server instances per project
+   * @param persistent - If true, project stays in registry even with no active instances (for API-registered projects)
    */
-  async registerProject(projectPath: string, pid: number): Promise<string> {
+  async registerProject(projectPath: string, pid: number, persistent: boolean = false): Promise<string> {
     const registry = await this.readRegistry();
 
     const absolutePath = resolve(projectPath);
@@ -179,7 +181,8 @@ export class ProjectRegistry {
         projectId,
         projectPath: absolutePath,
         projectName,
-        instances: [{ pid, registeredAt: new Date().toISOString() }]
+        instances: [{ pid, registeredAt: new Date().toISOString() }],
+        persistent
       };
       registry.set(projectId, entry);
     }
@@ -227,11 +230,21 @@ export class ProjectRegistry {
   }
 
   /**
-   * Get all active projects from the registry
+   * Get all registered projects from the registry (including inactive persistent ones)
    */
   async getAllProjects(): Promise<ProjectRegistryEntry[]> {
     const registry = await this.readRegistry();
     return Array.from(registry.values());
+  }
+
+  /**
+   * Get only active projects (with at least one live MCP instance)
+   */
+  async getActiveProjects(): Promise<ProjectRegistryEntry[]> {
+    const registry = await this.readRegistry();
+    return Array.from(registry.values()).filter(entry =>
+      entry.instances.some(i => this.isProcessAlive(i.pid))
+    );
   }
 
   /**
@@ -254,7 +267,8 @@ export class ProjectRegistry {
 
   /**
    * Clean up stale instances (where the process is no longer running)
-   * Projects with no live instances are removed entirely
+   * Persistent projects stay in registry even with no active instances
+   * Non-persistent projects are removed when no live instances remain
    * Returns the count of removed instances
    */
   async cleanupStaleProjects(): Promise<number> {
@@ -270,11 +284,11 @@ export class ProjectRegistry {
         removedInstanceCount += deadCount;
         needsWrite = true;
 
-        if (liveInstances.length === 0) {
-          // No live instances, remove entire project
+        if (liveInstances.length === 0 && !entry.persistent) {
+          // No live instances and not persistent, remove entire project
           registry.delete(projectId);
         } else {
-          // Keep project with only live instances
+          // Keep project with only live instances (or keep persistent project with empty instances)
           entry.instances = liveInstances;
           registry.set(projectId, entry);
         }

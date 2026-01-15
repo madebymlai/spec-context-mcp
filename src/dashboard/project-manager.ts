@@ -224,23 +224,28 @@ export class ProjectManager extends EventEmitter {
 
   /**
    * Get projects list for API
+   * Returns all registered projects with active status
    */
   getProjectsList(): Array<{
     projectId: string;
     projectName: string;
     projectPath: string;
     instances: ProjectInstance[];
+    isActive: boolean;
   }> {
     return Array.from(this.projects.values()).map(p => ({
       projectId: p.projectId,
       projectName: p.projectName,
       projectPath: p.originalProjectPath,  // Return original path for display
-      instances: p.instances
+      instances: p.instances,
+      // Active if has real MCP instances (PID 0 is placeholder for API-registered projects)
+      isActive: p.instances.some(i => i.pid > 0)
     }));
   }
 
   /**
-   * Manually add a project by path
+   * Manually add a project by path (via API)
+   * These projects are marked as persistent so they survive dashboard restarts
    */
   async addProjectByPath(projectPath: string): Promise<string> {
     const entry = await this.registry.getProject(projectPath);
@@ -252,8 +257,9 @@ export class ProjectManager extends EventEmitter {
       return entry.projectId;
     }
 
-    // Register new project (with dummy PID since it's manual)
-    const projectId = await this.registry.registerProject(projectPath, process.pid);
+    // Register new project as persistent (survives dashboard restarts)
+    // PID 0 is used as placeholder since this is API-registered, not a real MCP server
+    const projectId = await this.registry.registerProject(projectPath, 0, true);
 
     // Get the entry and add it
     const newEntry = await this.registry.getProjectById(projectId);
