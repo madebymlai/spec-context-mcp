@@ -1,13 +1,13 @@
 # spec-context-mcp
 
-Unified MCP server for semantic code search and spec-driven development.
+Unified MCP server combining semantic code search with spec-driven development workflow.
 
 ## Features
 
-- **Semantic Code Search**: Index your codebase and search using natural language
-- **Multi-Project Support**: Each project gets its own vector collection
-- **OpenRouter Integration**: Use any embedding model via OpenRouter API
-- **Qdrant Backend**: Self-hosted vector database for privacy and control
+- **Semantic Code Search**: Index your codebase and search using natural language via Qdrant
+- **Spec Workflow**: Requirements → Design → Tasks → Implementation with approval gates
+- **Dashboard UI**: Web interface for managing specs, approvals, and implementation logs
+- **Multi-Project Support**: Each project gets its own vector collection and spec directory
 
 ## Installation
 
@@ -23,24 +23,7 @@ npx spec-context-mcp
 
 ## Configuration
 
-Required environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `OPENROUTER_API_KEY` | Your OpenRouter API key |
-| `QDRANT_URL` | Qdrant server URL (e.g., `http://localhost:6333`) |
-
-Optional:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model to use |
-| `EMBEDDING_DIMENSION` | `4096` | Vector dimension |
-| `QDRANT_API_KEY` | - | Qdrant API key if auth enabled |
-
-## Usage with Claude Desktop
-
-Add to your Claude Desktop config (`~/.config/claude-desktop/config.json` or equivalent):
+Add to your Claude Code config (`.mcp.json` in project root):
 
 ```json
 {
@@ -50,64 +33,102 @@ Add to your Claude Desktop config (`~/.config/claude-desktop/config.json` or equ
       "args": ["spec-context-mcp"],
       "env": {
         "OPENROUTER_API_KEY": "sk-or-xxx",
-        "QDRANT_URL": "http://46.62.233.229:6333"
+        "QDRANT_URL": "http://localhost:6333",
+        "DASHBOARD_URL": "https://your-dashboard.example.com"
       }
     }
   }
 }
 ```
 
+### Environment Variables
+
+| Variable              | Required | Description                                            |
+|-----------------------|----------|--------------------------------------------------------|
+| `OPENROUTER_API_KEY`  | Yes      | OpenRouter API key for embeddings                      |
+| `QDRANT_URL`          | Yes      | Qdrant server URL                                      |
+| `DASHBOARD_URL`       | No       | Dashboard URL for approval links                       |
+| `EMBEDDING_MODEL`     | No       | Model for embeddings (default: `qwen/qwen3-embedding-8b`) |
+| `EMBEDDING_DIMENSION` | No       | Vector dimension (default: `4096`)                     |
+| `QDRANT_API_KEY`      | No       | Qdrant API key if auth enabled                         |
+
 ## Tools
 
-### `index_codebase`
+### Code Search
 
-Index a codebase for semantic search.
+| Tool                 | Description                                  |
+|----------------------|----------------------------------------------|
+| `index_codebase`     | Index a codebase for semantic search         |
+| `search_code`        | Search code using natural language           |
+| `sync_index`         | Incrementally update index with changed files|
+| `get_indexing_status`| Check if codebase is indexed                 |
+| `clear_index`        | Remove codebase from index                   |
 
-```json
-{
-  "path": "/path/to/project",
-  "force": false,
-  "customExtensions": [".ts", ".py"],
-  "ignorePatterns": ["test/**"]
-}
+### Spec Workflow
+
+| Tool                  | Description                                           |
+|-----------------------|-------------------------------------------------------|
+| `spec-workflow-guide` | Load the complete spec workflow guide                 |
+| `steering-guide`      | Guide for creating project steering docs              |
+| `spec-status`         | Check spec progress and task completion               |
+| `approvals`           | Manage approval requests (request/status/delete)      |
+| `log-implementation`  | Record implementation details after completing tasks  |
+
+## Prompts
+
+MCP prompts available as slash commands in Claude Code:
+
+| Prompt                | Description                                    |
+|-----------------------|------------------------------------------------|
+| `create-spec`         | Create requirements, design, or tasks document |
+| `create-steering-doc` | Create product, tech, or structure steering doc|
+| `implement-task`      | Implement a task from a spec                   |
+| `spec-status`         | Check current spec status                      |
+| `refresh-tasks`       | Update tasks based on design changes           |
+
+## Dashboard
+
+Run the dashboard server:
+
+```bash
+npx spec-context-mcp dashboard --port 3000
 ```
 
-### `search_code`
+The dashboard provides:
+- Project overview and stats
+- Spec document viewer
+- Task progress tracking
+- Approval management
+- Implementation logs
 
-Search indexed code using natural language.
+## Spec Workflow
 
-```json
-{
-  "path": "/path/to/project",
-  "query": "function that handles user authentication",
-  "limit": 10,
-  "extensionFilter": [".ts"]
-}
+```
+Requirements → Design → Tasks → Implementation
+     ↓           ↓        ↓           ↓
+  Approval   Approval  Approval   Log & Complete
 ```
 
-### `clear_index`
+Each phase requires approval before proceeding. Documents are stored in:
 
-Remove a codebase from the index.
-
-```json
-{
-  "path": "/path/to/project"
-}
 ```
-
-### `get_indexing_status`
-
-Check if a codebase is indexed.
-
-```json
-{
-  "path": "/path/to/project"
-}
+.spec-context/
+├── templates/           # Auto-populated templates
+├── specs/
+│   └── {spec-name}/
+│       ├── requirements.md
+│       ├── design.md
+│       ├── tasks.md
+│       └── Implementation Logs/
+└── steering/            # Optional project docs
+    ├── product.md
+    ├── tech.md
+    └── structure.md
 ```
 
 ## Setting up Qdrant
 
-### Docker (recommended)
+### Docker
 
 ```bash
 docker run -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
@@ -122,19 +143,12 @@ docker run -p 6333:6333 \
   qdrant/qdrant
 ```
 
-Then set `QDRANT_API_KEY` in your environment.
-
 ## Development
 
 ```bash
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Run in development
-npm run dev
+npm install          # Install dependencies
+npm run build        # Build server and dashboard
+npm run dev          # Run in development mode
 ```
 
 ## License

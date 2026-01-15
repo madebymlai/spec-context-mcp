@@ -15,6 +15,7 @@ async function createConfig() {
     build: {
       outDir: 'dist',
       emptyOutDir: true,
+      chunkSizeWarningLimit: 3000,
     },
   };
 }
