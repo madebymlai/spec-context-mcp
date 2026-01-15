@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "bin": {
     "spec-context-mcp": "./dist/index.js",
-    "spec-context-dashboard": "./dist/dashboard/multi-server.js"
+    "spec-context-dashboard": "./dist/dashboard/cli.js"
   },
   "files": [
     "dist",
@@ -16,7 +16,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "dashboard": "node dist/dashboard/multi-server.js",
+    "dashboard": "node dist/dashboard/cli.js",
     "test": "vitest",
     "prepublishOnly": "npm run build"
   },
