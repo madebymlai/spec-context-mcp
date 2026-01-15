@@ -593,3 +593,361 @@ MCP prompts are pre-defined conversation starters that guide the AI through spec
 | `inject-steering-guide` | Load the steering doc guide into context |
 | `refresh-tasks` | Refresh/regenerate tasks based on spec changes |
 | `spec-status` | Get detailed status of a spec's progress |
+
+## OpenRouter Embedding Implementation
+
+Create `src/core/embedding/openrouter-embedding.ts`:
+
+```typescript
+import OpenAI from 'openai';
+
+export interface EmbeddingProvider {
+  embed(texts: string[]): Promise<number[][]>;
+  embedSingle(text: string): Promise<number[]>;
+  getDimension(): number;
+}
+
+export class OpenRouterEmbedding implements EmbeddingProvider {
+  private client: OpenAI;
+  private model: string;
+  private dimension: number;
+
+  constructor(config: { apiKey: string; model: string; dimension: number }) {
+    this.client = new OpenAI({
+      apiKey: config.apiKey,
+      baseURL: 'https://openrouter.ai/api/v1',
+    });
+    this.model = config.model;
+    this.dimension = config.dimension;
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    const response = await this.client.embeddings.create({
+      model: this.model,
+      input: texts,
+    });
+    return response.data.map((d) => d.embedding);
+  }
+
+  async embedSingle(text: string): Promise<number[]> {
+    const results = await this.embed([text]);
+    return results[0];
+  }
+
+  getDimension(): number {
+    return this.dimension;
+  }
+}
+```
+
+Usage:
+```typescript
+const embedding = new OpenRouterEmbedding({
+  apiKey: process.env.OPENROUTER_API_KEY!,
+  model: 'qwen/qwen3-embedding-8b',
+  dimension: 4096,
+});
+
+const vectors = await embedding.embed(['function hello() { return "world"; }']);
+```
+
+## MCP Prompts Handler Registration
+
+Add to `src/server.ts` - prompts require `ListPromptsRequestSchema` and `GetPromptRequestSchema` handlers:
+
+```typescript
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import { registerPrompts, getPrompt } from "./prompts/index.js";
+
+// In server setup:
+this.server = new Server(
+  { name: config.name, version: config.version },
+  {
+    capabilities: {
+      tools: {},
+      prompts: {},  // Enable prompts capability
+    }
+  }
+);
+
+// Register prompts handler
+this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  return { prompts: registerPrompts() };
+});
+
+this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+  return getPrompt(name, args);
+});
+```
+
+Prompts registration in `src/prompts/index.ts`:
+```typescript
+import { Prompt } from '@modelcontextprotocol/sdk/types.js';
+
+export function registerPrompts(): Prompt[] {
+  return [
+    {
+      name: 'create-spec',
+      description: 'Start creating a new spec (requirements, design, or tasks)',
+      arguments: [
+        { name: 'specName', description: 'Name for the new spec', required: true },
+        { name: 'documentType', description: 'Type: requirements, design, or tasks', required: true },
+      ],
+    },
+    // ... other prompts
+  ];
+}
+
+export function getPrompt(name: string, args: Record<string, string>): { messages: any[] } {
+  switch (name) {
+    case 'create-spec':
+      return { messages: [{ role: 'user', content: { type: 'text', text: `Create a ${args.documentType} spec named ${args.specName}...` } }] };
+    // ... other prompts
+    default:
+      throw new Error(`Unknown prompt: ${name}`);
+  }
+}
+```
+
+## npm Package Setup
+
+Update `package.json` with bin field and publish configuration:
+
+```json
+{
+  "name": "spec-context-mcp",
+  "version": "0.1.0",
+  "description": "Unified MCP server for semantic code search and spec-driven development",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "spec-context-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["mcp", "claude", "code-search", "embeddings", "qdrant"],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.6.0",
+    "@qdrant/js-client-rest": "^1.7.0",
+    "openai": "^4.0.0",
+    "tree-sitter": "^0.21.0",
+    "tree-sitter-typescript": "^0.21.0",
+    "tree-sitter-python": "^0.21.0",
+    "tree-sitter-javascript": "^0.21.0",
+    "langchain": "^0.1.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0",
+    "vitest": "^1.0.0"
+  }
+}
+```
+
+Add shebang to `src/index.ts`:
+```typescript
+#!/usr/bin/env node
+```
+
+## Required Environment Variable Validation
+
+Add to `src/config.ts`:
+
+```typescript
+export function validateConfig(): void {
+  const errors: string[] = [];
+
+  if (!process.env.OPENROUTER_API_KEY) {
+    errors.push('OPENROUTER_API_KEY is required');
+  }
+
+  if (!process.env.QDRANT_URL) {
+    errors.push('QDRANT_URL is required');
+  }
+
+  if (errors.length > 0) {
+    console.error('Configuration errors:');
+    errors.forEach((e) => console.error(`  - ${e}`));
+    console.error('\nRequired environment variables:');
+    console.error('  OPENROUTER_API_KEY  Your OpenRouter API key');
+    console.error('  QDRANT_URL          Qdrant server URL (e.g., http://localhost:6333)');
+    console.error('\nOptional:');
+    console.error('  EMBEDDING_MODEL     Model to use (default: qwen/qwen3-embedding-8b)');
+    console.error('  EMBEDDING_DIMENSION Vector dimension (default: 4096)');
+    console.error('  QDRANT_API_KEY      Qdrant API key if authentication is enabled');
+    process.exit(1);
+  }
+}
+```
+
+Call in `src/index.ts`:
+```typescript
+import { validateConfig } from './config.js';
+
+// At startup, before anything else
+validateConfig();
+```
+
+## Git Remote and Repository Setup
+
+**Step 0: Create GitHub Repository** (before Step 1)
+
+```bash
+# Create GitHub repo
+cd ~/git/spec-context-mcp
+gh repo create spec-context-mcp --public --source=. --remote=origin --description "Unified MCP server for semantic code search and spec-driven development"
+
+# Push initial commit
+git push -u origin main
+```
+
+Or manually:
+1. Create repo at https://github.com/new
+2. Add remote: `git remote add origin git@github.com:<username>/spec-context-mcp.git`
+3. Push: `git push -u origin main`
+
+## Snapshot Manager Details
+
+The snapshot manager tracks indexing state per project. State is stored locally in a JSON file.
+
+**Location:** `~/.spec-context-mcp/snapshot.json` (global) or `<project>/.spec-context-mcp/snapshot.json` (per-project)
+
+**Structure:**
+```typescript
+interface CodebaseSnapshot {
+  formatVersion: 'v1';
+  codebases: Record<string, CodebaseInfo>;  // projectPath -> info
+  lastUpdated: string;  // ISO timestamp
+}
+
+interface CodebaseInfo {
+  status: 'indexing' | 'indexed' | 'failed';
+  lastUpdated: string;
+  // If indexed:
+  indexedFiles?: number;
+  totalChunks?: number;
+  collectionName?: string;
+  // If indexing:
+  indexingPercentage?: number;
+  // If failed:
+  errorMessage?: string;
+}
+```
+
+**Adaptation from claude-context:**
+- Remove Zilliz Cloud sync logic (we use dedicated Qdrant)
+- Keep local file-based snapshot
+- Add `collectionName` to track Qdrant collection per project
+
+Create `src/snapshot.ts`:
+```typescript
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+
+const SNAPSHOT_DIR = path.join(os.homedir(), '.spec-context-mcp');
+const SNAPSHOT_FILE = path.join(SNAPSHOT_DIR, 'snapshot.json');
+
+export class SnapshotManager {
+  private snapshot: CodebaseSnapshot;
+
+  constructor() {
+    this.snapshot = this.load();
+  }
+
+  private load(): CodebaseSnapshot {
+    if (fs.existsSync(SNAPSHOT_FILE)) {
+      return JSON.parse(fs.readFileSync(SNAPSHOT_FILE, 'utf-8'));
+    }
+    return { formatVersion: 'v1', codebases: {}, lastUpdated: new Date().toISOString() };
+  }
+
+  save(): void {
+    fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    this.snapshot.lastUpdated = new Date().toISOString();
+    fs.writeFileSync(SNAPSHOT_FILE, JSON.stringify(this.snapshot, null, 2));
+  }
+
+  setIndexing(projectPath: string, percentage: number): void {
+    this.snapshot.codebases[projectPath] = {
+      status: 'indexing',
+      lastUpdated: new Date().toISOString(),
+      indexingPercentage: percentage,
+    };
+    this.save();
+  }
+
+  setIndexed(projectPath: string, files: number, chunks: number, collection: string): void {
+    this.snapshot.codebases[projectPath] = {
+      status: 'indexed',
+      lastUpdated: new Date().toISOString(),
+      indexedFiles: files,
+      totalChunks: chunks,
+      collectionName: collection,
+    };
+    this.save();
+  }
+
+  setFailed(projectPath: string, error: string): void {
+    this.snapshot.codebases[projectPath] = {
+      status: 'failed',
+      lastUpdated: new Date().toISOString(),
+      errorMessage: error,
+    };
+    this.save();
+  }
+
+  getStatus(projectPath: string): CodebaseInfo | undefined {
+    return this.snapshot.codebases[projectPath];
+  }
+
+  removeCodebase(projectPath: string): void {
+    delete this.snapshot.codebases[projectPath];
+    this.save();
+  }
+}
+```
+
+## Phase 1 Scope (Code Search Only)
+
+Phase 1 focuses on getting code search working. Spec workflow tools are deferred to Issue #001.
+
+**Phase 1 deliverables:**
+- [x] Project setup (package.json, tsconfig.json)
+- [x] OpenRouter embedding provider
+- [x] Qdrant vector database adapter
+- [x] 4 code context tools only:
+  - `index_codebase`
+  - `search_code`
+  - `clear_index`
+  - `get_indexing_status`
+- [x] Snapshot manager
+- [x] MCP server with tools (no prompts yet)
+- [x] README.md
+
+**Deferred to Phase 2 (Issue #001):**
+- 5 spec workflow tools
+- 7 MCP prompts
+- Workflow core files
+- Templates
