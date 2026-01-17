@@ -31,18 +31,24 @@ export class SpecWatcher extends EventEmitter {
     const steeringPath = PathUtils.getSteeringPath(this.projectPath);
 
     // Watch for changes in specs and steering directories
-    this.watcher = chokidar.watch([
-      `${specsPath}/**/*.md`,
-      `${steeringPath}/*.md`
-    ], {
+    // Watch directories instead of glob patterns for reliable cross-platform detection
+    this.watcher = chokidar.watch([specsPath, steeringPath], {
       ignoreInitial: true,
       persistent: true,
-      ignorePermissionErrors: true
+      ignorePermissionErrors: true,
+      depth: 99  // Watch all subdirectories
     });
 
-    this.watcher.on('add', (filePath: string) => this.scheduleFileChange('created', filePath));
-    this.watcher.on('change', (filePath: string) => this.scheduleFileChange('updated', filePath));
-    this.watcher.on('unlink', (filePath: string) => this.scheduleFileChange('deleted', filePath));
+    // Filter to only handle .md files
+    const handleMdChange = (action: 'created' | 'updated' | 'deleted') => (filePath: string) => {
+      if (filePath.endsWith('.md')) {
+        this.scheduleFileChange(action, filePath);
+      }
+    };
+
+    this.watcher.on('add', handleMdChange('created'));
+    this.watcher.on('change', handleMdChange('updated'));
+    this.watcher.on('unlink', handleMdChange('deleted'));
 
     // Add error handler to prevent watcher crashes
     this.watcher.on('error', (error: unknown) => {
