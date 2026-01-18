@@ -37,6 +37,11 @@ function ApprovalItem({ a }: { a: any }) {
   const [aiReviewError, setAiReviewError] = useState<string | null>(null);
   const [aiReviewLoading, setAiReviewLoading] = useState<boolean>(false);
 
+  // Count only human comments + accepted AI suggestions (exclude pending AI)
+  const humanCommentsCount = useMemo(() =>
+    comments.filter(c => c.source !== 'ai' || c.status === 'accepted').length
+  , [comments]);
+
   // Snapshot-related state
   const [snapshots, setSnapshots] = useState<DocumentSnapshot[]>([]);
   const [snapshotsLoading, setSnapshotsLoading] = useState<boolean>(false);
@@ -369,7 +374,7 @@ function ApprovalItem({ a }: { a: any }) {
                 <>
                   <button
                     onClick={handleRevision}
-                    disabled={!!actionLoading || comments.length === 0}
+                    disabled={!!actionLoading || humanCommentsCount === 0}
                     className="btn bg-orange-600 hover:bg-orange-700 focus:ring-orange-500 text-xs sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 min-w-0 touch-manipulation"
                   >
                     {actionLoading === 'revision' ? (
@@ -384,8 +389,8 @@ function ApprovalItem({ a }: { a: any }) {
                     )}
                     <span className="hidden sm:inline">{t('approvalsPage.actions.requestRevisions')}</span>
                     <span className="sm:hidden">{t('approvalsPage.actions.revisions')}</span>
-                    {comments.length > 0 && (
-                      <span className="ml-1 text-xs opacity-75">({comments.length})</span>
+                    {humanCommentsCount > 0 && (
+                      <span className="ml-1 text-xs opacity-75">({humanCommentsCount})</span>
                     )}
                   </button>
 
