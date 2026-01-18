@@ -1,4 +1,5 @@
 import type { Context } from '../../core/context.js';
+import { FileSynchronizer } from '../../core/sync/synchronizer.js';
 
 export interface ClearIndexInput {
     path: string;
@@ -24,10 +25,11 @@ export async function clearIndex(
         }
 
         await context.clearIndex(input.path);
+        await FileSynchronizer.deleteSnapshot(input.path);
 
         return {
             success: true,
-            message: 'Successfully cleared the codebase index.',
+            message: 'Successfully cleared the codebase index and snapshot.',
         };
     } catch (error) {
         return {

@@ -115,12 +115,16 @@ export function WebSocketProvider({ children, projectId }: WebSocketProviderProp
 
   // Connect/reconnect when projectId changes
   useEffect(() => {
+    console.log('[WebSocketProvider] useEffect triggered, projectId:', projectId);
     if (projectId) {
       // Clear initial data when switching projects
       setInitial(undefined);
       // Reset retry delay when switching projects
       retryDelayRef.current = INITIAL_RETRY_DELAY;
+      console.log('[WebSocketProvider] Calling connectToWebSocket with:', projectId);
       connectToWebSocket(projectId);
+    } else {
+      console.log('[WebSocketProvider] projectId is null/undefined, not connecting');
     }
 
     return () => {

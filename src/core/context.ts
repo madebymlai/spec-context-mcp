@@ -66,24 +66,45 @@ const EXTENSION_TO_LANGUAGE: Record<string, string> = {
 
 // Default ignore patterns
 const DEFAULT_IGNORE = [
-    'node_modules/**',
-    '.git/**',
-    'dist/**',
-    'build/**',
-    '__pycache__/**',
-    '*.pyc',
-    '.env*',
-    '*.lock',
-    'package-lock.json',
-    'yarn.lock',
-    '.DS_Store',
-    'coverage/**',
-    '.next/**',
-    '.nuxt/**',
-    'vendor/**',
-    'target/**',  // Rust
-    'bin/**',
-    'obj/**',     // C#
+    '**/node_modules/**',
+    '**/.git/**',
+    '**/dist/**',
+    '**/build/**',
+    '**/__pycache__/**',
+    '**/*.pyc',
+    '**/*.pyo',
+    '**/.env*',
+    '**/*.lock',
+    '**/package-lock.json',
+    '**/yarn.lock',
+    '**/.DS_Store',
+    '**/coverage/**',
+    '**/.next/**',
+    '**/.nuxt/**',
+    '**/vendor/**',
+    '**/target/**',  // Rust
+    '**/bin/**',
+    '**/obj/**',     // C#
+    '**/*model*/**',  // Any directory containing "model" (models, etc.)
+    '**/*doc*/**',  // Any directory containing "doc" (docs, documentation, etc.)
+    '**/*data*/**',  // Any directory containing "data" (data, datasets, etc.)
+    '**/.venv/**',  // Python virtual env
+    '**/*cache*/**',  // Any directory containing "cache" (pytest, mypy, ruff, etc.)
+    '**/*test*/**',  // Any directory containing "test" (tests, __tests__, etc.)
+    '**/*script*/**',  // Any directory containing "script" (scripts, etc.)
+    '**/*experiments*/**',  // ML experiment folders
+    '**/Cargo.lock',  // Rust lock file
+    '**/*.rlib',  // Rust libraries
+    '**/*.rmeta',  // Rust metadata
+    '**/*.so',  // Shared objects
+    '**/*.dylib',  // macOS dynamic libs
+    '**/*.dll',  // Windows DLLs
+    '**/*.parquet',  // Parquet data files
+    '**/*.cbm',  // CatBoost models
+    '**/*.pkl',  // Pickle files
+    '**/*.h5',  // HDF5 files
+    '**/*.onnx',  // ONNX models
+    '**/*config*/**',  // Config directories (config, configs, .config, etc.)
 ];
 
 export class Context {
@@ -231,6 +252,12 @@ export class Context {
 
         console.log(`[Context] Indexed ${processedFiles} files with ${allChunks.length} chunks`);
 
+        // Initialize synchronizer with same ignore patterns to create baseline snapshot
+        // This ensures sync_index will correctly detect changes relative to indexed state
+        const ignorePatterns = [...DEFAULT_IGNORE, ...(options?.ignorePatterns || [])];
+        const synchronizer = new FileSynchronizer(projectPath, ignorePatterns);
+        await synchronizer.initialize();
+
         return {
             indexedFiles: processedFiles,
             totalChunks: allChunks.length,
@@ -329,8 +356,9 @@ export class Context {
             };
         }
 
-        // Initialize synchronizer
-        const synchronizer = new FileSynchronizer(projectPath, options?.ignorePatterns || []);
+        // Initialize synchronizer with same ignore patterns as indexer
+        const ignorePatterns = [...DEFAULT_IGNORE, ...(options?.ignorePatterns || [])];
+        const synchronizer = new FileSynchronizer(projectPath, ignorePatterns);
         await synchronizer.initialize();
 
         // Check for changes

@@ -267,8 +267,8 @@ export class QdrantVectorDB implements VectorDatabase {
         }
 
         if (conditions.length === 0) return undefined;
-        if (conditions.length === 1) return conditions[0] as Record<string, unknown>;
 
+        // Qdrant requires conditions to be wrapped in must/should/must_not
         return { must: conditions };
     }
 }

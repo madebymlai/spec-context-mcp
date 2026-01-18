@@ -16,8 +16,7 @@ import { getTools, handleToolCall } from './tools/index.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
 import { SnapshotManager, SyncManager } from './managers/index.js';
 
-// Track registered projects for cleanup on exit
-const registeredProjects: { dashboardUrl: string; projectId: string }[] = [];
+const LOCAL_DASHBOARD_URL = 'http://127.0.0.1:3000';
 
 export class SpecContextServer {
     private server: Server;
@@ -129,10 +128,8 @@ export class SpecContextServer {
         console.error(`[${this.config.name}] Embedding: ${this.config.embeddingModel} (${this.config.embeddingDimension}d)`);
         console.error(`[${this.config.name}] Qdrant: ${this.config.qdrantUrl}`);
 
-        // Register with remote dashboard if configured
-        if (this.config.dashboardUrl) {
-            await this.registerWithDashboard();
-        }
+        // Register with local dashboard
+        await this.registerWithDashboard();
 
         // Start background sync (every 5 minutes)
         this.syncManager.startBackgroundSync();
@@ -145,29 +142,19 @@ export class SpecContextServer {
 
     private async registerWithDashboard(): Promise<void> {
         const projectPath = process.cwd();
-        const dashboardUrl = this.config.dashboardUrl!;
 
         try {
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (this.config.dashboardApiKey) {
-                headers['Authorization'] = `Bearer ${this.config.dashboardApiKey}`;
-            }
-
-            const response = await fetch(`${dashboardUrl}/api/projects/add`, {
+            const response = await fetch(`${LOCAL_DASHBOARD_URL}/api/projects/add`, {
                 method: 'POST',
-                headers,
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ projectPath }),
             });
 
             if (response.ok) {
-                const data = await response.json() as { projectId: string };
-                registeredProjects.push({ dashboardUrl, projectId: data.projectId });
-                console.error(`[${this.config.name}] Registered with dashboard: ${dashboardUrl}`);
-            } else {
-                console.error(`[${this.config.name}] Failed to register with dashboard: ${response.status}`);
+                console.error(`[${this.config.name}] Registered with local dashboard`);
             }
-        } catch (error) {
-            console.error(`[${this.config.name}] Dashboard registration failed:`, error instanceof Error ? error.message : error);
+        } catch {
+            // Dashboard not running - that's fine
         }
     }
 
@@ -177,25 +164,5 @@ export class SpecContextServer {
 
     getSyncManager(): SyncManager {
         return this.syncManager;
-    }
-}
-
-/**
- * Cleanup function to unregister from all dashboards on exit
- */
-export async function cleanupDashboardRegistrations(apiKey?: string): Promise<void> {
-    for (const { dashboardUrl, projectId } of registeredProjects) {
-        try {
-            const headers: Record<string, string> = {};
-            if (apiKey) {
-                headers['Authorization'] = `Bearer ${apiKey}`;
-            }
-            await fetch(`${dashboardUrl}/api/projects/${projectId}`, {
-                method: 'DELETE',
-                headers,
-            });
-        } catch {
-            // Ignore cleanup errors
-        }
     }
 }

@@ -57,7 +57,7 @@ export interface JobExecutionLog {
 
 export interface ToolContext {
   projectPath: string;
-  dashboardUrl?: string; // Optional for backwards compatibility
+  dashboardUrl?: string;
   lang?: string; // Language code for i18n (e.g., 'en', 'ja')
 }
 
@@ -179,7 +179,7 @@ export interface ToolResponse {
     workflowRoot: string;
     specName?: string;
     currentPhase?: string;
-    dashboardUrl?: string; // Optional for backwards compatibility
+    dashboardUrl?: string;
   };
 }
 

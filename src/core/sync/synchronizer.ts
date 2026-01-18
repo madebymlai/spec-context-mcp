@@ -170,9 +170,17 @@ export class FileSynchronizer {
     private simpleGlobMatch(text: string, pattern: string): boolean {
         if (!text || !pattern) return false;
 
-        const regexPattern = pattern
-            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-            .replace(/\*/g, '.*');
+        // Convert glob pattern to regex
+        // IMPORTANT: Order matters - handle ** before * to avoid replacing . in .*
+        let regexPattern = pattern
+            .replace(/[.+^${}()|[\]\\]/g, '\\$&')  // Escape regex special chars first
+            .replace(/\*\*\//g, '\x00STARSTARSLASH\x00')  // Temp placeholder for **/
+            .replace(/\/\*\*/g, '\x00SLASHSTARSTAR\x00')  // Temp placeholder for /**
+            .replace(/\*\*/g, '\x00STARSTAR\x00')         // Temp placeholder for **
+            .replace(/\*/g, '[^/]*')                      // * matches within single segment
+            .replace(/\x00STARSTARSLASH\x00/g, '(?:.*/)?')  // **/ matches any prefix (including empty)
+            .replace(/\x00SLASHSTARSTAR\x00/g, '(?:/.*)?')  // /** matches any suffix (including empty)
+            .replace(/\x00STARSTAR\x00/g, '.*');            // ** matches anything
 
         const regex = new RegExp(`^${regexPattern}$`);
         return regex.test(text);

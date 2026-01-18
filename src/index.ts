@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { validateConfig, createConfig } from './config.js';
-import { SpecContextServer, cleanupDashboardRegistrations } from './server.js';
+import { SpecContextServer } from './server.js';
 
 async function main(): Promise<void> {
     // Check for help flag
@@ -32,7 +32,7 @@ For Claude Desktop, add to your config:
         "args": ["spec-context-mcp"],
         "env": {
           "OPENROUTER_API_KEY": "sk-or-xxx",
-          "QDRANT_URL": "http://your-server:6333"
+          "QDRANT_URL": "http://localhost:6333"
         }
       }
     }
@@ -47,14 +47,6 @@ For Claude Desktop, add to your config:
     // Create config and server
     const config = createConfig();
     const server = new SpecContextServer(config);
-
-    // Cleanup on exit
-    const cleanup = async () => {
-        await cleanupDashboardRegistrations(config.dashboardApiKey);
-        process.exit(0);
-    };
-    process.on('SIGINT', cleanup);
-    process.on('SIGTERM', cleanup);
 
     // Run server
     await server.run();
