@@ -178,7 +178,7 @@ export function PageNavigationSidebar({
         <div className="hidden lg:flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-800">
           {!isCollapsed && (
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Spec Workflow MCP
+              Spec Context MCP
             </h2>
           )}
           <button
