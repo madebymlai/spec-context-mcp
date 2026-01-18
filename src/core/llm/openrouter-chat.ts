@@ -26,7 +26,7 @@ export class OpenRouterChat implements ChatProvider {
     }
 
     async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
-        const requestOptions: OpenAI.ChatCompletionCreateParams & { provider?: Record<string, unknown> } = {
+        const requestOptions: OpenAI.ChatCompletionCreateParams & { reasoning?: { effort: string } } = {
             model: this.defaultModel,
             messages: messages.map(m => ({
                 role: m.role,
@@ -41,12 +41,9 @@ export class OpenRouterChat implements ChatProvider {
             requestOptions.response_format = { type: 'json_object' };
         }
 
-        // Pass provider-specific options (e.g., reasoning for DeepSeek)
-        if (options?.providerOptions) {
-            requestOptions.provider = {};
-            if (options.providerOptions.reasoning !== undefined) {
-                requestOptions.provider.reasoning = options.providerOptions.reasoning;
-            }
+        // Enable reasoning mode (OpenRouter top-level parameter)
+        if (options?.providerOptions?.reasoning) {
+            requestOptions.reasoning = { effort: 'high' };
         }
 
         const response = await this.client.chat.completions.create(requestOptions, {
