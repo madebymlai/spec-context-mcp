@@ -325,6 +325,7 @@ export function MDXEditorWrapper({
           markdown={content}
           plugins={plugins}
           readOnly={true}
+          suppressHtmlProcessing={true}
           contentEditableClassName="prose prose-sm sm:prose-base max-w-none dark:prose-invert prose-img:max-w-full prose-img:h-auto prose-headings:text-gray-900 dark:prose-headings:text-white prose-p:text-gray-700 dark:prose-p:text-gray-300 prose-strong:text-gray-900 dark:prose-strong:text-white prose-code:text-gray-800 dark:prose-code:text-gray-200 prose-code:bg-gray-100 dark:prose-code:bg-gray-800 prose-pre:bg-gray-50 dark:prose-pre:bg-gray-900 prose-blockquote:text-gray-700 dark:prose-blockquote:text-gray-300 prose-li:text-gray-700 dark:prose-li:text-gray-300"
         />
       </div>
@@ -368,6 +369,7 @@ export function MDXEditorWrapper({
           onChange={handleChange}
           plugins={plugins}
           placeholder={placeholder || t('editor.markdown.placeholder')}
+          suppressHtmlProcessing={true}
           contentEditableClassName="prose prose-sm max-w-none dark:prose-invert p-4 min-h-full focus:outline-none"
           overlayContainer={document.body}
         />
