@@ -24,6 +24,7 @@ import {
   DEFAULT_SECURITY_CONFIG
 } from '../core/workflow/security-utils.js';
 import { SecurityConfig } from '../workflow-types.js';
+import { AiReviewService, AiReviewModel, AI_REVIEW_MODELS } from './services/ai-review-service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -906,6 +907,94 @@ export class MultiProjectDashboardServer {
         return { success: true, message: 'Snapshot captured successfully' };
       } catch (error: any) {
         return reply.code(500).send({ error: `Failed to capture snapshot: ${error.message}` });
+      }
+    });
+
+    // AI Review endpoint - request AI analysis of approval document
+    this.app.post('/api/projects/:projectId/approvals/:id/ai-review', async (request, reply) => {
+      const { projectId, id } = request.params as { projectId: string; id: string };
+      const { model } = request.body as { model?: string };
+
+      const project = this.projectManager.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      // Validate model parameter
+      const validModels = Object.keys(AI_REVIEW_MODELS);
+      const selectedModel: AiReviewModel = validModels.includes(model || '')
+        ? (model as AiReviewModel)
+        : 'deepseek-v3';
+
+      // Get OpenRouter API key from environment
+      const apiKey = process.env.OPENROUTER_API_KEY;
+      if (!apiKey) {
+        return reply.code(500).send({
+          error: 'AI review not configured. OPENROUTER_API_KEY environment variable is not set.'
+        });
+      }
+
+      try {
+        // Get approval and read document content
+        const approval = await project.approvalStorage.getApproval(id);
+        if (!approval || !approval.filePath) {
+          return reply.code(404).send({ error: 'Approval not found or no file path' });
+        }
+
+        // Try multiple candidate paths (same logic as /content endpoint)
+        const candidates: string[] = [];
+        const p = approval.filePath;
+        candidates.push(join(project.projectPath, p));
+        if (p.startsWith('/') || p.match(/^[A-Za-z]:[\\\/]/)) {
+          candidates.push(p);
+        }
+        if (!p.includes('.spec-context')) {
+          candidates.push(join(project.projectPath, '.spec-context', p));
+        }
+
+        let content: string | null = null;
+        for (const candidate of candidates) {
+          try {
+            content = await readFile(candidate, 'utf-8');
+            break;
+          } catch {
+            // try next candidate
+          }
+        }
+
+        if (content == null) {
+          return reply.code(500).send({
+            error: `Failed to read document at any known location for ${approval.filePath}`
+          });
+        }
+
+        // Load steering docs for context (if they exist)
+        const steeringDocs: { product?: string; tech?: string; structure?: string } = {};
+        const steeringPath = join(project.projectPath, '.spec-context', 'steering');
+        try {
+          steeringDocs.product = await readFile(join(steeringPath, 'product.md'), 'utf-8');
+        } catch { /* optional */ }
+        try {
+          steeringDocs.tech = await readFile(join(steeringPath, 'tech.md'), 'utf-8');
+        } catch { /* optional */ }
+        try {
+          steeringDocs.structure = await readFile(join(steeringPath, 'structure.md'), 'utf-8');
+        } catch { /* optional */ }
+
+        // Call AI review service with steering context
+        const reviewService = new AiReviewService(apiKey);
+        const suggestions = await reviewService.reviewDocument(content, selectedModel, steeringDocs);
+
+        return {
+          success: true,
+          model: selectedModel,
+          suggestions
+        };
+      } catch (error: any) {
+        console.error('AI review failed:', error);
+        return reply.code(500).send({
+          error: `AI review failed: ${error.message}`
+        });
       }
     });
 

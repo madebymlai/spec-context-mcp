@@ -343,6 +343,20 @@
       }
     }
   },
+  "aiReview": {
+    "button": "AI Review",
+    "loading": "Analyzing...",
+    "error": "AI review failed"
+  },
+  "aiSuggestions": {
+    "badge": "AI Suggestion",
+    "tab": "AI Suggestions",
+    "empty": "No AI suggestions",
+    "approve": "Approve",
+    "reject": "Reject",
+    "modalTitle": "Review Suggestion",
+    "comment": "Suggestion:"
+  },
   "approvalsPage": {
     "header": {
       "title": "Approvals",

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApi, DocumentSnapshot, DiffResult } from '../api/api';
 import { ApprovalsAnnotator, ApprovalComment } from '../approvals/ApprovalsAnnotator';
+import { getRandomColor } from '../approvals/colors';
 import { NotificationProvider } from '../notifications/NotificationProvider';
 import { TextInputModal } from '../modals/TextInputModal';
 import { AlertModal } from '../modals/AlertModal';
@@ -21,7 +22,7 @@ function formatDate(dateStr?: string, t?: (k: string, o?: any) => string) {
 
 
 function ApprovalItem({ a }: { a: any }) {
-  const { approvalsAction, getApprovalContent, getApprovalSnapshots, getApprovalDiff } = useApi();
+  const { approvalsAction, getApprovalContent, getApprovalSnapshots, getApprovalDiff, aiReview } = useApi();
   const { t } = useTranslation();
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -33,6 +34,8 @@ function ApprovalItem({ a }: { a: any }) {
   const [rejectModalOpen, setRejectModalOpen] = useState<boolean>(false);
   const [approvalWarningModalOpen, setApprovalWarningModalOpen] = useState<boolean>(false);
   const [revisionWarningModalOpen, setRevisionWarningModalOpen] = useState<boolean>(false);
+  const [aiReviewError, setAiReviewError] = useState<string | null>(null);
+  const [aiReviewLoading, setAiReviewLoading] = useState<boolean>(false);
 
   // Snapshot-related state
   const [snapshots, setSnapshots] = useState<DocumentSnapshot[]>([]);
@@ -157,14 +160,20 @@ function ApprovalItem({ a }: { a: any }) {
   };
 
   const handleRevision = async () => {
-    if (comments.length === 0) {
+    // Filter to only include human comments and accepted AI suggestions
+    // Exclude pending AI suggestions from revision request
+    const filteredComments = comments.filter(c =>
+      c.source !== 'ai' || c.status === 'accepted'
+    );
+
+    if (filteredComments.length === 0) {
       setRevisionWarningModalOpen(true);
       return;
     }
 
-    const general = comments.filter(c => c.type === 'general');
-    const selections = comments.filter(c => c.type === 'selection');
-    let summary = `Feedback Summary (${comments.length} comments):\n\n`;
+    const general = filteredComments.filter(c => c.type === 'general');
+    const selections = filteredComments.filter(c => c.type === 'selection');
+    let summary = `Feedback Summary (${filteredComments.length} comments):\n\n`;
 
     if (general.length) {
       summary += 'General Comments:\n';
@@ -184,11 +193,11 @@ function ApprovalItem({ a }: { a: any }) {
       response: summary,
       annotations: JSON.stringify({
         decision: 'needs-revision',
-        comments,
+        comments: filteredComments,
         summary,
         timestamp: new Date().toISOString()
       }, null, 2),
-      comments,
+      comments: filteredComments,
     };
 
     setActionLoading('revision');
@@ -201,6 +210,49 @@ function ApprovalItem({ a }: { a: any }) {
     } finally {
       setActionLoading(null);
     }
+  };
+
+  // Handle AI review request from sidebar
+  const handleAiReview = async (model: string) => {
+    setAiReviewLoading(true);
+    setAiReviewError(null);
+    try {
+      const result = await aiReview(a.id, model);
+      if (result.success && result.suggestions) {
+        const newComments: ApprovalComment[] = result.suggestions.map((suggestion: { quote?: string; comment: string }) => ({
+          type: suggestion.quote ? 'selection' : 'general',
+          comment: suggestion.comment,
+          timestamp: new Date().toISOString(),
+          selectedText: suggestion.quote,
+          highlightColor: suggestion.quote ? getRandomColor() : undefined,
+          id: `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          source: 'ai' as const,
+          status: 'pending' as const,
+        }));
+        setComments((prev) => [...prev, ...newComments]);
+      } else {
+        setAiReviewError(t('aiReview.error', 'AI review failed'));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setAiReviewError(message);
+    } finally {
+      setAiReviewLoading(false);
+    }
+  };
+
+  // Handle approving an AI suggestion - marks as accepted
+  const handleAiSuggestionApprove = (suggestion: ApprovalComment) => {
+    setComments((prev) =>
+      prev.map((c) =>
+        c.id === suggestion.id ? { ...c, status: 'accepted' as const } : c
+      )
+    );
+  };
+
+  // Handle rejecting an AI suggestion - removes it from comments
+  const handleAiSuggestionReject = (suggestion: ApprovalComment) => {
+    setComments((prev) => prev.filter((c) => c.id !== suggestion.id));
   };
 
   return (
@@ -314,27 +366,30 @@ function ApprovalItem({ a }: { a: any }) {
               </button>
 
               {open && (
-                <button
-                  onClick={handleRevision}
-                  disabled={!!actionLoading || comments.length === 0}
-                  className="btn bg-orange-600 hover:bg-orange-700 focus:ring-orange-500 text-xs sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 min-w-0 touch-manipulation"
-                >
-                  {actionLoading === 'revision' ? (
-                    <svg className="animate-spin w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                    </svg>
-                  )}
-                  <span className="hidden sm:inline">{t('approvalsPage.actions.requestRevisions')}</span>
-                  <span className="sm:hidden">{t('approvalsPage.actions.revisions')}</span>
-                  {comments.length > 0 && (
-                    <span className="ml-1 text-xs opacity-75">({comments.length})</span>
-                  )}
-                </button>
+                <>
+                  <button
+                    onClick={handleRevision}
+                    disabled={!!actionLoading || comments.length === 0}
+                    className="btn bg-orange-600 hover:bg-orange-700 focus:ring-orange-500 text-xs sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 min-w-0 touch-manipulation"
+                  >
+                    {actionLoading === 'revision' ? (
+                      <svg className="animate-spin w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    )}
+                    <span className="hidden sm:inline">{t('approvalsPage.actions.requestRevisions')}</span>
+                    <span className="sm:hidden">{t('approvalsPage.actions.revisions')}</span>
+                    {comments.length > 0 && (
+                      <span className="ml-1 text-xs opacity-75">({comments.length})</span>
+                    )}
+                  </button>
+
+                </>
               )}
             </div>
           </div>
@@ -505,6 +560,10 @@ function ApprovalItem({ a }: { a: any }) {
               onCommentsChange={setComments}
               viewMode={viewMode}
               setViewMode={(mode: 'preview' | 'annotate') => setViewMode(mode)}
+              onAiSuggestionApprove={handleAiSuggestionApprove}
+              onAiSuggestionReject={handleAiSuggestionReject}
+              onAiReview={handleAiReview}
+              aiReviewLoading={aiReviewLoading}
             />
           )}
 

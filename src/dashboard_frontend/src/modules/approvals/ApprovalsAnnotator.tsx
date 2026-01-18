@@ -4,6 +4,8 @@ import { hexToColorObject, isValidHex } from './colors';
 import { MDXEditorWrapper } from '../mdx-editor';
 import { TextInputModal } from '../modals/TextInputModal';
 import { ConfirmationModal } from '../modals/ConfirmationModal';
+import { AiSuggestionCard } from './AiSuggestionCard';
+import { AiSuggestionModal } from './AiSuggestionModal';
 
 export type ApprovalComment = {
   type: 'general' | 'selection';
@@ -15,6 +17,9 @@ export type ApprovalComment = {
   // Position-based fields for precise highlighting
   startOffset?: number;  // Character offset from start of content
   endOffset?: number;    // Character offset for end of selection
+  // AI review fields
+  source?: 'human' | 'ai';  // Origin of the comment
+  status?: 'pending' | 'accepted' | 'rejected';  // AI suggestion triage status
 };
 
 // Modal component for adding/editing comments
@@ -262,8 +267,8 @@ export function renderContentWithAnnotations(content: string, comments: Approval
   return result;
 }
 
-export function ApprovalsAnnotator({ content, comments, onCommentsChange, viewMode, setViewMode }:
-  { content: string; comments: ApprovalComment[]; onCommentsChange: (c: ApprovalComment[]) => void; viewMode: 'preview' | 'annotate'; setViewMode: (m: 'preview' | 'annotate') => void; }) {
+export function ApprovalsAnnotator({ content, comments, onCommentsChange, viewMode, setViewMode, onAiSuggestionApprove, onAiSuggestionReject, onAiReview, aiReviewLoading }:
+  { content: string; comments: ApprovalComment[]; onCommentsChange: (c: ApprovalComment[]) => void; viewMode: 'preview' | 'annotate'; setViewMode: (m: 'preview' | 'annotate') => void; onAiSuggestionApprove?: (comment: ApprovalComment) => void; onAiSuggestionReject?: (comment: ApprovalComment) => void; onAiReview?: (model: string) => void; aiReviewLoading?: boolean; }) {
   const { t } = useTranslation();
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
@@ -275,6 +280,19 @@ export function ApprovalsAnnotator({ content, comments, onCommentsChange, viewMo
   }>({ isOpen: false, selectedText: '', isEditing: false });
   const [generalCommentModalOpen, setGeneralCommentModalOpen] = useState(false);
   const [deleteModalState, setDeleteModalState] = useState<{ isOpen: boolean; commentIndex: number }>({ isOpen: false, commentIndex: -1 });
+  const [sidebarSection, setSidebarSection] = useState<'comments' | 'ai'>('comments');
+  const [aiSuggestionModalState, setAiSuggestionModalState] = useState<{ isOpen: boolean; suggestion?: ApprovalComment }>({ isOpen: false });
+  const [showAiModelDropdown, setShowAiModelDropdown] = useState(false);
+
+  const AI_MODELS = [
+    { id: 'deepseek-v3', label: 'DeepSeek V3', description: 'Fast' },
+    { id: 'deepseek-v3-reasoning', label: 'DeepSeek V3 (Reasoning)', description: 'Thorough' },
+    { id: 'gemini-flash', label: 'Gemini Flash', description: 'Fast' },
+  ];
+
+  // Separate human comments (+ accepted AI) from pending AI suggestions
+  const humanComments = useMemo(() => comments.filter(c => c.source !== 'ai' || c.status === 'accepted'), [comments]);
+  const aiSuggestions = useMemo(() => comments.filter(c => c.source === 'ai' && c.status === 'pending'), [comments]);
 
   // Generate unique ID for new comments
   const generateCommentId = () => `comment_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -450,27 +468,63 @@ export function ApprovalsAnnotator({ content, comments, onCommentsChange, viewMo
 
       {/* Comments Sidebar - Right sidebar on desktop, bottom on mobile */}
       <div data-section="comments" className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg flex flex-col max-h-[60vh] lg:max-h-[80vh] lg:col-span-1">
-        {/* Comments Header */}
+        {/* Section Switcher Tabs */}
         <div className="p-3 sm:p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded-t-lg">
-          <h4 className="font-medium text-gray-900 dark:text-white mb-2 sm:mb-3 flex items-center gap-2 text-sm sm:text-base">
-            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
-            Comments & Feedback
-          </h4>
+          <div className="flex border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden mb-3">
+            <button
+              onClick={() => setSidebarSection('comments')}
+              className={`flex-1 min-w-0 px-2 py-2 text-xs sm:text-sm font-medium transition-colors flex items-center justify-center gap-1 ${
+                sidebarSection === 'comments'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              <span className="truncate">Comments</span>
+              {humanComments.length > 0 && (
+                <span className={`flex-shrink-0 px-1.5 py-0.5 rounded-full text-xs ${
+                  sidebarSection === 'comments' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300'
+                }`}>
+                  {humanComments.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setSidebarSection('ai')}
+              className={`flex-1 min-w-0 px-2 py-2 text-xs sm:text-sm font-medium transition-colors flex items-center justify-center gap-1 ${
+                sidebarSection === 'ai'
+                  ? 'bg-violet-600 text-white'
+                  : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              <span className="truncate">{t('aiSuggestions.tab', 'AI')}</span>
+              {aiSuggestions.length > 0 && (
+                <span className={`flex-shrink-0 px-1.5 py-0.5 rounded-full text-xs ${
+                  sidebarSection === 'ai' ? 'bg-violet-500 text-white' : 'bg-violet-100 dark:bg-violet-900 text-violet-700 dark:text-violet-300'
+                }`}>
+                  {aiSuggestions.length}
+                </span>
+              )}
+            </button>
+          </div>
 
-          {/* Preview mode note */}
-          {viewMode === 'preview' && (
+          {/* Preview mode note (only for comments section) */}
+          {sidebarSection === 'comments' && viewMode === 'preview' && (
             <div className="mb-2 sm:mb-3 p-2 sm:p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-lg text-xs sm:text-sm text-blue-800 dark:text-blue-200">
               <svg className="w-3 h-3 sm:w-4 sm:h-4 mr-1 inline flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-            {t('approvals.annotator.switchHelp')}
+              {t('approvals.annotator.switchHelp')}
             </div>
           )}
 
-          {/* Add comment button (only in annotate mode) */}
-          {viewMode === 'annotate' && (
+          {/* Add comment button (only in annotate mode and comments section) */}
+          {sidebarSection === 'comments' && viewMode === 'annotate' && (
             <button
               onClick={addGeneral}
               className="w-full px-3 py-2 bg-blue-600 text-white rounded-lg text-xs sm:text-sm hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 touch-manipulation"
@@ -483,78 +537,160 @@ export function ApprovalsAnnotator({ content, comments, onCommentsChange, viewMo
             </button>
           )}
 
+          {/* AI Review button (only in AI section, disabled if already has pending suggestions) */}
+          {sidebarSection === 'ai' && onAiReview && (
+            <div className="relative">
+              <button
+                onClick={() => setShowAiModelDropdown(!showAiModelDropdown)}
+                disabled={aiReviewLoading || aiSuggestions.length > 0}
+                className="w-full px-3 py-2 bg-violet-600 text-white rounded-lg text-xs sm:text-sm hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 touch-manipulation"
+              >
+                {aiReviewLoading ? (
+                  <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                  </svg>
+                )}
+                <span>{aiReviewLoading ? t('aiReview.loading', 'Analyzing...') : t('aiReview.button', 'AI Review')}</span>
+                {!aiReviewLoading && (
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                )}
+              </button>
+
+              {showAiModelDropdown && !aiReviewLoading && (
+                <>
+                  <div className="fixed inset-0" onClick={() => setShowAiModelDropdown(false)} />
+                  <div className="absolute left-0 right-0 mt-1 rounded-md shadow-lg bg-white dark:bg-gray-800 ring-1 ring-black ring-opacity-5 z-10">
+                    <div className="py-1">
+                      {AI_MODELS.map((model) => (
+                        <button
+                          key={model.id}
+                          onClick={() => {
+                            setShowAiModelDropdown(false);
+                            onAiReview(model.id);
+                          }}
+                          className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-between"
+                        >
+                          <span>{model.label}</span>
+                          <span className="text-xs text-gray-500 dark:text-gray-400">{model.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Comments List */}
-        <div className="flex-1 p-3 sm:p-4 overflow-y-auto space-y-2 sm:space-y-3">
-          {comments.length === 0 ? (
-            <div className="text-center py-6 sm:py-8 text-gray-500 dark:text-gray-400 text-sm">
-              <svg className="mx-auto w-6 h-6 sm:w-8 sm:h-8 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-              </svg>
-              <p className="text-xs sm:text-sm font-medium">{t('approvals.annotator.empty.title')}</p>
-              <p className="text-xs mt-1">{t('approvals.annotator.empty.description')}</p>
-            </div>
-          ) : (
-            comments.map((c, idx) => (
-              <div key={idx} className="bg-gray-50 dark:bg-gray-900 p-2 sm:p-3 rounded-lg border border-gray-200 dark:border-gray-700 relative">
-                {/* Color indicator for selection comments */}
-                {c.type === 'selection' && c.highlightColor && (
-                  <div
-                    className="absolute left-0 top-0 bottom-0 w-1 rounded-l-lg"
-                    style={{ backgroundColor: c.highlightColor.border }}
-                  />
-                )}
-
-                <div className="flex items-start justify-between mb-1 sm:mb-2" style={{ marginLeft: c.type === 'selection' && c.highlightColor ? '8px' : '0' }}>
-                  <div className="flex items-center gap-1 sm:gap-2 flex-1 min-w-0">
-                    {/* Color dot for selection comments */}
+        {sidebarSection === 'comments' && (
+          <div className="flex-1 p-3 sm:p-4 overflow-y-auto space-y-2 sm:space-y-3">
+            {humanComments.length === 0 ? (
+              <div className="text-center py-6 sm:py-8 text-gray-500 dark:text-gray-400 text-sm">
+                <svg className="mx-auto w-6 h-6 sm:w-8 sm:h-8 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+                <p className="text-xs sm:text-sm font-medium">{t('approvals.annotator.empty.title')}</p>
+                <p className="text-xs mt-1">{t('approvals.annotator.empty.description')}</p>
+              </div>
+            ) : (
+              humanComments.map((c) => {
+                const idx = comments.findIndex(comment => comment.id === c.id);
+                return (
+                  <div key={c.id || idx} className="bg-gray-50 dark:bg-gray-900 p-2 sm:p-3 rounded-lg border border-gray-200 dark:border-gray-700 relative">
+                    {/* Color indicator for selection comments */}
                     {c.type === 'selection' && c.highlightColor && (
                       <div
-                        className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border flex-shrink-0"
-                        style={{
-                          backgroundColor: c.highlightColor.bg,
-                          borderColor: c.highlightColor.border
-                        }}
-                        title={t('approvals.annotator.colorHighlight', { color: c.highlightColor.name })}
+                        className="absolute left-0 top-0 bottom-0 w-1 rounded-l-lg"
+                        style={{ backgroundColor: c.highlightColor.border }}
                       />
                     )}
-                    <span className="text-xs font-medium text-blue-600 dark:text-blue-400 flex items-center gap-1 truncate">
-                      <svg className="w-2.5 h-2.5 sm:w-3 sm:h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                      </svg>
-                      <span className="truncate">{c.type === 'selection' ? t('approvals.annotator.badge.textSelection') : t('approvals.annotator.badge.generalComment')}</span>
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => remove(idx)}
-                    className="text-gray-400 hover:text-red-500 text-xs p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors touch-manipulation flex-shrink-0 ml-2"
-                    title={t('approvals.annotator.tooltips.deleteComment')}
-                  >
-                    <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
-                </div>
 
-                {c.selectedText && (
-                  <div className="mb-1 sm:mb-2 p-1.5 sm:p-2 rounded text-xs italic leading-relaxed" style={{
-                    marginLeft: c.highlightColor ? '8px' : '0',
-                    backgroundColor: c.highlightColor?.bg || 'rgb(254, 249, 195)',
-                    borderColor: c.highlightColor?.border || '#F59E0B',
-                    borderWidth: '1px'
-                  }}>
-                    <span className="break-words">"{c.selectedText.substring(0, 80)}{c.selectedText.length > 80 ? '...' : ''}"</span>
-                  </div>
-                )}
+                    <div className="flex items-start justify-between mb-1 sm:mb-2" style={{ marginLeft: c.type === 'selection' && c.highlightColor ? '8px' : '0' }}>
+                      <div className="flex items-center gap-1 sm:gap-2 flex-1 min-w-0">
+                        {/* Color dot for selection comments */}
+                        {c.type === 'selection' && c.highlightColor && (
+                          <div
+                            className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border flex-shrink-0"
+                            style={{
+                              backgroundColor: c.highlightColor.bg,
+                              borderColor: c.highlightColor.border
+                            }}
+                            title={t('approvals.annotator.colorHighlight', { color: c.highlightColor.name })}
+                          />
+                        )}
+                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400 flex items-center gap-1 truncate">
+                          <svg className="w-2.5 h-2.5 sm:w-3 sm:h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                          </svg>
+                          <span className="truncate">{c.type === 'selection' ? t('approvals.annotator.badge.textSelection') : t('approvals.annotator.badge.generalComment')}</span>
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => remove(idx)}
+                        className="text-gray-400 hover:text-red-500 text-xs p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors touch-manipulation flex-shrink-0 ml-2"
+                        title={t('approvals.annotator.tooltips.deleteComment')}
+                      >
+                        <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
 
-                <div className="text-xs sm:text-sm text-gray-700 dark:text-gray-300 leading-relaxed break-words" style={{ marginLeft: c.type === 'selection' && c.highlightColor ? '8px' : '0' }}>
-                  {c.comment}
-                </div>
+                    {c.selectedText && (
+                      <div className="mb-1 sm:mb-2 p-1.5 sm:p-2 rounded text-xs italic leading-relaxed" style={{
+                        marginLeft: c.highlightColor ? '8px' : '0',
+                        backgroundColor: c.highlightColor?.bg || 'rgb(254, 249, 195)',
+                        borderColor: c.highlightColor?.border || '#F59E0B',
+                        borderWidth: '1px'
+                      }}>
+                        <span className="break-words">"{c.selectedText.substring(0, 80)}{c.selectedText.length > 80 ? '...' : ''}"</span>
+                      </div>
+                    )}
+
+                    <div className="text-xs sm:text-sm text-gray-700 dark:text-gray-300 leading-relaxed break-words" style={{ marginLeft: c.type === 'selection' && c.highlightColor ? '8px' : '0' }}>
+                      {c.comment}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {/* AI Suggestions List */}
+        {sidebarSection === 'ai' && (
+          <div className="flex-1 p-3 sm:p-4 overflow-y-auto space-y-2 sm:space-y-3">
+            {aiSuggestions.length === 0 ? (
+              <div className="text-center py-6 sm:py-8 text-gray-500 dark:text-gray-400 text-sm">
+                <svg className="mx-auto w-6 h-6 sm:w-8 sm:h-8 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+                <p className="text-xs sm:text-sm font-medium">{t('aiSuggestions.empty', 'No AI suggestions')}</p>
+                <p className="text-xs mt-1">Use "AI Review" to generate suggestions</p>
               </div>
-            ))
-          )}
-        </div>
+            ) : (
+              aiSuggestions.map((suggestion) => (
+                <AiSuggestionCard
+                  key={suggestion.id}
+                  quote={suggestion.selectedText}
+                  comment={suggestion.comment}
+                  highlightColor={suggestion.highlightColor}
+                  onApprove={() => onAiSuggestionApprove?.(suggestion)}
+                  onReject={() => onAiSuggestionReject?.(suggestion)}
+                  onClick={() => setAiSuggestionModalState({ isOpen: true, suggestion })}
+                />
+              ))
+            )}
+          </div>
+        )}
       </div>
 
       {/* Comment Modal */}
@@ -591,6 +727,17 @@ export function ApprovalsAnnotator({ content, comments, onCommentsChange, viewMo
         confirmText={t('common.delete')}
         cancelText={t('common.cancel')}
         variant="danger"
+      />
+
+      {/* AI Suggestion Detail Modal */}
+      <AiSuggestionModal
+        isOpen={aiSuggestionModalState.isOpen}
+        onClose={() => setAiSuggestionModalState({ isOpen: false })}
+        onApprove={() => aiSuggestionModalState.suggestion && onAiSuggestionApprove?.(aiSuggestionModalState.suggestion)}
+        onReject={() => aiSuggestionModalState.suggestion && onAiSuggestionReject?.(aiSuggestionModalState.suggestion)}
+        quote={aiSuggestionModalState.suggestion?.selectedText}
+        comment={aiSuggestionModalState.suggestion?.comment || ''}
+        highlightColor={aiSuggestionModalState.suggestion?.highlightColor}
       />
     </div>
   );

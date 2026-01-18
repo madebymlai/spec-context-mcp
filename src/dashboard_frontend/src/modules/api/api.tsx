@@ -117,6 +117,7 @@ type ApiActionsContextType = {
   getImplementationLogs: (specName: string, query?: { taskId?: string; search?: string }) => Promise<{ entries: ImplementationLogEntry[] }>;
   getImplementationLogStats: (specName: string, taskId: string) => Promise<any>;
   getChangelog: (version: string) => Promise<{ content: string }>;
+  aiReview: (approvalId: string, model: string) => Promise<{ success: boolean; model: string; suggestions: Array<{ quote?: string; comment: string }> }>;
 };
 
 const ApiDataContext = createContext<ApiDataContextType | undefined>(undefined);
@@ -285,6 +286,7 @@ export function ApiProvider({ initial, projectId, children }: ApiProviderProps) 
         getImplementationLogs: async () => ({ entries: [] }),
         getImplementationLogStats: async () => ({}),
         getChangelog: async () => ({ content: '' }),
+        aiReview: async () => ({ success: false, model: '', suggestions: [] }),
       };
     }
 
@@ -325,6 +327,18 @@ export function ApiProvider({ initial, projectId, children }: ApiProviderProps) 
       },
       getImplementationLogStats: (specName: string, taskId: string) => getJson(`${prefix}/specs/${encodeURIComponent(specName)}/implementation-log/task/${encodeURIComponent(taskId)}/stats`),
       getChangelog: (version: string) => getJson(`${prefix}/changelog/${encodeURIComponent(version)}`),
+      aiReview: async (approvalId: string, model: string) => {
+        const res = await fetch(`${prefix}/approvals/${encodeURIComponent(approvalId)}/ai-review`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model }),
+        });
+        if (!res.ok) {
+          const error = await res.json().catch(() => ({ error: 'AI review failed' }));
+          throw new Error(error.error || 'AI review failed');
+        }
+        return res.json();
+      },
     };
   }, [projectId, reloadAll]);
 
