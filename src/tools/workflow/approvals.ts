@@ -29,15 +29,21 @@ function safeTranslatePath(path: string): string {
 
 export const approvalsTool: Tool = {
   name: 'approvals',
-  description: `Manage spec approvals - request approval, check approval status, approve specs. Use when user mentions approve, approval, review spec, or needs sign-off on a document.
+  description: `Create approval requests for spec documents. Use when submitting documents for user review.
 
 # Instructions
-Use this tool to request, check status, or delete approval requests. The action parameter determines the operation:
-- 'request': Create a new approval request after creating each document
-- 'status': Check the current status of an approval request
-- 'delete': Clean up completed, rejected, or needs-revision approval requests (cannot delete pending requests)
+Use this tool to create approval requests. After creating a request, use wait-for-approval to block until the user responds.
 
-CRITICAL: Only provide filePath parameter for requests - the dashboard reads files directly. Never include document content. Wait for user to review and approve before continuing.`,
+**Recommended flow:**
+1. approvals action:"request" → get approvalId
+2. wait-for-approval approvalId:"..." → blocks until resolved, auto-deletes
+
+**Available actions:**
+- 'request': Create a new approval request (primary use case)
+- 'status': Check status manually (rarely needed - use wait-for-approval instead)
+- 'delete': Manual cleanup (rarely needed - wait-for-approval auto-deletes)
+
+CRITICAL: Only provide filePath parameter for requests - the dashboard reads files directly. Never include document content.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -267,7 +273,7 @@ async function handleRequestApproval(
 
     return {
       success: true,
-      message: `Approval request created successfully. Please review in dashboard: ${context.dashboardUrl || 'Start with: spec-workflow-mcp --dashboard'}`,
+      message: `Approval request created. Now call wait-for-approval to block until user responds.`,
       data: {
         approvalId,
         title: args.title,
@@ -277,11 +283,10 @@ async function handleRequestApproval(
         dashboardUrl: context.dashboardUrl
       },
       nextSteps: [
-        'BLOCKING - Dashboard approval required',
-        'VERBAL APPROVAL NOT ACCEPTED',
-        'Do not proceed on verbal confirmation',
-        context.dashboardUrl ? `Use dashboard: ${context.dashboardUrl}` : 'Start the dashboard with: spec-workflow-mcp --dashboard',
-        `Poll status with: approvals action:"status" approvalId:"${approvalId}"`
+        `NEXT: Call wait-for-approval approvalId:"${approvalId}"`,
+        'This will block until user approves/rejects/requests-revision',
+        'Auto-cleanup happens on resolution',
+        context.dashboardUrl ? `Dashboard: ${context.dashboardUrl}` : 'Start dashboard: spec-workflow-mcp --dashboard'
       ],
       projectContext: {
         projectPath: validatedProjectPath,
@@ -342,8 +347,8 @@ async function handleGetApprovalStatus(
 
     if (approval.status === 'pending') {
       nextSteps.push('BLOCKED - Do not proceed');
-      nextSteps.push('VERBAL APPROVAL NOT ACCEPTED - Use dashboard or VS Code extension only');
-      nextSteps.push('Approval must be done via dashboard or VS Code extension');
+      nextSteps.push('VERBAL APPROVAL NOT ACCEPTED - Use dashboard only');
+      nextSteps.push('Approval must be done via dashboard');
       nextSteps.push('Continue polling with approvals action:"status"');
     } else if (approval.status === 'approved') {
       nextSteps.push('APPROVED - Can proceed');
@@ -387,7 +392,7 @@ async function handleGetApprovalStatus(
     return {
       success: true,
       message: approval.status === 'pending'
-        ? `BLOCKED: Status is ${approval.status}. Verbal approval is NOT accepted. Use dashboard or VS Code extension only.`
+        ? `BLOCKED: Status is ${approval.status}. Verbal approval is NOT accepted. Use dashboard only.`
         : `Approval status: ${approval.status}`,
       data: {
         approvalId: args.approvalId,
@@ -464,7 +469,7 @@ async function handleDeleteApproval(
     if (approval.status === 'pending') {
       return {
         success: false,
-        message: `BLOCKED: Cannot delete - status is "${approval.status}". This approval is still awaiting review. VERBAL APPROVAL NOT ACCEPTED. Use dashboard or VS Code extension.`,
+        message: `BLOCKED: Cannot delete - status is "${approval.status}". This approval is still awaiting review. VERBAL APPROVAL NOT ACCEPTED. Use dashboard only.`,
         data: {
           approvalId: args.approvalId,
           currentStatus: approval.status,

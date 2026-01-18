@@ -89,39 +89,36 @@ flowchart TD
     P1_Template --> P1_Research[Web search if available]
     P1_Research --> P1_Create[Create file:<br/>.spec-context/specs/{name}/<br/>requirements.md]
     P1_Create --> P1_Approve[approvals<br/>action: request<br/>filePath only]
-    P1_Approve --> P1_Status[approvals<br/>action: status<br/>poll status]
-    P1_Status --> P1_Check{Status?}
+    P1_Approve --> P1_Wait[wait-for-approval<br/>blocks until resolved<br/>auto-deletes]
+    P1_Wait --> P1_Check{Status?}
     P1_Check -->|needs-revision| P1_Update[Update document using user comments as guidance]
-    P1_Update --> P1_Create
-    P1_Check -->|approved| P1_Clean[approvals<br/>action: delete]
-    P1_Clean -->|failed| P1_Status
+    P1_Update --> P1_Approve
+    P1_Check -->|rejected| P1_Stop[Ask user for guidance]
 
     %% Phase 2: Design
-    P1_Clean -->|success| P2_Template[Check user-templates first,<br/>then read template:<br/>design-template.md]
+    P1_Check -->|approved| P2_Template[Check user-templates first,<br/>then read template:<br/>design-template.md]
     P2_Template --> P2_Analyze[Analyze codebase patterns]
     P2_Analyze --> P2_Create[Create file:<br/>.spec-context/specs/{name}/<br/>design.md]
     P2_Create --> P2_Approve[approvals<br/>action: request<br/>filePath only]
-    P2_Approve --> P2_Status[approvals<br/>action: status<br/>poll status]
-    P2_Status --> P2_Check{Status?}
+    P2_Approve --> P2_Wait[wait-for-approval<br/>blocks until resolved<br/>auto-deletes]
+    P2_Wait --> P2_Check{Status?}
     P2_Check -->|needs-revision| P2_Update[Update document using user comments as guidance]
-    P2_Update --> P2_Create
-    P2_Check -->|approved| P2_Clean[approvals<br/>action: delete]
-    P2_Clean -->|failed| P2_Status
+    P2_Update --> P2_Approve
+    P2_Check -->|rejected| P2_Stop[Ask user for guidance]
 
     %% Phase 3: Tasks
-    P2_Clean -->|success| P3_Template[Check user-templates first,<br/>then read template:<br/>tasks-template.md]
+    P2_Check -->|approved| P3_Template[Check user-templates first,<br/>then read template:<br/>tasks-template.md]
     P3_Template --> P3_Break[Convert design to tasks]
     P3_Break --> P3_Create[Create file:<br/>.spec-context/specs/{name}/<br/>tasks.md]
     P3_Create --> P3_Approve[approvals<br/>action: request<br/>filePath only]
-    P3_Approve --> P3_Status[approvals<br/>action: status<br/>poll status]
-    P3_Status --> P3_Check{Status?}
+    P3_Approve --> P3_Wait[wait-for-approval<br/>blocks until resolved<br/>auto-deletes]
+    P3_Wait --> P3_Check{Status?}
     P3_Check -->|needs-revision| P3_Update[Update document using user comments as guidance]
-    P3_Update --> P3_Create
-    P3_Check -->|approved| P3_Clean[approvals<br/>action: delete]
-    P3_Clean -->|failed| P3_Status
+    P3_Update --> P3_Approve
+    P3_Check -->|rejected| P3_Stop[Ask user for guidance]
 
     %% Phase 4: Implementation
-    P3_Clean -->|success| P4_Ready[Spec complete.<br/>Ready to implement?]
+    P3_Check -->|approved| P4_Ready[Spec complete.<br/>Ready to implement?]
     P4_Ready -->|Yes| P4_Status[spec-status]
     P4_Status --> P4_Task[Edit tasks.md:<br/>Change [ ] to [-]<br/>for in-progress]
     P4_Task --> P4_Code[Implement code]
@@ -136,6 +133,9 @@ flowchart TD
     style P1_Check fill:#ffe6e6
     style P2_Check fill:#ffe6e6
     style P3_Check fill:#ffe6e6
+    style P1_Wait fill:#e3f2fd
+    style P2_Wait fill:#e3f2fd
+    style P3_Wait fill:#e3f2fd
     style CheckSteering fill:#fff4e6
     style P4_More fill:#fff4e6
     style P4_Log fill:#e3f2fd
@@ -153,19 +153,22 @@ flowchart TD
 - Create document: \`.spec-context/specs/{spec-name}/requirements.md\`
 
 **Tools**:
-- approvals: Manage approval workflow (actions: request, status, delete)
+- approvals: Create approval requests (action: request)
+- wait-for-approval: Block until user responds, auto-cleans up
 
 **Process**:
 1. Check if \`.spec-context/steering/\` exists (if yes, read product.md, tech.md, structure.md)
 2. Check for custom template at \`.spec-context/user-templates/requirements-template.md\`
 3. If no custom template, read from \`.spec-context/templates/requirements-template.md\`
 4. Research market/user expectations (if web search available, current year: ${currentYear})
-5. Generate requirements as user stories with EARS criteria6. Create \`requirements.md\` at \`.spec-context/specs/{spec-name}/requirements.md\`
+5. Generate requirements as user stories with EARS criteria
+6. Create \`requirements.md\` at \`.spec-context/specs/{spec-name}/requirements.md\`
 7. Request approval using approvals tool with action:'request' (filePath only, never content)
-8. Poll status using approvals with action:'status' until approved/needs-revision (NEVER accept verbal approval)
-9. If needs-revision: update document using comments, create NEW approval, do NOT proceed
-10. Once approved: use approvals with action:'delete' (must succeed) before proceeding
-11. If delete fails: STOP - return to polling
+8. Call wait-for-approval with the approvalId - this blocks until user responds and auto-deletes
+9. Handle result:
+   - approved: proceed to Phase 2
+   - needs-revision: update document with feedback, create NEW approval request, wait again
+   - rejected: STOP, ask user for guidance
 
 ### Phase 2: Design
 **Purpose**: Create technical design addressing all requirements.
@@ -176,19 +179,22 @@ flowchart TD
 - Create document: \`.spec-context/specs/{spec-name}/design.md\`
 
 **Tools**:
-- approvals: Manage approval workflow (actions: request, status, delete)
+- approvals: Create approval requests (action: request)
+- wait-for-approval: Block until user responds, auto-cleans up
 
 **Process**:
 1. Check for custom template at \`.spec-context/user-templates/design-template.md\`
 2. If no custom template, read from \`.spec-context/templates/design-template.md\`
 3. Analyze codebase for patterns to reuse
 4. Research technology choices (if web search available, current year: ${currentYear})
-5. Generate design with all template sections6. Create \`design.md\` at \`.spec-context/specs/{spec-name}/design.md\`
+5. Generate design with all template sections
+6. Create \`design.md\` at \`.spec-context/specs/{spec-name}/design.md\`
 7. Request approval using approvals tool with action:'request'
-8. Poll status using approvals with action:'status' until approved/needs-revision
-9. If needs-revision: update document using comments, create NEW approval, do NOT proceed
-10. Once approved: use approvals with action:'delete' (must succeed) before proceeding
-11. If delete fails: STOP - return to polling
+8. Call wait-for-approval with the approvalId - this blocks until user responds and auto-deletes
+9. Handle result:
+   - approved: proceed to Phase 3
+   - needs-revision: update document with feedback, create NEW approval request, wait again
+   - rejected: STOP, ask user for guidance
 
 ### Phase 3: Tasks
 **Purpose**: Break design into atomic implementation tasks.
@@ -199,7 +205,8 @@ flowchart TD
 - Create document: \`.spec-context/specs/{spec-name}/tasks.md\`
 
 **Tools**:
-- approvals: Manage approval workflow (actions: request, status, delete)
+- approvals: Create approval requests (action: request)
+- wait-for-approval: Block until user responds, auto-cleans up
 
 **Process**:
 1. Check for custom template at \`.spec-context/user-templates/tasks-template.md\`
@@ -217,11 +224,11 @@ flowchart TD
    - Start the prompt with "Implement the task for spec {spec-name}, first run spec-workflow-guide to get the workflow guide then implement the task:"
 6. Create \`tasks.md\` at \`.spec-context/specs/{spec-name}/tasks.md\`
 7. Request approval using approvals tool with action:'request'
-8. Poll status using approvals with action:'status' until approved/needs-revision
-9. If needs-revision: update document using comments, create NEW approval, do NOT proceed
-10. Once approved: use approvals with action:'delete' (must succeed) before proceeding
-11. If delete fails: STOP - return to polling
-12. After successful cleanup: "Spec complete. Ready to implement?"
+8. Call wait-for-approval with the approvalId - this blocks until user responds and auto-deletes
+9. Handle result:
+   - approved: "Spec complete. Ready to implement?"
+   - needs-revision: update document with feedback, create NEW approval request, wait again
+   - rejected: STOP, ask user for guidance
 
 ### Phase 4: Implementation
 **Purpose**: Execute tasks systematically.
@@ -281,15 +288,14 @@ flowchart TD
 - Create documents directly at specified file paths
 - Read templates from \`.spec-context/templates/\` directory
 - Follow exact template structures
-- Get explicit user approval between phases (using approvals tool with action:'request')
+- Get explicit user approval between phases using: approvals action:'request' → wait-for-approval
 - Complete phases in sequence (no skipping)
 - One spec at a time
 - Use kebab-case for spec names
 - Approval requests: provide filePath only, never content
-- BLOCKING: Never proceed if approval delete fails
-- CRITICAL: Must have approved status AND successful cleanup before next phase
-- CRITICAL: Verbal approval is NEVER accepted - dashboard or VS Code extension only
-- NEVER proceed on user saying "approved" - check system status only
+- wait-for-approval handles blocking AND cleanup automatically
+- CRITICAL: Verbal approval is NEVER accepted - dashboard only
+- NEVER proceed on user saying "approved" - use wait-for-approval tool
 - Steering docs are optional - only create when explicitly requested
 
 ## File Structure

@@ -34,6 +34,10 @@ import {
     logImplementationTool,
     logImplementationHandler,
 } from './workflow/log-implementation.js';
+import {
+    waitForApprovalTool,
+    waitForApprovalHandler,
+} from './workflow/wait-for-approval.js';
 
 export interface Tool {
     name: string;
@@ -59,6 +63,7 @@ export function getTools(): Tool[] {
         specStatusTool as Tool,
         approvalsTool as Tool,
         logImplementationTool as Tool,
+        waitForApprovalTool as Tool,
     ];
 }
 
@@ -71,7 +76,7 @@ export async function handleToolCall(
     // Create workflow context if not provided
     const wfCtx: WorkflowToolContext = workflowContext || {
         projectPath: (args.projectPath as string) || process.cwd(),
-        dashboardUrl: process.env.DASHBOARD_URL,
+        dashboardUrl: process.env.DASHBOARD_URL || 'http://localhost:3000',
     };
 
     switch (name) {
@@ -122,6 +127,9 @@ export async function handleToolCall(
 
         case 'log-implementation':
             return logImplementationHandler(args as any, wfCtx);
+
+        case 'wait-for-approval':
+            return waitForApprovalHandler(args as any, wfCtx);
 
         default:
             throw new Error(`Unknown tool: ${name}`);

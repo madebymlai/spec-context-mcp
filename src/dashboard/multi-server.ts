@@ -39,7 +39,6 @@ export interface MultiDashboardOptions {
   bindAddress?: string; // Network binding address
   allowExternalAccess?: boolean; // Explicit opt-in for non-localhost binding
   security?: Partial<SecurityConfig>; // Security features configuration
-  apiKey?: string; // API key for authentication (from DASHBOARD_API_KEY env var)
 }
 
 export class MultiProjectDashboardServer {
@@ -62,10 +61,8 @@ export class MultiProjectDashboardServer {
   // Debounce spec broadcasts to coalesce rapid updates
   private pendingSpecBroadcasts: Map<string, NodeJS.Timeout> = new Map();
   private readonly SPEC_BROADCAST_DEBOUNCE_MS = 300;
-  private apiKey?: string;
 
   constructor(options: MultiDashboardOptions = {}) {
-    this.apiKey = options.apiKey || process.env.DASHBOARD_API_KEY;
     this.options = options;
     this.projectManager = new ProjectManager();
     this.jobScheduler = new JobScheduler(this.projectManager);
@@ -162,26 +159,6 @@ export class MultiProjectDashboardServer {
 
     if (this.auditLogger) {
       this.app.addHook('onRequest', this.auditLogger.middleware());
-    }
-
-    // API key authentication for write /api routes (POST, PUT, DELETE)
-    // Read-only routes (GET) are allowed without auth for dashboard UI
-    if (this.apiKey) {
-      console.error(`   - API Key Auth: ENABLED (write operations)`);
-      this.app.addHook('onRequest', async (request, reply) => {
-        const url = request.url;
-        const method = request.method;
-        // Only check write operations on API routes
-        if (url.startsWith('/api/') && ['POST', 'PUT', 'DELETE'].includes(method)) {
-          const authHeader = request.headers['authorization'];
-          const providedKey = authHeader?.replace('Bearer ', '');
-          if (providedKey !== this.apiKey) {
-            return reply.code(401).send({ error: 'Unauthorized: Invalid or missing API key' });
-          }
-        }
-      });
-    } else {
-      console.error(`   - API Key Auth: DISABLED (set DASHBOARD_API_KEY to enable)`);
     }
 
     // Register plugins
@@ -713,6 +690,132 @@ export class MultiProjectDashboardServer {
       } catch (error: any) {
         return reply.code(404).send({ error: error.message });
       }
+    });
+
+    // Wait for approval resolution (long-poll endpoint for MCP tool)
+    this.app.get('/api/projects/:projectId/approvals/:id/wait', async (request, reply) => {
+      const { projectId, id } = request.params as { projectId: string; id: string };
+      const { timeout, autoDelete } = request.query as { timeout?: string; autoDelete?: string };
+      const project = this.projectManager.getProject(projectId);
+
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      const timeoutMs = Math.min(parseInt(timeout || '300000', 10), 600000); // Max 10 minutes
+      const shouldAutoDelete = autoDelete !== 'false'; // Default true
+
+      // Check current status first
+      const approval = await project.approvalStorage.getApproval(id);
+      if (!approval) {
+        return reply.code(404).send({ error: 'Approval not found' });
+      }
+
+      // If already resolved, return immediately
+      if (approval.status !== 'pending') {
+        const result = {
+          resolved: true,
+          status: approval.status,
+          response: approval.response,
+          annotations: approval.annotations,
+          comments: approval.comments,
+          respondedAt: approval.respondedAt,
+          autoDeleted: false
+        };
+
+        // Auto-delete if requested
+        if (shouldAutoDelete) {
+          try {
+            await project.approvalStorage.deleteApproval(id);
+            result.autoDeleted = true;
+          } catch (deleteError) {
+            // Log but don't fail - approval was resolved
+            console.error('Failed to auto-delete approval:', deleteError);
+          }
+        }
+
+        return result;
+      }
+
+      // Set up long-poll: wait for approval-change event or timeout
+      return new Promise((resolve) => {
+        let resolved = false;
+        let timeoutHandle: NodeJS.Timeout;
+        let checkInterval: NodeJS.Timeout;
+
+        const cleanup = () => {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          if (checkInterval) clearInterval(checkInterval);
+        };
+
+        const checkAndRespond = async () => {
+          if (resolved) return;
+
+          try {
+            const currentApproval = await project.approvalStorage.getApproval(id);
+            if (!currentApproval) {
+              resolved = true;
+              cleanup();
+              resolve({ resolved: true, status: 'deleted', error: 'Approval was deleted' });
+              return;
+            }
+
+            if (currentApproval.status !== 'pending') {
+              resolved = true;
+              cleanup();
+
+              const result: any = {
+                resolved: true,
+                status: currentApproval.status,
+                response: currentApproval.response,
+                annotations: currentApproval.annotations,
+                comments: currentApproval.comments,
+                respondedAt: currentApproval.respondedAt,
+                autoDeleted: false
+              };
+
+              // Auto-delete if requested
+              if (shouldAutoDelete) {
+                try {
+                  await project.approvalStorage.deleteApproval(id);
+                  result.autoDeleted = true;
+                } catch (deleteError) {
+                  console.error('Failed to auto-delete approval:', deleteError);
+                }
+              }
+
+              resolve(result);
+            }
+          } catch (error) {
+            // Continue waiting on error
+          }
+        };
+
+        // Poll every 500ms for changes (file watcher triggers approval-change event)
+        checkInterval = setInterval(checkAndRespond, 500);
+
+        // Timeout handler
+        timeoutHandle = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            cleanup();
+            resolve({
+              resolved: false,
+              status: 'pending',
+              timeout: true,
+              message: 'Timeout waiting for approval resolution'
+            });
+          }
+        }, timeoutMs);
+
+        // Handle client disconnect
+        request.raw.on('close', () => {
+          if (!resolved) {
+            resolved = true;
+            cleanup();
+          }
+        });
+      });
     });
 
     // Get all snapshots for an approval
