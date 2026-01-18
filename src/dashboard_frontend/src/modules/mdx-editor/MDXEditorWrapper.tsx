@@ -32,6 +32,64 @@ import { MermaidRenderer, isMermaidCode, mermaidCodeBlockDescriptor } from './pl
 import type { MDXEditorWrapperProps, EditorMode } from './types';
 import './MDXEditorWrapper.css';
 
+/**
+ * Escape angle brackets that look like generic types (e.g., Option<u64>, Vec<String>)
+ * but are not valid HTML tags. This prevents MDXEditor from failing to parse them.
+ *
+ * We preserve:
+ * - Content inside code blocks (``` ... ```)
+ * - Content inside inline code (` ... `)
+ * - Valid HTML-like tags (lowercase tag names)
+ */
+function escapeInvalidHtmlTags(markdown: string): string {
+  // Split by code blocks and inline code to preserve them
+  const parts: string[] = [];
+  let lastIndex = 0;
+
+  // Match code blocks and inline code
+  const codePattern = /(```[\s\S]*?```|`[^`]+`)/g;
+  let match;
+
+  while ((match = codePattern.exec(markdown)) !== null) {
+    // Add text before code block (needs escaping)
+    if (match.index > lastIndex) {
+      parts.push({ text: markdown.slice(lastIndex, match.index), escape: true } as any);
+    }
+    // Add code block (preserve as-is)
+    parts.push({ text: match[0], escape: false } as any);
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text
+  if (lastIndex < markdown.length) {
+    parts.push({ text: markdown.slice(lastIndex), escape: true } as any);
+  }
+
+  // Process each part
+  return parts.map((part: any) => {
+    if (!part.escape) return part.text;
+
+    // Escape angle brackets that look like generic types or invalid HTML
+    // Pattern: < followed by uppercase letter or type-like patterns
+    return part.text
+      // Generic types: Option<T>, Vec<String>, HashMap<K, V>, etc.
+      .replace(/<([A-Z][a-zA-Z0-9_]*(?:<[^>]+>)?(?:\s*,\s*[A-Z][a-zA-Z0-9_]*(?:<[^>]+>)?)*)>/g, '&lt;$1&gt;')
+      // Rust/type annotations: <u64>, <usize>, <i32>, etc.
+      .replace(/<(u\d+|i\d+|f\d+|usize|isize|bool|str|char)>/g, '&lt;$1&gt;')
+      // Generic with path: Option<&Path>, Result<T, E>
+      .replace(/<(&?[A-Z][a-zA-Z0-9_:]*(?:\s*,\s*[A-Z][a-zA-Z0-9_:]*)?)>/g, '&lt;$1&gt;');
+  }).join('');
+}
+
+/**
+ * Unescape HTML entities back to angle brackets for saving
+ */
+function unescapeHtmlTags(markdown: string): string {
+  return markdown
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
 // Custom code block renderer that handles mermaid
 function CustomCodeBlockRenderer({ code, language }: { code: string; language?: string }) {
   if (isMermaidCode(language)) {
@@ -179,8 +237,12 @@ export function MDXEditorWrapper({
   const { t } = useTranslation();
   const { isDarkMode } = useMDXEditorTheme();
   const editorRef = useRef<MDXEditorMethods>(null);
-  const [localContent, setLocalContent] = useState(content);
-  const [lastSavedContent, setLastSavedContent] = useState(content);
+
+  // Escape invalid HTML-like tags for MDXEditor (e.g., Option<u64> -> Option&lt;u64&gt;)
+  const safeContent = useMemo(() => escapeInvalidHtmlTags(content), [content]);
+
+  const [localContent, setLocalContent] = useState(safeContent);
+  const [lastSavedContent, setLastSavedContent] = useState(safeContent);
   const isInternalChangeRef = useRef(false);
   const hasUnsavedChanges = localContent !== lastSavedContent;
 
@@ -188,16 +250,16 @@ export function MDXEditorWrapper({
   useEffect(() => {
     // Only update lastSavedContent if this is an external change (not from user editing)
     if (!isInternalChangeRef.current) {
-      setLocalContent(content);
-      setLastSavedContent(content);
+      setLocalContent(safeContent);
+      setLastSavedContent(safeContent);
       // Programmatically update MDX Editor content when prop changes
       if (editorRef.current) {
-        editorRef.current.setMarkdown(content);
+        editorRef.current.setMarkdown(safeContent);
       }
     }
     // Reset the flag after processing
     isInternalChangeRef.current = false;
-  }, [content]);
+  }, [safeContent]);
 
   // Update last saved content when save is successful
   useEffect(() => {
@@ -206,12 +268,13 @@ export function MDXEditorWrapper({
     }
   }, [saved, saving, localContent]);
 
-  // Handle content change
+  // Handle content change - unescape before passing to parent
   const handleChange = useCallback((newContent: string) => {
     // Mark this as an internal change so the effect doesn't reset lastSavedContent
     isInternalChangeRef.current = true;
     setLocalContent(newContent);
-    onChange?.(newContent);
+    // Unescape before passing back so the saved content has proper angle brackets
+    onChange?.(unescapeHtmlTags(newContent));
   }, [onChange]);
 
   // Handle keyboard shortcuts
@@ -322,7 +385,7 @@ export function MDXEditorWrapper({
       <div className={`mdx-editor-wrapper view-mode ${isDarkMode ? 'dark-theme' : ''} ${className}`} style={heightStyle}>
         <MDXEditor
           ref={editorRef}
-          markdown={content}
+          markdown={safeContent}
           plugins={plugins}
           readOnly={true}
           suppressHtmlProcessing={true}
