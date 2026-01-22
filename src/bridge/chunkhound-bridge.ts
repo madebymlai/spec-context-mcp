@@ -1,26 +1,33 @@
 /**
- * ChunkHound Bridge - Spawns ChunkHound Python process and forwards MCP tool calls.
+ * ChunkHound Bridge - Connects to ChunkHound HTTP server for code search.
  *
  * Features:
- * - Auto-indexes project on startup (if not already indexed)
- * - Auto-generates .chunkhound.json config before first index
- * - Forwards `search` and `code_research` tools to ChunkHound
- * - After initial index, ChunkHound auto-syncs with file watching
+ * - Auto-starts ChunkHound HTTP server if not running
+ * - Uses deterministic port based on project path (allows multiple projects)
+ * - Multiple Claude sessions share the same server per project
+ * - Falls back to stdio mode if HTTP fails
  */
 
 import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
+import { EventSource } from 'eventsource';
 
 // ESM equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Port range for ChunkHound servers (31000-31999)
+const PORT_RANGE_START = 31000;
+const PORT_RANGE_SIZE = 1000;
+
 export interface ChunkHoundConfig {
     pythonPath: string;
     voyageaiApiKey?: string;
+    preferHttp?: boolean;  // Default true - use HTTP mode for multi-session support
 }
 
 export interface SearchArgs {
@@ -54,10 +61,184 @@ interface JsonRpcResponse {
     };
 }
 
+/**
+ * Calculate deterministic port for a project path
+ */
+function getPortForProject(projectPath: string): number {
+    const hash = crypto.createHash('md5').update(projectPath).digest('hex');
+    const hashNum = parseInt(hash.substring(0, 8), 16);
+    return PORT_RANGE_START + (hashNum % PORT_RANGE_SIZE);
+}
+
+/**
+ * Check if a server is running on the given port
+ */
+async function isServerRunning(port: number): Promise<boolean> {
+    try {
+        const response = await fetch(`http://localhost:${port}/health`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(2000),
+        });
+        return response.ok;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * SSE Client for MCP protocol
+ */
+class SseClient {
+    private port: number;
+    private sessionId: string | null = null;
+    private messageEndpoint: string | null = null;
+    private requestId = 0;
+    private pendingRequests = new Map<number, {
+        resolve: (value: unknown) => void;
+        reject: (error: Error) => void;
+    }>();
+    private eventSource: EventSource | null = null;
+    private connected = false;
+    private connectPromise: Promise<void> | null = null;
+
+    constructor(port: number) {
+        this.port = port;
+    }
+
+    async connect(): Promise<void> {
+        if (this.connected) return;
+        if (this.connectPromise) return this.connectPromise;
+
+        this.connectPromise = this._connect();
+        return this.connectPromise;
+    }
+
+    private async _connect(): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const url = `http://localhost:${this.port}/sse`;
+            console.error(`[SSE Client] Connecting to ${url}`);
+
+            // Use native EventSource
+            this.eventSource = new EventSource(url);
+
+            this.eventSource.onopen = () => {
+                console.error('[SSE Client] Connection opened');
+            };
+
+            this.eventSource.onerror = (err: Event) => {
+                console.error('[SSE Client] Connection error:', err);
+                if (!this.connected) {
+                    reject(new Error('SSE connection failed'));
+                }
+            };
+
+            // @ts-ignore - EventSource types are limited
+            this.eventSource.addEventListener('endpoint', (event: MessageEvent) => {
+                // Server sends the message endpoint
+                this.messageEndpoint = `http://localhost:${this.port}${event.data}`;
+                console.error(`[SSE Client] Message endpoint: ${this.messageEndpoint}`);
+                this.connected = true;
+                resolve();
+            });
+
+            this.eventSource.onmessage = (event: MessageEvent) => {
+                try {
+                    const message = JSON.parse(event.data) as JsonRpcResponse;
+                    if (message.id !== undefined) {
+                        const pending = this.pendingRequests.get(message.id);
+                        if (pending) {
+                            this.pendingRequests.delete(message.id);
+                            if (message.error) {
+                                pending.reject(new Error(message.error.message));
+                            } else {
+                                pending.resolve(message.result);
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.error('[SSE Client] Failed to parse message:', event.data);
+                }
+            };
+
+            // Timeout after 10 seconds
+            setTimeout(() => {
+                if (!this.connected) {
+                    this.eventSource?.close();
+                    reject(new Error('SSE connection timeout'));
+                }
+            }, 10000);
+        });
+    }
+
+    async sendRequest(method: string, params?: unknown, timeoutMs = 120000): Promise<unknown> {
+        if (!this.connected || !this.messageEndpoint) {
+            await this.connect();
+        }
+
+        const id = ++this.requestId;
+        const request: JsonRpcRequest = {
+            jsonrpc: '2.0',
+            id,
+            method,
+            params,
+        };
+
+        return new Promise((resolve, reject) => {
+            this.pendingRequests.set(id, { resolve, reject });
+
+            fetch(this.messageEndpoint!, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request),
+            }).catch(err => {
+                this.pendingRequests.delete(id);
+                reject(err);
+            });
+
+            setTimeout(() => {
+                if (this.pendingRequests.has(id)) {
+                    this.pendingRequests.delete(id);
+                    reject(new Error(`Request ${method} timed out`));
+                }
+            }, timeoutMs);
+        });
+    }
+
+    close(): void {
+        this.eventSource?.close();
+        this.eventSource = null;
+        this.connected = false;
+        this.connectPromise = null;
+        this.messageEndpoint = null;
+
+        for (const [id, { reject }] of this.pendingRequests) {
+            reject(new Error('Connection closed'));
+        }
+        this.pendingRequests.clear();
+    }
+
+    isConnected(): boolean {
+        return this.connected;
+    }
+}
+
+// Cache of SSE clients per port
+const sseClients = new Map<number, SseClient>();
+
+function getSseClient(port: number): SseClient {
+    let client = sseClients.get(port);
+    if (!client) {
+        client = new SseClient(port);
+        sseClients.set(port, client);
+    }
+    return client;
+}
+
 export class ChunkHoundBridge extends EventEmitter {
     private process: ChildProcess | null = null;
     private config: ChunkHoundConfig;
     private projectPath: string;
+    private port: number;
     private requestId = 0;
     private pendingRequests = new Map<number, {
         resolve: (value: unknown) => void;
@@ -67,15 +248,18 @@ export class ChunkHoundBridge extends EventEmitter {
     private initialized = false;
     private initPromise: Promise<void> | null = null;
     private scanComplete = false;
+    private useHttpMode = false;
 
     constructor(config: ChunkHoundConfig, projectPath: string) {
         super();
         this.config = config;
         this.projectPath = projectPath;
+        this.port = getPortForProject(projectPath);
+        console.error(`[ChunkHound Bridge] Project: ${projectPath} → Port: ${this.port}`);
     }
 
     /**
-     * Start the ChunkHound subprocess and initialize
+     * Start the ChunkHound connection
      */
     async start(): Promise<void> {
         if (this.initPromise) {
@@ -90,11 +274,120 @@ export class ChunkHoundBridge extends EventEmitter {
         // Ensure .chunkhound.json exists
         await this.ensureConfig();
 
-        // Start the MCP server subprocess
-        // ChunkHound auto-indexes during server initialization
-        await this.startMcpServer();
+        // Try HTTP mode first (preferred for multi-session)
+        if (this.config.preferHttp !== false) {
+            const httpSuccess = await this.tryHttpMode();
+            if (httpSuccess) {
+                this.useHttpMode = true;
+                this.initialized = true;
+                console.error('[ChunkHound Bridge] Connected via HTTP');
+                return;
+            }
+        }
 
+        // Fall back to stdio mode
+        console.error('[ChunkHound Bridge] Falling back to stdio mode');
+        await this.startStdioServer();
         this.initialized = true;
+    }
+
+    /**
+     * Try to connect via HTTP, starting server if needed
+     */
+    private async tryHttpMode(): Promise<boolean> {
+        // Check if server is already running
+        if (await isServerRunning(this.port)) {
+            console.error(`[ChunkHound Bridge] Server already running on port ${this.port}`);
+            await this.initializeHttp();
+            return true;
+        }
+
+        // Try to start the HTTP server
+        console.error(`[ChunkHound Bridge] Starting HTTP server on port ${this.port}...`);
+
+        try {
+            await this.startHttpServer();
+
+            // Wait for server to be ready (up to 30 seconds)
+            for (let i = 0; i < 60; i++) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+                if (await isServerRunning(this.port)) {
+                    await this.initializeHttp();
+                    return true;
+                }
+            }
+
+            console.error('[ChunkHound Bridge] HTTP server failed to start in time');
+            return false;
+        } catch (err) {
+            console.error('[ChunkHound Bridge] Failed to start HTTP server:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Start ChunkHound as SSE server (detached, survives session end)
+     */
+    private async startHttpServer(): Promise<void> {
+        const pythonPath = this.config.pythonPath;
+        const specContextRoot = path.resolve(__dirname, '..', '..');
+
+        // Start detached so it survives session end
+        // Note: path is positional, not --path
+        const serverProcess = spawn(pythonPath, [
+            '-m', 'chunkhound.mcp_server.sse',
+            this.projectPath,
+            '--port', String(this.port),
+            '--host', 'localhost',
+        ], {
+            cwd: this.projectPath,
+            env: {
+                ...process.env,
+                PYTHONPATH: specContextRoot,
+            },
+            detached: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        // Log output but don't wait for it
+        serverProcess.stdout?.on('data', (data) => {
+            console.error('[ChunkHound SSE]', data.toString().trim());
+        });
+        serverProcess.stderr?.on('data', (data) => {
+            const msg = data.toString().trim();
+            console.error('[ChunkHound SSE]', msg);
+            if (msg.includes('Background scan completed') || msg.includes('scan_completed_at')) {
+                this.scanComplete = true;
+            }
+        });
+
+        // Unref so Node can exit even if server is running
+        serverProcess.unref();
+
+        // Store reference for cleanup if needed
+        this.process = serverProcess;
+    }
+
+    /**
+     * Initialize SSE connection (send MCP initialize)
+     */
+    private async initializeHttp(): Promise<void> {
+        const client = getSseClient(this.port);
+        await client.connect();
+
+        const response = await client.sendRequest('initialize', {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: {
+                name: 'spec-context-mcp',
+                version: '1.0.0',
+            },
+        });
+
+        console.error('[ChunkHound Bridge] SSE initialized:', JSON.stringify(response));
+
+        // Note: notifications/initialized doesn't need a response, skip it for SSE
+        // The server is already initialized at this point
     }
 
     /**
@@ -150,12 +443,10 @@ export class ChunkHoundBridge extends EventEmitter {
     }
 
     /**
-     * Start the MCP server subprocess
+     * Start the MCP server subprocess (stdio mode fallback)
      */
-    private async startMcpServer(): Promise<void> {
+    private async startStdioServer(): Promise<void> {
         const pythonPath = this.config.pythonPath;
-
-        // Get the spec-context-mcp root (parent of src/bridge)
         const specContextRoot = path.resolve(__dirname, '..', '..');
 
         this.process = spawn(pythonPath, ['-m', 'chunkhound.mcp_server.stdio'], {
@@ -173,9 +464,7 @@ export class ChunkHoundBridge extends EventEmitter {
 
         this.process.stderr?.on('data', (data) => {
             const msg = data.toString().trim();
-            // ChunkHound logs to stderr (MCP requirement)
             console.error('[ChunkHound]', msg);
-            // Detect scan completion from log messages
             if (msg.includes('Background scan completed') || msg.includes('scan_completed_at')) {
                 this.scanComplete = true;
             }
@@ -185,8 +474,8 @@ export class ChunkHoundBridge extends EventEmitter {
             console.error('[ChunkHound Bridge] Process exited with code', code);
             this.process = null;
             this.initialized = false;
+            this.initPromise = null;
 
-            // Reject all pending requests
             for (const [id, { reject }] of this.pendingRequests) {
                 reject(new Error('ChunkHound process exited'));
             }
@@ -197,15 +486,14 @@ export class ChunkHoundBridge extends EventEmitter {
             console.error('[ChunkHound Bridge] Process error:', err);
         });
 
-        // Wait for initialize response
-        await this.initialize();
+        await this.initializeStdio();
     }
 
     /**
-     * Send MCP initialize request
+     * Send MCP initialize request (stdio mode)
      */
-    private async initialize(): Promise<void> {
-        const response = await this.sendRequest('initialize', {
+    private async initializeStdio(): Promise<void> {
+        const response = await this.sendStdioRequest('initialize', {
             protocolVersion: '2024-11-05',
             capabilities: {},
             clientInfo: {
@@ -214,19 +502,16 @@ export class ChunkHoundBridge extends EventEmitter {
             },
         });
 
-        console.error('[ChunkHound Bridge] Initialized:', JSON.stringify(response));
-
-        // Send initialized notification
-        this.sendNotification('notifications/initialized', {});
+        console.error('[ChunkHound Bridge] Stdio initialized:', JSON.stringify(response));
+        this.sendStdioNotification('notifications/initialized', {});
     }
 
     /**
-     * Handle stdout data from subprocess
+     * Handle stdout data from subprocess (stdio mode)
      */
     private handleStdout(data: string): void {
         this.buffer += data;
 
-        // Process complete JSON-RPC messages (newline-delimited)
         const lines = this.buffer.split('\n');
         this.buffer = lines.pop() || '';
 
@@ -254,9 +539,9 @@ export class ChunkHoundBridge extends EventEmitter {
     }
 
     /**
-     * Send a JSON-RPC request and wait for response
+     * Send a JSON-RPC request (stdio mode)
      */
-    private async sendRequest(method: string, params?: unknown): Promise<unknown> {
+    private async sendStdioRequest(method: string, params?: unknown): Promise<unknown> {
         if (!this.process?.stdin) {
             throw new Error('ChunkHound process not running');
         }
@@ -275,7 +560,6 @@ export class ChunkHoundBridge extends EventEmitter {
             const message = JSON.stringify(request) + '\n';
             this.process!.stdin!.write(message);
 
-            // Timeout after 120 seconds (code_research needs more time)
             setTimeout(() => {
                 if (this.pendingRequests.has(id)) {
                     this.pendingRequests.delete(id);
@@ -286,9 +570,9 @@ export class ChunkHoundBridge extends EventEmitter {
     }
 
     /**
-     * Send a JSON-RPC notification (no response expected)
+     * Send a JSON-RPC notification (stdio mode)
      */
-    private sendNotification(method: string, params?: unknown): void {
+    private sendStdioNotification(method: string, params?: unknown): void {
         if (!this.process?.stdin) {
             return;
         }
@@ -301,6 +585,18 @@ export class ChunkHoundBridge extends EventEmitter {
 
         const message = JSON.stringify(notification) + '\n';
         this.process.stdin.write(message);
+    }
+
+    /**
+     * Send request using appropriate transport
+     */
+    private async sendRequest(method: string, params?: unknown): Promise<unknown> {
+        if (this.useHttpMode) {
+            const client = getSseClient(this.port);
+            return client.sendRequest(method, params);
+        } else {
+            return this.sendStdioRequest(method, params);
+        }
     }
 
     /**
@@ -321,7 +617,6 @@ export class ChunkHoundBridge extends EventEmitter {
 
         console.error(`[ChunkHound Bridge] Tool ${name} completed in ${Date.now() - startTime}ms`);
 
-        // Extract text content from MCP response
         if (response?.content && Array.isArray(response.content)) {
             const textContent = response.content.find(c => c.type === 'text');
             if (textContent?.text) {
@@ -342,7 +637,6 @@ export class ChunkHoundBridge extends EventEmitter {
     async search(args: SearchArgs): Promise<unknown> {
         const result = await this.callTool('search', args as unknown as Record<string, unknown>);
 
-        // Show warning while indexing is in progress
         if (!this.scanComplete) {
             const warning = '⚠ INDEXING IN PROGRESS: ChunkHound is indexing files in the background. ' +
                 'Results may be incomplete until indexing finishes.';
@@ -364,10 +658,11 @@ export class ChunkHoundBridge extends EventEmitter {
     }
 
     /**
-     * Stop the ChunkHound subprocess
+     * Stop the ChunkHound subprocess (only affects stdio mode)
+     * HTTP servers are left running for other sessions
      */
     stop(): void {
-        if (this.process) {
+        if (this.process && !this.useHttpMode) {
             this.process.kill();
             this.process = null;
         }
@@ -379,30 +674,77 @@ export class ChunkHoundBridge extends EventEmitter {
      * Check if bridge is healthy
      */
     isHealthy(): boolean {
+        if (this.useHttpMode) {
+            // For HTTP mode, we're healthy if initialized
+            // The server runs independently
+            return this.initialized;
+        }
         return this.process !== null && this.initialized;
+    }
+
+    /**
+     * Get the port being used
+     */
+    getPort(): number {
+        return this.port;
     }
 }
 
-// Singleton instance
-let bridgeInstance: ChunkHoundBridge | null = null;
+// Singleton instances per project
+const bridgeInstances = new Map<string, ChunkHoundBridge>();
 
 /**
- * Get or create the ChunkHound bridge singleton
+ * Reset the singleton for a project
+ */
+export function resetChunkHoundBridge(projectPath?: string): void {
+    if (projectPath) {
+        const bridge = bridgeInstances.get(projectPath);
+        if (bridge) {
+            bridge.stop();
+            bridgeInstances.delete(projectPath);
+        }
+    } else {
+        // Reset all
+        for (const [path, bridge] of bridgeInstances) {
+            bridge.stop();
+            bridgeInstances.delete(path);
+        }
+    }
+}
+
+/**
+ * Get or create the ChunkHound bridge for a project.
+ * Each project gets its own bridge instance and port.
  */
 export function getChunkHoundBridge(projectPath?: string): ChunkHoundBridge {
-    if (!bridgeInstance) {
-        // Default to spec-context-mcp's venv Python which has all dependencies
-        const specContextRoot = path.resolve(__dirname, '..', '..');
-        const venvPython = path.join(specContextRoot, '.venv', 'bin', 'python');
-        const defaultPython = fs.existsSync(venvPython) ? venvPython : 'python3';
+    const resolvedPath = projectPath || process.cwd();
 
-        const config: ChunkHoundConfig = {
-            pythonPath: process.env.CHUNKHOUND_PYTHON || defaultPython,
-            voyageaiApiKey: process.env.VOYAGEAI_API_KEY,
-        };
-        bridgeInstance = new ChunkHoundBridge(config, projectPath || process.cwd());
+    // Check if existing bridge is healthy
+    const existing = bridgeInstances.get(resolvedPath);
+    if (existing) {
+        if (existing.isHealthy()) {
+            return existing;
+        }
+        console.error('[ChunkHound Bridge] Existing bridge unhealthy, resetting...');
+        existing.stop();
+        bridgeInstances.delete(resolvedPath);
     }
-    return bridgeInstance;
+
+    // Create new bridge
+    const specContextRoot = path.resolve(__dirname, '..', '..');
+    const venvPython = path.join(specContextRoot, '.venv', 'bin', 'python');
+    const defaultPython = fs.existsSync(venvPython) ? venvPython : 'python3';
+
+    const config: ChunkHoundConfig = {
+        pythonPath: process.env.CHUNKHOUND_PYTHON || defaultPython,
+        voyageaiApiKey: process.env.VOYAGEAI_API_KEY,
+        preferHttp: true,  // Default to HTTP mode for multi-session support
+    };
+
+    const bridge = new ChunkHoundBridge(config, resolvedPath);
+    bridgeInstances.set(resolvedPath, bridge);
+
+    return bridge;
 }
 
 /**
@@ -415,7 +757,6 @@ export async function initChunkHoundBridge(projectPath?: string): Promise<ChunkH
         console.error('[ChunkHound Bridge] Started successfully');
     } catch (err) {
         console.error('[ChunkHound Bridge] Failed to start:', err);
-        // Don't throw - workflow tools should still work
     }
     return bridge;
 }

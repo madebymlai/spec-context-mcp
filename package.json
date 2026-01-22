@@ -54,6 +54,7 @@
     "clsx": "^2.1.1",
     "diff": "^8.0.3",
     "dotenv": "^16.0.0",
+    "eventsource": "^4.1.0",
     "fastify": "^4.28.1",
     "glob": "^11.0.0",
     "highlight.js": "^11.9.0",
@@ -77,6 +78,7 @@
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.16",
     "@types/diff": "^7.0.2",
+    "@types/eventsource": "^1.1.15",
     "@types/node": "^20.0.0",
     "@types/node-cron": "^3.0.11",
     "@types/react": "^18.3.5",
