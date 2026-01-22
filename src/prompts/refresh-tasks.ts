@@ -197,8 +197,10 @@ For major architecture changes, create tasks that support progressive migration:
 This ensures the application remains functional throughout the transition.
 
 ## Implementation Steps
-1. Check if codebase is indexed with \`get_indexing_status\`, run \`index_codebase\` if needed
-2. Use the \`search_code\` tool to verify completed tasks still match the actual code
+1. Use the \`search\` tool to verify completed tasks still match the actual code
+   - search type="semantic" query="..." for conceptual searches
+   - search type="regex" query="..." for exact patterns
+   - The codebase auto-indexes on first search and auto-syncs with file watching
 3. Read requirements.md and design.md carefully - these define what should exist
 4. Read current tasks.md and identify completed, in-progress, and pending tasks
 5. Perform Pass 1: Validate existing tasks against current spec

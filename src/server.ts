@@ -8,46 +8,18 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import type { SpecContextConfig } from './config.js';
-import { Context } from './core/context.js';
-import { QdrantVectorDB } from './core/vectordb/index.js';
-import { OpenRouterEmbedding } from './core/embedding/index.js';
-import { LangChainCodeSplitter } from './core/splitter/index.js';
 import { getTools, handleToolCall } from './tools/index.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
-import { SnapshotManager, SyncManager } from './managers/index.js';
+import { initChunkHoundBridge } from './bridge/chunkhound-bridge.js';
 
 const LOCAL_DASHBOARD_URL = 'http://127.0.0.1:3000';
 
 export class SpecContextServer {
     private server: Server;
-    private context: Context;
     private config: SpecContextConfig;
-    private snapshotManager: SnapshotManager;
-    private syncManager: SyncManager;
 
     constructor(config: SpecContextConfig) {
         this.config = config;
-
-        // Initialize components
-        const vectorDb = new QdrantVectorDB({
-            url: config.qdrantUrl,
-            apiKey: config.qdrantApiKey,
-        });
-
-        const embedding = new OpenRouterEmbedding({
-            apiKey: config.openrouterApiKey,
-            model: config.embeddingModel,
-            dimension: config.embeddingDimension,
-        });
-
-        const splitter = new LangChainCodeSplitter();
-
-        this.context = new Context(vectorDb, embedding, splitter);
-
-        // Initialize managers
-        this.snapshotManager = new SnapshotManager();
-        this.snapshotManager.loadSnapshot();
-        this.syncManager = new SyncManager(this.context, this.snapshotManager);
 
         // Initialize MCP server
         this.server = new Server(
@@ -79,8 +51,7 @@ export class SpecContextServer {
             try {
                 const result = await handleToolCall(
                     name,
-                    args as Record<string, unknown>,
-                    this.context
+                    args as Record<string, unknown>
                 );
 
                 return {
@@ -125,14 +96,17 @@ export class SpecContextServer {
 
     async run(): Promise<void> {
         console.error(`[${this.config.name}] Starting MCP server...`);
-        console.error(`[${this.config.name}] Embedding: ${this.config.embeddingModel} (${this.config.embeddingDimension}d)`);
-        console.error(`[${this.config.name}] Qdrant: ${this.config.qdrantUrl}`);
+
+        // Initialize ChunkHound bridge (auto-indexes if needed)
+        try {
+            await initChunkHoundBridge(process.cwd());
+        } catch (err) {
+            console.error(`[${this.config.name}] ChunkHound initialization failed:`, err);
+            console.error(`[${this.config.name}] Workflow tools will still work, but search/research will be unavailable`);
+        }
 
         // Register with local dashboard
         await this.registerWithDashboard();
-
-        // Start background sync (every 5 minutes)
-        this.syncManager.startBackgroundSync();
 
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
@@ -156,13 +130,5 @@ export class SpecContextServer {
         } catch {
             // Dashboard not running - that's fine
         }
-    }
-
-    getSnapshotManager(): SnapshotManager {
-        return this.snapshotManager;
-    }
-
-    getSyncManager(): SyncManager {
-        return this.syncManager;
     }
 }

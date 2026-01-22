@@ -1,17 +1,5 @@
-import type { Context } from '../core/context.js';
 import type { ToolContext as WorkflowToolContext } from '../workflow-types.js';
-import {
-    indexCodebase,
-    indexCodebaseSchema,
-    searchCode,
-    searchCodeSchema,
-    clearIndex,
-    clearIndexSchema,
-    getIndexingStatus,
-    getIndexingStatusSchema,
-    syncIndex,
-    syncIndexSchema,
-} from './context/index.js';
+import { getChunkHoundBridge, SearchArgs, CodeResearchArgs } from '../bridge/chunkhound-bridge.js';
 
 // Workflow tools
 import {
@@ -49,14 +37,95 @@ export interface Tool {
     };
 }
 
+// ChunkHound tool schemas
+const searchTool: Tool = {
+    name: 'search',
+    description: `Search code by exact pattern (regex) or meaning (semantic).
+
+TYPE SELECTION:
+- regex: Exact pattern matching. Use for function names, variable names,
+  import statements, or known string patterns.
+  Example queries: "def authenticate", "import.*pandas", "TODO:.*fix"
+
+- semantic: Meaning-based search. Use when describing functionality
+  conceptually or unsure of exact keywords.
+  Example queries: "authentication logic", "error handling for database"
+
+WHEN TO USE: Quick lookup, finding references, exploring unfamiliar code.
+DO NOT USE: Multi-file architecture questions (use code_research instead).
+
+OUTPUT: {results: [{file_path, content, start_line, end_line}], pagination}
+COST: Fast, cheap - use liberally.`,
+    inputSchema: {
+        type: 'object',
+        properties: {
+            type: {
+                type: 'string',
+                enum: ['semantic', 'regex'],
+                description: '"semantic" for meaning-based, "regex" for exact pattern',
+            },
+            query: {
+                type: 'string',
+                description: 'Search query (natural language for semantic, regex pattern for regex)',
+            },
+            path: {
+                type: 'string',
+                description: 'Optional path to limit search scope (e.g., "src/auth/")',
+            },
+            page_size: {
+                type: 'number',
+                description: 'Number of results per page (1-100)',
+                default: 10,
+            },
+            offset: {
+                type: 'number',
+                description: 'Starting offset for pagination',
+                default: 0,
+            },
+        },
+        required: ['type', 'query'],
+    },
+};
+
+const codeResearchTool: Tool = {
+    name: 'code_research',
+    description: `Deep analysis for architecture and cross-file code.
+
+USE FOR:
+- Understanding how systems/features are implemented across files
+- Discovering component relationships and dependencies
+- Getting architectural explanations with code citations
+
+DO NOT USE:
+- Looking for specific code locations (use search instead)
+- Simple pattern matching (use search with type="regex")
+- You already know where the code is (read files directly)
+
+OUTPUT: Comprehensive markdown with architecture overview, key locations, relationships.
+COST: Expensive (LLM synthesis). 10-60s latency. One call often replaces 5-10 searches.
+
+ERROR RECOVERY: If incomplete, try narrower query or use path parameter to scope.`,
+    inputSchema: {
+        type: 'object',
+        properties: {
+            query: {
+                type: 'string',
+                description: 'Research query',
+            },
+            path: {
+                type: 'string',
+                description: 'Optional relative path to limit research scope (e.g., "src/")',
+            },
+        },
+        required: ['query'],
+    },
+};
+
 export function getTools(): Tool[] {
     return [
-        // Context tools (vector search)
-        indexCodebaseSchema,
-        searchCodeSchema,
-        clearIndexSchema,
-        getIndexingStatusSchema,
-        syncIndexSchema,
+        // ChunkHound context tools
+        searchTool,
+        codeResearchTool,
         // Workflow tools
         specWorkflowGuideTool as Tool,
         steeringGuideTool as Tool,
@@ -70,7 +139,6 @@ export function getTools(): Tool[] {
 export async function handleToolCall(
     name: string,
     args: Record<string, unknown>,
-    context: Context,
     workflowContext?: WorkflowToolContext
 ): Promise<unknown> {
     // Create workflow context if not provided
@@ -80,37 +148,16 @@ export async function handleToolCall(
     };
 
     switch (name) {
-        // Context tools (vector search)
-        case 'index_codebase':
-            return indexCodebase(context, {
-                path: args.path as string,
-                force: args.force as boolean | undefined,
-                customExtensions: args.customExtensions as string[] | undefined,
-                ignorePatterns: args.ignorePatterns as string[] | undefined,
-            });
+        // ChunkHound context tools
+        case 'search': {
+            const bridge = getChunkHoundBridge(wfCtx.projectPath);
+            return bridge.search(args as unknown as SearchArgs);
+        }
 
-        case 'search_code':
-            return searchCode(context, {
-                path: args.path as string,
-                query: args.query as string,
-                limit: args.limit as number | undefined,
-                extensionFilter: args.extensionFilter as string[] | undefined,
-            });
-
-        case 'clear_index':
-            return clearIndex(context, {
-                path: args.path as string,
-            });
-
-        case 'get_indexing_status':
-            return getIndexingStatus(context, {
-                path: args.path as string,
-            });
-
-        case 'sync_index':
-            return syncIndex(context, {
-                path: args.path as string,
-            });
+        case 'code_research': {
+            const bridge = getChunkHoundBridge(wfCtx.projectPath);
+            return bridge.codeResearch(args as unknown as CodeResearchArgs);
+        }
 
         // Workflow tools
         case 'spec-workflow-guide':
