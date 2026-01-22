@@ -215,6 +215,41 @@ async function handleRequestApproval(
     const approvalStorage = new ApprovalStorage(translatedPath, validatedProjectPath);
     await approvalStorage.start();
 
+    // Check for existing pending approval for the same file/category
+    const existingApprovals = await approvalStorage.getAllPendingApprovals();
+    const existingApproval = existingApprovals.find(
+      a => a.filePath === args.filePath && a.categoryName === args.categoryName
+    );
+
+    if (existingApproval) {
+      await approvalStorage.stop();
+      return {
+        success: true,
+        message: `Found existing pending approval. Use wait-for-approval to block until user responds.`,
+        data: {
+          approvalId: existingApproval.id,
+          title: existingApproval.title,
+          filePath: existingApproval.filePath,
+          type: existingApproval.type,
+          status: existingApproval.status,
+          createdAt: existingApproval.createdAt,
+          dashboardUrl: context.dashboardUrl,
+          reusedExisting: true
+        },
+        nextSteps: [
+          `NEXT: Call wait-for-approval approvalId:"${existingApproval.id}"`,
+          'This will block until user approves/rejects/requests-revision',
+          'Auto-cleanup happens on resolution',
+          context.dashboardUrl ? `Dashboard: ${context.dashboardUrl}` : 'Start dashboard: spec-workflow-mcp --dashboard'
+        ],
+        projectContext: {
+          projectPath: validatedProjectPath,
+          workflowRoot: join(validatedProjectPath, '.spec-context'),
+          dashboardUrl: context.dashboardUrl
+        }
+      };
+    }
+
     // Validate tasks.md format before allowing approval request
     if (args.filePath.endsWith('tasks.md')) {
       try {
