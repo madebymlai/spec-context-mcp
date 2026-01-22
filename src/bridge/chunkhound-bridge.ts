@@ -275,13 +275,13 @@ export class ChunkHoundBridge extends EventEmitter {
             const message = JSON.stringify(request) + '\n';
             this.process!.stdin!.write(message);
 
-            // Timeout after 60 seconds
+            // Timeout after 120 seconds (code_research needs more time)
             setTimeout(() => {
                 if (this.pendingRequests.has(id)) {
                     this.pendingRequests.delete(id);
                     reject(new Error(`Request ${method} timed out`));
                 }
-            }, 60000);
+            }, 120000);
         });
     }
 
@@ -311,10 +311,15 @@ export class ChunkHoundBridge extends EventEmitter {
             await this.start();
         }
 
+        console.error(`[ChunkHound Bridge] Calling tool: ${name}`);
+        const startTime = Date.now();
+
         const response = await this.sendRequest('tools/call', {
             name,
             arguments: args,
         }) as { content?: Array<{ type: string; text: string }> };
+
+        console.error(`[ChunkHound Bridge] Tool ${name} completed in ${Date.now() - startTime}ms`);
 
         // Extract text content from MCP response
         if (response?.content && Array.isArray(response.content)) {
