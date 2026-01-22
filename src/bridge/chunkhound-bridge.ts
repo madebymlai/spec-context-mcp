@@ -298,6 +298,8 @@ export class ChunkHoundBridge extends EventEmitter {
         // Check if server is already running
         if (await isServerRunning(this.port)) {
             console.error(`[ChunkHound Bridge] Server already running on port ${this.port}`);
+            // Check if scan is complete via health endpoint
+            await this.checkScanStatus();
             await this.initializeHttp();
             return true;
         }
@@ -388,6 +390,26 @@ export class ChunkHoundBridge extends EventEmitter {
 
         // Note: notifications/initialized doesn't need a response, skip it for SSE
         // The server is already initialized at this point
+    }
+
+    /**
+     * Check scan status via health endpoint
+     */
+    private async checkScanStatus(): Promise<void> {
+        try {
+            const response = await fetch(`http://localhost:${this.port}/health`, {
+                signal: AbortSignal.timeout(2000),
+            });
+            if (response.ok) {
+                const health = await response.json() as { scan_progress?: { scan_completed_at?: string } };
+                if (health.scan_progress?.scan_completed_at) {
+                    this.scanComplete = true;
+                    console.error('[ChunkHound Bridge] Scan already complete');
+                }
+            }
+        } catch {
+            // Ignore errors, assume not complete
+        }
     }
 
     /**
