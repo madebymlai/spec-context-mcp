@@ -13,7 +13,7 @@ const prompt: Prompt = {
       required: true
     },
     {
-      name: 'documentType', 
+      name: 'documentType',
       description: 'Type of document to create: requirements, design, or tasks',
       required: true
     },
@@ -27,7 +27,7 @@ const prompt: Prompt = {
 
 async function handler(args: Record<string, any>, context: ToolContext): Promise<PromptMessage[]> {
   const { specName, documentType, description } = args;
-  
+
   if (!specName || !documentType) {
     throw new Error('specName and documentType are required arguments');
   }
@@ -53,15 +53,17 @@ ${description ? `- Description: ${description}` : ''}
 ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 
 **Instructions:**
-1. First, check if codebase is indexed with \`get_indexing_status\`, run \`index_codebase\` if needed
-2. Use the \`search_code\` tool to discover existing code patterns to leverage
-3. Read the template at: .spec-context/templates/${documentType}-template.md
-4. Follow the template structure exactly - this ensures consistency across the project
-5. Create comprehensive content that follows spec-driven development best practices
-6. Include all required sections from the template
-7. Use clear, actionable language
-8. Create the document at: .spec-context/specs/${specName}/${documentType}.md
-9. After creating, use approvals tool with action:'request' to get user approval
+1. Use the \`search\` tool to discover existing code patterns to leverage
+   - search type="semantic" query="..." for conceptual searches
+   - search type="regex" query="..." for exact patterns
+   - The codebase auto-indexes on first search and auto-syncs with file watching
+2. Read the template at: .spec-context/templates/${documentType}-template.md
+3. Follow the template structure exactly - this ensures consistency across the project
+4. Create comprehensive content that follows spec-driven development best practices
+5. Include all required sections from the template
+6. Use clear, actionable language
+7. Create the document at: .spec-context/specs/${specName}/${documentType}.md
+8. After creating, use approvals tool with action:'request' to get user approval
 
 **File Paths:**
 - Template location: .spec-context/templates/${documentType}-template.md
@@ -69,7 +71,7 @@ ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 
 **Workflow Guidelines:**
 - Requirements documents define WHAT needs to be built
-- Design documents define HOW it will be built  
+- Design documents define HOW it will be built
 - Tasks documents break down implementation into actionable steps
 - Each document builds upon the previous one in sequence
 - Templates are automatically updated on server start
@@ -79,7 +81,7 @@ ${documentType === 'tasks' ? `
 - For each task, generate a _Prompt field with structured AI guidance
 - Format: _Prompt: Role: [role] | Task: [description] | Restrictions: [constraints] | Success: [criteria]
 - Make prompts specific to the project context and requirements
-- Use the \`search_code\` tool to populate _Leverage fields with actual file paths
+- Use the \`search\` tool to populate _Leverage fields with actual file paths
 - Include _Requirements fields showing which requirements each task implements
 - Tasks should be atomic (1-3 files each) and in logical order
 

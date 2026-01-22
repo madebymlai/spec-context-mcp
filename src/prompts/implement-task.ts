@@ -22,7 +22,7 @@ const prompt: Prompt = {
 
 async function handler(args: Record<string, any>, context: ToolContext): Promise<PromptMessage[]> {
   const { specName, taskId } = args;
-  
+
   if (!specName) {
     throw new Error('specName is a required argument');
   }
@@ -62,25 +62,25 @@ ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
    - Check _Requirements fields for which requirements this implements
 
 4. **Discover Existing Implementations (CRITICAL):**
-   - BEFORE writing any code, use the \`search_code\` tool to find existing implementations
-   - First check if codebase is indexed with \`get_indexing_status\`, run \`index_codebase\` if needed
+   - BEFORE writing any code, use the \`search\` tool to find existing implementations
+   - The codebase auto-indexes on first search and auto-syncs with file watching
 
-   **Use the search_code tool (PRIMARY METHOD):**
+   **Use the search tool (PRIMARY METHOD):**
    \`\`\`
-   search_code: "authentication middleware"
-   search_code: "API endpoint handler"
-   search_code: "user validation function"
+   search type="semantic" query="authentication middleware"
+   search type="semantic" query="API endpoint handler"
+   search type="regex" query="def authenticate"
    \`\`\`
 
-   **Fallback: grep/ripgrep (only if search_code doesn't find results)**
-   \`\`\`bash
-   grep -r "pattern" ".spec-context/specs/${specName}/Implementation Logs/"
+   **For complex architecture questions, use code_research:**
+   \`\`\`
+   code_research query="How does the authentication flow work?"
    \`\`\`
 
    **Discovery best practices:**
-   - First: Use \`search_code\` to find existing API patterns and similar implementations
-   - Second: Search for component names or function signatures you need
-   - Third: Search for integration patterns and data flow
+   - First: Use \`search\` type="semantic" to find existing API patterns and similar implementations
+   - Second: Use \`search\` type="regex" for exact function names or patterns
+   - Third: Use \`code_research\` for understanding cross-file architecture
    - Why this matters:
      - ❌ Don't create duplicate API endpoints - check for similar paths
      - ❌ Don't reimplement components/functions - verify utilities already don't exist
@@ -143,20 +143,17 @@ ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 - If a task has subtasks (e.g., 4.1, 4.2), complete them in order
 - If you encounter blockers, document them and move to another task
 
-8. **Update Search Index:**
-   - After completing the task, run \`sync_index\` to update the codebase index with your changes
-   - This ensures future searches can find the code you just wrote
-
 **Tools to Use:**
-- get_indexing_status: Check if codebase is indexed before searching
-- index_codebase: Index the codebase if not already indexed
-- search_code: PRIMARY - Search existing implementations before coding (step 4)
-- sync_index: Update index after completing task (step 8)
+- search: Search existing implementations before coding (type="semantic" or type="regex")
+- code_research: Deep analysis for architecture questions (step 4)
 - spec-status: Check overall progress
 - log-implementation: Record implementation details with artifacts after task completion (step 7)
 - Edit: Directly update task markers in tasks.md file
 - Read/Write/Edit: Implement the actual code changes
-- Bash: Run tests and verify implementation (fallback grep if search_code doesn't find results)
+- Bash: Run tests and verify implementation
+
+**Note:** The codebase auto-indexes on first search and auto-syncs with file watching.
+No manual indexing or sync needed.
 
 **View Implementation Logs:**
 - All logged implementations appear in the "Logs" tab of the dashboard

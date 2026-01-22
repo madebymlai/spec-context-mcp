@@ -1,6 +1,6 @@
 {
   "name": "spec-context-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Unified MCP server for semantic code search and spec-driven development",
   "type": "module",
   "main": "./dist/index.js",
@@ -10,7 +10,8 @@
   },
   "files": [
     "dist",
-    "templates"
+    "templates",
+    "chunkhound"
   ],
   "scripts": {
     "build": "tsc && npm run build:dashboard && npm run copy-static",
@@ -29,7 +30,7 @@
     "claude",
     "code-search",
     "embeddings",
-    "qdrant"
+    "chunkhound"
   ],
   "author": "madebymlai",
   "license": "MIT",
@@ -44,11 +45,8 @@
     "@fastify/static": "^7.0.4",
     "@fastify/websocket": "^10.0.1",
     "@heroicons/react": "^2.2.0",
-    "@langchain/core": "^1.1.15",
-    "@langchain/textsplitters": "^1.0.1",
     "@mdxeditor/editor": "^3.50.0",
     "@modelcontextprotocol/sdk": "^0.6.0",
-    "@qdrant/js-client-rest": "^1.12.0",
     "@tailwindcss/vite": "^4.1.13",
     "@toon-format/toon": "^2.1.0",
     "chokidar": "^5.0.0",
@@ -63,12 +61,11 @@
     "i18next": "^25.5.2",
     "i18next-browser-languagedetector": "^8.2.0",
     "ignore": "^6.0.0",
-    "langchain": "^1.2.10",
     "markdown-it": "^14.1.0",
     "mermaid": "^10.9.1",
     "node-cron": "^3.0.3",
     "open": "^10.1.0",
-    "openai": "^4.0.0",
+    "openai": "^6.16.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-i18next": "^15.7.3",
