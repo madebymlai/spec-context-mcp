@@ -105,36 +105,6 @@ ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
    - Change the task marker from [-] to [x] for the completed task
    - Only mark complete when fully implemented and tested
 
-7. **Log Implementation (CRITICAL - ARTIFACTS REQUIRED):**
-   - After completing a task, use the log-implementation tool to record comprehensive implementation details
-   - This creates a searchable knowledge base for future AI agents to discover and reuse existing code
-   - You MUST include artifacts (required field) to enable other agents to find your work:
-     - **apiEndpoints**: List all API endpoints created/modified with method, path, purpose, request/response formats, and location
-     - **components**: List all UI components created with name, type, purpose, props, and location
-     - **functions**: List all utility functions with signature and location
-     - **classes**: List all classes with methods and location
-     - **integrations**: Document how frontend connects to backend with data flow description
-   - Call log-implementation with:
-     - specName: "${specName}"
-     - taskId: ${taskId ? `"${taskId}"` : 'the task ID you just completed'}
-     - summary: Clear description of what was implemented (1-2 sentences)
-     - filesModified: List of files you edited
-     - filesCreated: List of files you created
-     - statistics: {linesAdded: number, linesRemoved: number}
-     - artifacts: {apiEndpoints: [...], components: [...], functions: [...], classes: [...], integrations: [...]}
-   - Example artifacts for an API endpoint:
-     \`\`\`json
-     "apiEndpoints": [{
-       "method": "GET",
-       "path": "/api/todos/:id",
-       "purpose": "Fetch a specific todo by ID",
-       "requestFormat": "URL param: id (string)",
-       "responseFormat": "{ id: string, title: string, completed: boolean }",
-       "location": "src/server.ts:245"
-     }]
-     \`\`\`
-   - Why: Future AI agents will query logs before implementing, preventing duplicate code and ensuring architecture consistency
-
 **Important Guidelines:**
 - Always mark a task as in-progress before starting work
 - Follow the _Prompt field guidance for role, approach, and success criteria
@@ -147,19 +117,12 @@ ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 - search: Search existing implementations before coding (type="semantic" or type="regex")
 - code_research: Deep analysis for architecture questions (step 4)
 - spec-status: Check overall progress
-- log-implementation: Record implementation details with artifacts after task completion (step 7)
 - Edit: Directly update task markers in tasks.md file
 - Read/Write/Edit: Implement the actual code changes
 - Bash: Run tests and verify implementation
 
 **Note:** The codebase auto-indexes on first search and auto-syncs with file watching.
 No manual indexing or sync needed.
-
-**View Implementation Logs:**
-- All logged implementations appear in the "Logs" tab of the dashboard
-- Filter by spec, task ID, or search by summary
-- View detailed statistics including files changed and lines modified
-- Or search directly using grep on markdown files in .spec-context/specs/{specName}/Implementation Logs/
 
 Please proceed with implementing ${taskId ? `task ${taskId}` : 'the next task'} following this workflow.`
       }

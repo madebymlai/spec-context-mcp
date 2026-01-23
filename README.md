@@ -73,7 +73,6 @@ Add to your Claude Code config (`.mcp.json` in project root):
 | `steering-guide`      | Guide for creating project steering docs              |
 | `spec-status`         | Check spec progress and task completion               |
 | `approvals`           | Manage approval requests (request/status/delete)      |
-| `log-implementation`  | Record implementation details after completing tasks  |
 
 ## Prompts
 
