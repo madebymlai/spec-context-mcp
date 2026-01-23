@@ -122,8 +122,7 @@ flowchart TD
     P4_Ready -->|Yes| P4_Status[spec-status]
     P4_Status --> P4_Task[Edit tasks.md:<br/>Change [ ] to [-]<br/>for in-progress]
     P4_Task --> P4_Code[Implement code]
-    P4_Code --> P4_Log[log-implementation<br/>Record implementation<br/>details]
-    P4_Log --> P4_Complete[Edit tasks.md:<br/>Change [-] to [x]<br/>for completed]
+    P4_Code --> P4_Complete[Edit tasks.md:<br/>Change [-] to [x]<br/>for completed]
     P4_Complete --> P4_More{More tasks?}
     P4_More -->|Yes| P4_Task
     P4_More -->|No| End([Implementation Complete])
@@ -138,7 +137,6 @@ flowchart TD
     style P3_Wait fill:#e3f2fd
     style CheckSteering fill:#fff4e6
     style P4_More fill:#fff4e6
-    style P4_Log fill:#e3f2fd
 \`\`\`
 
 ## Spec Workflow
@@ -220,7 +218,7 @@ flowchart TD
    - _Leverage: files/utilities to use
    - _Requirements: requirements that the task implements
    - Success: specific completion criteria
-   - Instructions related to setting the task in progress in tasks.md, logging the implementation with log-implementation tool after completion, and then marking it as complete when the task is complete.
+   - Instructions related to setting the task in progress in tasks.md, and then marking it as complete when the task is complete.
    - Start the prompt with "Implement the task for spec {spec-name}, first run spec-workflow-guide to get the workflow guide then implement the task:"
 6. Create \`tasks.md\` at \`.spec-context/specs/{spec-name}/tasks.md\`
 7. Request approval using approvals tool with action:'request'
@@ -242,10 +240,6 @@ flowchart TD
 
 **Tools**:
 - spec-status: Check overall progress
-- Bash (grep/ripgrep): CRITICAL - Search existing code before implementing (step 3)
-- Read: Examine implementation log files directly
-- implement-task prompt: Guide for implementing tasks
-- log-implementation: Record implementation details with artifacts after task completion (step 5)
 - Direct editing: Mark tasks as in-progress [-] or complete [x] in tasks.md
 
 **Process**:
@@ -253,34 +247,11 @@ flowchart TD
 2. Read \`tasks.md\` to see all tasks
 3. For each task:
    - Edit tasks.md: Change \`[ ]\` to \`[-]\` for the task you're starting
-   - **CRITICAL: BEFORE implementing, search existing implementation logs**:
-     - Implementation logs are in: \`.spec-context/specs/{spec-name}/Implementation Logs/\`
-     - **Option 1: Use grep for fast searches**:
-       - \`grep -r "api\|endpoint" .spec-context/specs/{spec-name}/Implementation Logs/\` - Find API endpoints
-       - \`grep -r "component" .spec-context/specs/{spec-name}/Implementation Logs/\` - Find UI components
-       - \`grep -r "function" .spec-context/specs/{spec-name}/Implementation Logs/\` - Find utility functions
-       - \`grep -r "integration" .spec-context/specs/{spec-name}/Implementation Logs/\` - Find integration patterns
-     - **Option 2: Read markdown files directly** - Use Read tool to examine specific log files
-     - Best practice: Search 2-3 different terms to discover comprehensively
-     - This prevents: duplicate endpoints, reimplemented components, broken integrations
-     - Reuse existing code that already solves part of the task
    - **Read the _Prompt field** for guidance on role, approach, and success criteria
    - Follow _Leverage fields to use existing code/utilities
    - Implement the code according to the task description
    - Test your implementation
-   - **Log implementation with detailed artifacts** using log-implementation tool (CRITICAL):
-     - Provide taskId and clear summary of what was implemented (1-2 sentences)
-     - Include files modified/created and code statistics (lines added/removed)
-     - **REQUIRED: Include artifacts field with structured implementation data**:
-       - apiEndpoints: All API routes created/modified (method, path, purpose, formats, location)
-       - components: All UI components created (name, type, purpose, location, props)
-       - functions: All utility functions created (name, signature, location)
-       - classes: All classes created (name, methods, location)
-       - integrations: Frontend-backend connections with data flow description
-     - Example: "Created API GET /api/todos/:id endpoint and TodoDetail React component with WebSocket real-time updates"
-     - This creates a searchable knowledge base for future AI agents to discover existing code
-     - Prevents implementation details from being lost in chat history
-   - Edit tasks.md: Change \`[-]\` to \`[x]\` when completed and logged
+   - Edit tasks.md: Change \`[-]\` to \`[x]\` when completed
 4. Continue until all tasks show \`[x]\`
 
 ## Workflow Rules
@@ -312,11 +283,7 @@ flowchart TD
 │   └── {spec-name}/
 │       ├── requirements.md
 │       ├── design.md
-│       ├── tasks.md
-│       └── Implementation Logs/     # Created automatically
-│           ├── task-1_timestamp_id.md
-│           ├── task-2_timestamp_id.md
-│           └── ...
+│       └── tasks.md
 └── steering/
     ├── product.md
     ├── tech.md

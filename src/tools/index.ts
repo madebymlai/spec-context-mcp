@@ -19,10 +19,6 @@ import {
     approvalsHandler,
 } from './workflow/approvals.js';
 import {
-    logImplementationTool,
-    logImplementationHandler,
-} from './workflow/log-implementation.js';
-import {
     waitForApprovalTool,
     waitForApprovalHandler,
 } from './workflow/wait-for-approval.js';
@@ -131,7 +127,6 @@ export function getTools(): Tool[] {
         steeringGuideTool as Tool,
         specStatusTool as Tool,
         approvalsTool as Tool,
-        logImplementationTool as Tool,
         waitForApprovalTool as Tool,
     ];
 }
@@ -171,9 +166,6 @@ export async function handleToolCall(
 
         case 'approvals':
             return approvalsHandler(args as any, wfCtx);
-
-        case 'log-implementation':
-            return logImplementationHandler(args as any, wfCtx);
 
         case 'wait-for-approval':
             return waitForApprovalHandler(args as any, wfCtx);
