@@ -7,5 +7,4 @@ export * from './global-dir.js';
 export * from './archive-service.js';
 export * from './project-registry.js';
 export * from './security-utils.js';
-export * from './implementation-log-migrator.js';
 export * from './dashboard-session.js';
