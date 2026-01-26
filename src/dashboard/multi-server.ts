@@ -23,7 +23,7 @@ import {
   DEFAULT_SECURITY_CONFIG
 } from '../core/workflow/security-utils.js';
 import { SecurityConfig } from '../workflow-types.js';
-import { AiReviewService, AiReviewModel, AI_REVIEW_MODELS } from './services/ai-review-service.js';
+import { AiReviewService, AiReviewModel, AI_REVIEW_MODELS, SpecDocsContext } from './services/ai-review-service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -980,9 +980,29 @@ export class MultiProjectDashboardServer {
           steeringDocs.structure = await readFile(join(steeringPath, 'structure.md'), 'utf-8');
         } catch { /* optional */ }
 
-        // Call AI review service with steering context
+        // Load previous spec documents for context (if reviewing design or tasks)
+        const specDocsContext: SpecDocsContext = {};
+        if (approval.category === 'spec' && approval.categoryName) {
+          const specPath = join(project.projectPath, '.spec-context', 'specs', approval.categoryName);
+          const filePath = approval.filePath.toLowerCase();
+
+          // If reviewing design.md, load requirements.md
+          // If reviewing tasks.md, load requirements.md and design.md
+          if (filePath.includes('design.md') || filePath.includes('tasks.md')) {
+            try {
+              specDocsContext.requirements = await readFile(join(specPath, 'requirements.md'), 'utf-8');
+            } catch { /* optional */ }
+          }
+          if (filePath.includes('tasks.md')) {
+            try {
+              specDocsContext.design = await readFile(join(specPath, 'design.md'), 'utf-8');
+            } catch { /* optional */ }
+          }
+        }
+
+        // Call AI review service with steering context and spec docs
         const reviewService = new AiReviewService(apiKey);
-        const suggestions = await reviewService.reviewDocument(content, selectedModel, steeringDocs);
+        const suggestions = await reviewService.reviewDocument(content, selectedModel, steeringDocs, specDocsContext);
 
         return {
           success: true,

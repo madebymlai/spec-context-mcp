@@ -36,6 +36,7 @@ For each issue you find:
 
 Focus on:
 - Misalignment with project goals or tech stack (if context provided)
+- Consistency with previous spec documents (requirements when reviewing design, requirements+design when reviewing tasks)
 - Ambiguous statements (could be interpreted multiple ways)
 - What's unclear or missing?
 
@@ -68,6 +69,14 @@ export interface SteeringContext {
 }
 
 /**
+ * Previous spec documents for context when reviewing design/tasks.
+ */
+export interface SpecDocsContext {
+    requirements?: string; // Requirements doc (when reviewing design or tasks)
+    design?: string;       // Design doc (when reviewing tasks)
+}
+
+/**
  * Service for AI-powered document review.
  */
 export class AiReviewService {
@@ -86,7 +95,8 @@ export class AiReviewService {
     async reviewDocument(
         content: string,
         model: AiReviewModel = 'deepseek-v3',
-        steeringContext?: SteeringContext
+        steeringContext?: SteeringContext,
+        specDocsContext?: SpecDocsContext
     ): Promise<AiSuggestion[]> {
         const modelConfig = AI_REVIEW_MODELS[model];
 
@@ -108,7 +118,22 @@ export class AiReviewService {
             }
         }
 
-        const userPrompt = `Please review this document and provide feedback:${contextSection}
+        // Build previous spec docs section
+        let specDocsSection = '';
+        if (specDocsContext) {
+            const parts: string[] = [];
+            if (specDocsContext.requirements) {
+                parts.push(`## Requirements Document\nThe document being reviewed should align with these requirements:\n\n${specDocsContext.requirements}`);
+            }
+            if (specDocsContext.design) {
+                parts.push(`## Design Document\nThe document being reviewed should implement this design:\n\n${specDocsContext.design}`);
+            }
+            if (parts.length > 0) {
+                specDocsSection = `\n\n# PREVIOUS SPEC DOCUMENTS\nUse these as reference - the document being reviewed should be consistent with and build upon them:\n\n${parts.join('\n\n')}\n\n---\n`;
+            }
+        }
+
+        const userPrompt = `Please review this document and provide feedback:${contextSection}${specDocsSection}
 
 # DOCUMENT TO REVIEW
 ---
