@@ -32,5 +32,8 @@ npm-debug.log*
 # Test coverage
 coverage/
 
+# Local ChunkHound DB
+.chunkhound/db/
+
 # Local snapshot
 .spec-context-mcp/

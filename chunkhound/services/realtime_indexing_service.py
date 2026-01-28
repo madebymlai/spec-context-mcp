@@ -267,9 +267,6 @@ class RealtimeIndexingService:
         # /tmp/chunkhound_mcp_debug.log when CHUNKHOUND_DEBUG is enabled.
         self._debug_sink = debug_sink
 
-        # Existing asyncio queue for priority processing
-        self.file_queue: asyncio.Queue[tuple[str, Path]] = asyncio.Queue()
-
         # NEW: Async queue for events from watchdog (thread-safe via asyncio)
         self.event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
@@ -310,6 +307,24 @@ class RealtimeIndexingService:
             self._periodic_sweep_interval_s = 0.0
         self._periodic_sweep_enabled = self._periodic_sweep_interval_s > 0
 
+        self._file_queue_maxsize = 0
+        try:
+            self._file_queue_maxsize = int(
+                os.getenv("CHUNKHOUND_FILE_QUEUE_MAXSIZE", "2000")
+            )
+        except Exception:
+            self._file_queue_maxsize = 2000
+        if self._file_queue_maxsize < 0:
+            self._file_queue_maxsize = 0
+
+        # Existing asyncio queue for priority processing (bounded if configured)
+        if self._file_queue_maxsize > 0:
+            self.file_queue: asyncio.Queue[tuple[str, Path]] = asyncio.Queue(
+                maxsize=self._file_queue_maxsize
+            )
+        else:
+            self.file_queue = asyncio.Queue()
+
         self._embed_sweep_interval_s = 0.0
         try:
             self._embed_sweep_interval_s = float(
@@ -320,6 +335,17 @@ class RealtimeIndexingService:
         if self._embed_sweep_interval_s < 0:
             self._embed_sweep_interval_s = 0.0
         self._embed_sweep_enabled = self._embed_sweep_interval_s > 0
+        self._embed_sweep_backoff_s = 0.0
+        try:
+            self._embed_sweep_backoff_s = float(
+                os.getenv("CHUNKHOUND_EMBED_SWEEP_BACKOFF_SECONDS", "30")
+            )
+        except Exception:
+            self._embed_sweep_backoff_s = 30.0
+        if self._embed_sweep_backoff_s < 0:
+            self._embed_sweep_backoff_s = 0.0
+        self._last_embed_activity_time = 0.0
+        self._last_embed_sweep_time = 0.0
 
         self._poll_verify_hash = _parse_bool(
             os.getenv("CHUNKHOUND_POLL_VERIFY_HASH"),
@@ -666,9 +692,25 @@ class RealtimeIndexingService:
         while True:
             try:
                 await asyncio.sleep(self._embed_sweep_interval_s)
-                if not self.services or not hasattr(self.services, "indexing_coordinator"):
+                if not self.services or not hasattr(
+                    self.services, "indexing_coordinator"
+                ):
+                    continue
+                if self._pending_embed_files:
+                    continue
+                now = time.time()
+                if self._embed_sweep_backoff_s > 0 and (
+                    now - self._last_embed_activity_time
+                ) < self._embed_sweep_backoff_s:
+                    continue
+                if (
+                    self._last_embed_sweep_time
+                    and (now - self._last_embed_sweep_time)
+                    < self._embed_sweep_interval_s
+                ):
                     continue
                 await self.services.indexing_coordinator.generate_missing_embeddings()
+                self._last_embed_sweep_time = time.time()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -709,8 +751,9 @@ class RealtimeIndexingService:
                 return
             self._pending_embed_files.add(file_key)
             self.pending_files.add(file_path)
-            await self.file_queue.put((priority, file_path))
-            self._debug(f"queued {file_path} priority={priority}")
+            if not self._queue_file(priority, file_path):
+                self._pending_embed_files.discard(file_key)
+                self.pending_files.discard(file_path)
             return
         if file_path in self.pending_files:
             if priority == "change":
@@ -745,8 +788,8 @@ class RealtimeIndexingService:
                     self._debug(f"queued (debounced) {file_path} priority={priority}")
             else:
                 # Priority scan events bypass debouncing
-                await self.file_queue.put((priority, file_path))
-                self._debug(f"queued {file_path} priority={priority}")
+                if not self._queue_file(priority, file_path):
+                    self.pending_files.discard(file_path)
 
     async def _debounced_add_file(self, file_path: Path, priority: str) -> None:
         """Process file after debounce delay."""
@@ -759,9 +802,11 @@ class RealtimeIndexingService:
             # Check if no recent updates during delay
             if time.time() - last_update >= self._debounce_delay:
                 del self._pending_debounce[file_str]
-                await self.file_queue.put((priority, file_path))
-                logger.debug(f"Processing debounced file: {file_path}")
-                self._debug(f"processing debounced file: {file_path}")
+                if self._queue_file(priority, file_path):
+                    logger.debug(f"Processing debounced file: {file_path}")
+                    self._debug(f"processing debounced file: {file_path}")
+                else:
+                    self.pending_files.discard(file_path)
 
     async def _consume_events(self) -> None:
         """Simple event consumer - pure asyncio queue."""
@@ -942,6 +987,7 @@ class RealtimeIndexingService:
     async def _embed_missing_for_file(self, file_path: Path) -> None:
         """Generate missing embeddings for a single file."""
         try:
+            self._last_embed_activity_time = time.time()
             if not self.services or not hasattr(self.services, "embedding_service"):
                 return
             base_dir = None
@@ -957,6 +1003,18 @@ class RealtimeIndexingService:
             )
         except Exception as e:
             logger.warning(f"Embedding generation failed for {file_path}: {e}")
+
+    def _queue_file(self, priority: str, file_path: Path) -> bool:
+        """Queue a file for processing; schedule sweep if queue is full."""
+        try:
+            self.file_queue.put_nowait((priority, file_path))
+            self._debug(f"queued {file_path} priority={priority}")
+            return True
+        except asyncio.QueueFull:
+            logger.warning(f"File queue full; dropping {priority} for {file_path}")
+            self._debug(f"file queue full; dropping {priority} for {file_path}")
+            self._handle_queue_overflow(priority, file_path)
+            return False
 
     async def _process_loop(self) -> None:
         """Main processing loop - simple and robust."""
