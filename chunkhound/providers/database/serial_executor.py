@@ -19,7 +19,7 @@ _transaction_context = contextvars.ContextVar("transaction_active", default=Fals
 _executor_local = threading.local()
 
 
-def get_thread_local_connection(provider: Any) -> Any:
+def get_thread_local_connection(provider: Any, executor: Any | None = None) -> Any:
     """Get thread-local database connection for executor thread.
 
     This function should ONLY be called from within the executor thread.
@@ -38,6 +38,8 @@ def get_thread_local_connection(provider: Any) -> Any:
         _executor_local.connection = provider._create_connection()
         if _executor_local.connection is None:
             raise RuntimeError("Failed to create database connection")
+        if executor is not None:
+            executor._record_connection(_executor_local.connection)
         logger.debug(
             f"Created new connection in executor thread {threading.get_ident()}"
         )
@@ -91,6 +93,75 @@ class SerialDatabaseExecutor:
             max_workers=1,  # Hardcoded - not configurable
             thread_name_prefix="serial-db",
         )
+        self._state_lock = threading.Lock()
+        self._last_connection: Any | None = None
+        self._current_operation: str | None = None
+        self._current_operation_start: float | None = None
+        self._last_activity_time: float | None = None
+        self._current_operation_id = 0
+
+    def _record_connection(self, conn: Any) -> None:
+        with self._state_lock:
+            self._last_connection = conn
+
+    def _mark_operation_start(self, operation_name: str) -> int:
+        now = time.time()
+        with self._state_lock:
+            self._current_operation_id += 1
+            op_id = self._current_operation_id
+            self._current_operation = operation_name
+            self._current_operation_start = now
+            self._last_activity_time = now
+            return op_id
+
+    def _mark_operation_end(self, op_id: int) -> None:
+        with self._state_lock:
+            if op_id == self._current_operation_id:
+                self._current_operation = None
+                self._current_operation_start = None
+                self._last_activity_time = time.time()
+
+    def _get_operation_snapshot(self) -> tuple[str | None, float | None, float | None]:
+        with self._state_lock:
+            return (
+                self._current_operation,
+                self._current_operation_start,
+                self._last_activity_time,
+            )
+
+    def _interrupt_connection(self) -> bool:
+        with self._state_lock:
+            conn = self._last_connection
+        if conn is None:
+            return False
+        if not hasattr(conn, "interrupt"):
+            return False
+        try:
+            conn.interrupt()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to interrupt DB connection: {e}")
+            return False
+
+    def _reset_executor(self) -> None:
+        """Best-effort reset to recover from a stuck DB thread."""
+        try:
+            try:
+                self._db_executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                # Older Python without cancel_futures
+                self._db_executor.shutdown(wait=False)
+        except Exception as e:
+            logger.warning(f"Failed to shutdown DB executor: {e}")
+
+        self._db_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="serial-db"
+        )
+        with self._state_lock:
+            self._last_connection = None
+            self._current_operation = None
+            self._current_operation_start = None
+            self._current_operation_id = 0
 
     def execute_sync(
         self, provider: Any, operation_name: str, *args: Any, **kwargs: Any
@@ -112,13 +183,14 @@ class SerialDatabaseExecutor:
 
         def executor_operation() -> Any:
             # Get thread-local connection (created on first access)
-            conn = get_thread_local_connection(provider)
+            conn = get_thread_local_connection(provider, self)
 
             # Get thread-local state
             state = get_thread_local_state()
 
             # Update last activity time for ALL operations
             state["last_activity_time"] = time.time()
+            op_id = self._mark_operation_start(operation_name)
 
             # Include base directory if provider has it
             if hasattr(provider, "get_base_directory"):
@@ -126,21 +198,71 @@ class SerialDatabaseExecutor:
 
             # Execute operation - look for method named _executor_{operation_name}
             op_func = getattr(provider, f"_executor_{operation_name}")
-            return op_func(conn, state, *args, **kwargs)
+            try:
+                return op_func(conn, state, *args, **kwargs)
+            finally:
+                self._mark_operation_end(op_id)
 
         # Run in executor synchronously with timeout (env override)
         future = self._db_executor.submit(executor_operation)
         import os
+        start = time.perf_counter()
         try:
-            timeout_s = float(os.getenv("CHUNKHOUND_DB_EXECUTE_TIMEOUT", "30"))
+            base_timeout = float(os.getenv("CHUNKHOUND_DB_EXECUTE_TIMEOUT", "30"))
         except Exception:
-            timeout_s = 30.0
+            base_timeout = 30.0
         try:
-            return future.result(timeout=timeout_s)
+            search_timeout = float(os.getenv("CHUNKHOUND_DB_SEARCH_TIMEOUT", str(base_timeout)))
+        except Exception:
+            search_timeout = base_timeout
+        timeout_s = search_timeout if operation_name.startswith("search_") else base_timeout
+        try:
+            result = future.result(timeout=timeout_s)
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            try:
+                slow_ms = float(os.getenv("CHUNKHOUND_DB_LOG_SLOW_MS", "5000"))
+            except Exception:
+                slow_ms = 5000.0
+            if elapsed_ms >= slow_ms:
+                logger.warning(
+                    f"Slow DB op '{operation_name}': {elapsed_ms:.1f}ms (slow >= {slow_ms:.0f}ms)"
+                )
+            else:
+                logger.debug(
+                    f"DB op '{operation_name}' completed in {elapsed_ms:.1f}ms"
+                )
+            return result
         except concurrent.futures.TimeoutError:
-            logger.error(
-                f"Database operation '{operation_name}' timed out after {timeout_s} seconds"
+            active_op, active_start, last_activity = self._get_operation_snapshot()
+            active_age = (
+                f"{(time.time() - active_start):.1f}s"
+                if active_start is not None
+                else "unknown"
             )
+            last_activity_age = (
+                f"{(time.time() - last_activity):.1f}s"
+                if last_activity is not None
+                else "unknown"
+            )
+            logger.error(
+                f"Database operation '{operation_name}' timed out after {timeout_s} seconds "
+                f"(active_op={active_op or 'unknown'} active_age={active_age} last_activity_age={last_activity_age})"
+            )
+            interrupted = self._interrupt_connection()
+            if interrupted:
+                logger.warning("Issued interrupt on DB connection after timeout")
+            else:
+                logger.warning("No DB connection available to interrupt after timeout")
+
+            import os
+            reset_on_timeout = os.getenv("CHUNKHOUND_DB_RESET_ON_TIMEOUT", "1").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if reset_on_timeout:
+                logger.warning("Resetting DB executor after timeout to recover")
+                self._reset_executor()
             raise TimeoutError(f"Operation '{operation_name}' timed out")
 
     async def execute_async(
@@ -164,13 +286,14 @@ class SerialDatabaseExecutor:
 
         def executor_operation():
             # Get thread-local connection (created on first access)
-            conn = get_thread_local_connection(provider)
+            conn = get_thread_local_connection(provider, self)
 
             # Get thread-local state
             state = get_thread_local_state()
 
             # Update last activity time for ALL operations
             state["last_activity_time"] = time.time()
+            op_id = self._mark_operation_start(operation_name)
 
             # Include base directory if provider has it
             if hasattr(provider, "get_base_directory"):
@@ -178,15 +301,33 @@ class SerialDatabaseExecutor:
 
             # Execute operation - look for method named _executor_{operation_name}
             op_func = getattr(provider, f"_executor_{operation_name}")
-            return op_func(conn, state, *args, **kwargs)
+            try:
+                return op_func(conn, state, *args, **kwargs)
+            finally:
+                self._mark_operation_end(op_id)
 
         # Capture context for async compatibility
         ctx = contextvars.copy_context()
 
         # Run in executor with context
-        return await loop.run_in_executor(
+        start = time.perf_counter()
+        result = await loop.run_in_executor(
             self._db_executor, ctx.run, executor_operation
         )
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        try:
+            import os
+
+            slow_ms = float(os.getenv("CHUNKHOUND_DB_LOG_SLOW_MS", "5000"))
+        except Exception:
+            slow_ms = 5000.0
+        if elapsed_ms >= slow_ms:
+            logger.warning(
+                f"Slow DB op '{operation_name}': {elapsed_ms:.1f}ms (slow >= {slow_ms:.0f}ms)"
+            )
+        else:
+            logger.debug(f"DB op '{operation_name}' completed in {elapsed_ms:.1f}ms")
+        return result
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the executor with proper cleanup.
@@ -244,13 +385,5 @@ class SerialDatabaseExecutor:
         Returns:
             Last activity timestamp, or None if no activity yet
         """
-
-        def get_activity_time():
-            state = get_thread_local_state()
-            return state.get("last_activity_time", None)
-
-        try:
-            future = self._db_executor.submit(get_activity_time)
-            return future.result(timeout=1.0)  # Quick operation, short timeout
-        except:
-            return None
+        with self._state_lock:
+            return self._last_activity_time

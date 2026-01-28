@@ -90,6 +90,16 @@ class SearchService(BaseService):
             Tuple of (results, pagination_metadata)
         """
         try:
+            logger.debug(
+                "Semantic search request: query=%r page_size=%s offset=%s path_filter=%r force_strategy=%r time_limit=%r result_limit=%r",
+                query,
+                page_size,
+                offset,
+                path_filter,
+                force_strategy,
+                time_limit,
+                result_limit,
+            )
             if not self._embedding_provider:
                 raise ValueError(
                     "Embedding provider not configured for semantic search"
@@ -189,6 +199,17 @@ class SearchService(BaseService):
             Tuple of (results, pagination_metadata)
         """
         try:
+            logger.debug(
+                "Regex search request: pattern=%r page_size=%s offset=%s path_filter=%r",
+                pattern,
+                page_size,
+                offset,
+                path_filter,
+            )
+            if not path_filter:
+                logger.debug(
+                    "Regex search without path_filter may be slow on large indexes"
+                )
             logger.debug(f"Performing regex search for pattern: '{pattern}'")
 
             # Perform regex search
@@ -384,4 +405,3 @@ class SearchService(BaseService):
             enhanced_results.append(enhanced_result)
 
         return enhanced_results
-

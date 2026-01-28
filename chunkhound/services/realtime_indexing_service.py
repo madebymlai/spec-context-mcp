@@ -12,18 +12,22 @@ Architecture:
 """
 
 import asyncio
+import os
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 
 from loguru import logger
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from chunkhound.utils.windows_constants import IS_WINDOWS
+from chunkhound.utils.hashing import compute_file_hash
 
 from chunkhound.core.config.config import Config
-from chunkhound.database_factory import DatabaseServices
+from chunkhound.core.utils.path_utils import normalize_path_for_lookup
+if TYPE_CHECKING:
+    from chunkhound.database_factory import DatabaseServices
 
 
 def normalize_file_path(path: Path | str) -> str:
@@ -36,20 +40,65 @@ class SimpleEventHandler(FileSystemEventHandler):
 
     def __init__(
         self,
-        event_queue: asyncio.Queue,
+        event_queue: asyncio.Queue | None,
         config: Config | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
+        on_overflow: Callable[[str, Path], None] | None = None,
+        on_invalidate: Callable[[str, Path], None] | None = None,
     ):
         self.event_queue = event_queue
         self.config = config
         self.loop = loop
+        self._on_overflow = on_overflow
+        self._on_invalidate = on_invalidate
         self._engine = None
         self._include_patterns: list[str] | None = None
         self._pattern_cache: dict[str, Any] = {}
+        self._ignore_names: set[str] = {".gitignore", ".chunkhound.json"}
+        try:
+            if config and getattr(config, "indexing", None):
+                chf = getattr(config.indexing, "chignore_file", None)
+                if chf:
+                    self._ignore_names.add(chf)
+        except Exception:
+            pass
         try:
             self._root = (config.target_dir if config and config.target_dir else Path.cwd()).resolve()
         except Exception:
             self._root = Path.cwd().resolve()
+
+    def invalidate_filters(self) -> None:
+        """Reset ignore/include caches so changes are picked up."""
+        self._engine = None
+        self._include_patterns = None
+        self._pattern_cache.clear()
+
+    def _is_ignore_or_config(self, file_path: Path) -> bool:
+        try:
+            if file_path.name in self._ignore_names:
+                return True
+            path_str = file_path.as_posix()
+            if path_str.endswith("/.git/info/exclude"):
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _notify_overflow(self, event_type: str, file_path: Path) -> None:
+        if not self._on_overflow or not self.loop or self.loop.is_closed():
+            return
+        try:
+            self.loop.call_soon_threadsafe(self._on_overflow, event_type, file_path)
+        except Exception:
+            pass
+
+    def _notify_invalidate(self, file_path: Path) -> None:
+        if not self._on_invalidate or not self.loop or self.loop.is_closed():
+            return
+        try:
+            self.loop.call_soon_threadsafe(self._on_invalidate, "config_changed", file_path)
+        except Exception:
+            pass
 
     def on_any_event(self, event: Any) -> None:
         """Handle filesystem events - simple queue operation."""
@@ -77,19 +126,18 @@ class SimpleEventHandler(FileSystemEventHandler):
         # Resolve path to canonical form to avoid /var vs /private/var issues
         file_path = Path(normalize_file_path(event.src_path))
 
+        # Invalidate ignore/include caches when ignore/config files change
+        if self._is_ignore_or_config(file_path):
+            self.invalidate_filters()
+            self._notify_invalidate(file_path)
+            return
+
         # Simple filtering for supported file types
         if not self._should_index(file_path):
             return
 
         # Put event in async queue from watchdog thread
-        try:
-            if self.loop and not self.loop.is_closed():
-                future = asyncio.run_coroutine_threadsafe(
-                    self.event_queue.put((event.event_type, file_path)), self.loop
-                )
-                future.result(timeout=5.0)  # More tolerance for queue operations
-        except Exception as e:
-            logger.warning(f"Failed to queue event for {file_path}: {e}")
+        self._queue_event(event.event_type, file_path)
 
     def _should_index(self, file_path: Path) -> bool:
         """Check if file should be indexed based on config patterns.
@@ -156,6 +204,11 @@ class SimpleEventHandler(FileSystemEventHandler):
         src_file = Path(normalize_file_path(src_path))
         dest_file = Path(normalize_file_path(dest_path))
 
+        if self._is_ignore_or_config(src_file) or self._is_ignore_or_config(dest_file):
+            self.invalidate_filters()
+            self._notify_invalidate(dest_file)
+            return
+
         # If moving FROM temp file TO supported file -> index destination
         if not self._should_index(src_file) and self._should_index(dest_file):
             logger.debug(f"Atomic write detected: {src_path} -> {dest_path}")
@@ -174,14 +227,24 @@ class SimpleEventHandler(FileSystemEventHandler):
 
     def _queue_event(self, event_type: str, file_path: Path) -> None:
         """Queue an event for async processing."""
+        if self.event_queue is None or not self.loop or self.loop.is_closed():
+            return
+
+        def _enqueue() -> None:
+            try:
+                self.event_queue.put_nowait((event_type, file_path))
+            except asyncio.QueueFull:
+                logger.warning(f"Event queue full; dropping {event_type} for {file_path}")
+                self._notify_overflow(event_type, file_path)
+            except Exception as e:
+                logger.warning(f"Failed to queue {event_type} event for {file_path}: {e}")
+                self._notify_overflow(event_type, file_path)
+
         try:
-            if self.loop and not self.loop.is_closed():
-                future = asyncio.run_coroutine_threadsafe(
-                    self.event_queue.put((event_type, file_path)), self.loop
-                )
-                future.result(timeout=5.0)  # More tolerance for queue operations
+            self.loop.call_soon_threadsafe(_enqueue)
         except Exception as e:
-            logger.warning(f"Failed to queue {event_type} event for {file_path}: {e}")
+            logger.warning(f"Failed to schedule queue insert for {file_path}: {e}")
+            self._notify_overflow(event_type, file_path)
 
 
 class RealtimeIndexingService:
@@ -194,7 +257,7 @@ class RealtimeIndexingService:
 
     def __init__(
         self,
-        services: DatabaseServices,
+        services: "DatabaseServices",
         config: Config,
         debug_sink: Callable[[str], None] | None = None,
     ):
@@ -213,6 +276,7 @@ class RealtimeIndexingService:
         # Deduplication and error tracking
         self.pending_files: set[Path] = set()
         self.failed_files: set[str] = set()
+        self.dirty_files: set[Path] = set()
 
         # Simple debouncing for rapid file changes
         self._pending_debounce: dict[str, float] = {}  # file_path -> timestamp
@@ -225,6 +289,61 @@ class RealtimeIndexingService:
         self.scan_iterator: Iterator | None = None
         self.scan_complete = False
 
+        # Polling/health state
+        self._using_polling = False
+        self._last_event_time = 0.0
+
+        def _parse_bool(value: str | None, default: bool = False) -> bool:
+            if value is None:
+                return default
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+
+        self._periodic_sweep_interval_s = 0.0
+        try:
+            self._periodic_sweep_interval_s = float(
+                os.getenv("CHUNKHOUND_REALTIME_SWEEP_SECONDS", "60")
+            )
+        except Exception:
+            self._periodic_sweep_interval_s = 60.0
+        if self._periodic_sweep_interval_s < 0:
+            self._periodic_sweep_interval_s = 0.0
+        self._periodic_sweep_enabled = self._periodic_sweep_interval_s > 0
+
+        self._poll_verify_hash = _parse_bool(
+            os.getenv("CHUNKHOUND_POLL_VERIFY_HASH"),
+            default=True,
+        )
+        try:
+            self._poll_hash_interval_s = float(
+                os.getenv("CHUNKHOUND_POLL_HASH_INTERVAL_SECONDS", "300")
+            )
+        except Exception:
+            self._poll_hash_interval_s = 300.0
+        try:
+            self._poll_hash_budget_ms = int(
+                os.getenv("CHUNKHOUND_POLL_HASH_BUDGET_MS", "200")
+            )
+        except Exception:
+            self._poll_hash_budget_ms = 200
+        try:
+            self._poll_hash_max_size_kb = int(
+                os.getenv("CHUNKHOUND_POLL_HASH_MAX_SIZE_KB", "256")
+            )
+        except Exception:
+            self._poll_hash_max_size_kb = 256
+        self._poll_hash_checked: dict[str, float] = {}
+
+        self._realtime_embed_immediate = _parse_bool(
+            os.getenv("CHUNKHOUND_REALTIME_EMBED_IMMEDIATE"),
+            default=True,
+        )
+        try:
+            self._realtime_embed_backlog = int(
+                os.getenv("CHUNKHOUND_REALTIME_EMBED_BACKLOG", "0")
+            )
+        except Exception:
+            self._realtime_embed_backlog = 0
+
         # Filesystem monitoring
         self.observer: Any | None = None
         self.event_handler: SimpleEventHandler | None = None
@@ -234,6 +353,9 @@ class RealtimeIndexingService:
         self.process_task: asyncio.Task | None = None
         self.event_consumer_task: asyncio.Task | None = None
         self._polling_task: asyncio.Task | None = None
+        self._polling_lock = asyncio.Lock()
+        self._health_task: asyncio.Task | None = None
+        self._periodic_sweep_task: asyncio.Task | None = None
 
         # Directory watch management for progressive monitoring
         self.watched_directories: set[str] = set()  # Track watched dirs
@@ -244,6 +366,13 @@ class RealtimeIndexingService:
         self._monitoring_ready_time: float | None = (
             None  # Track when monitoring became ready
         )
+        # Polling state cache (used in polling mode and overflow sweeps)
+        self._poll_state: dict[str, tuple[int, ...]] = {}
+        self._polling_handler: SimpleEventHandler | None = None
+        # Queue overflow handling
+        self._overflow_task: asyncio.Task | None = None
+        self._last_overflow_time = 0.0
+        self._overflow_debounce_seconds = 2.0
 
     # Internal helper to forward realtime events into the MCP debug log file
     def _debug(self, message: str) -> None:
@@ -270,6 +399,9 @@ class RealtimeIndexingService:
         # Start all necessary tasks
         self.event_consumer_task = asyncio.create_task(self._consume_events())
         self.process_task = asyncio.create_task(self._process_loop())
+        self._health_task = asyncio.create_task(self._monitor_health())
+        if self._periodic_sweep_enabled:
+            self._periodic_sweep_task = asyncio.create_task(self._periodic_sweep())
 
         # Setup watchdog with timeout
         self._watchdog_setup_task = asyncio.create_task(
@@ -329,6 +461,20 @@ class RealtimeIndexingService:
             self._polling_task.cancel()
             try:
                 await self._polling_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._health_task:
+            self._health_task.cancel()
+            try:
+                await self._health_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._periodic_sweep_task:
+            self._periodic_sweep_task.cancel()
+            try:
+                await self._periodic_sweep_task
             except asyncio.CancelledError:
                 pass
 
@@ -409,7 +555,13 @@ class RealtimeIndexingService:
         self, watch_path: Path, loop: asyncio.AbstractEventLoop
     ) -> None:
         """Start filesystem monitoring with recursive watching for complete coverage."""
-        self.event_handler = SimpleEventHandler(self.event_queue, self.config, loop)
+        self.event_handler = SimpleEventHandler(
+            self.event_queue,
+            self.config,
+            loop,
+            on_overflow=self._handle_queue_overflow,
+            on_invalidate=self._handle_filter_invalidation,
+        )
         self.observer = Observer()
 
         # Use recursive=True to ensure all directory events are captured
@@ -441,14 +593,56 @@ class RealtimeIndexingService:
             "Progressive directory addition skipped (using recursive monitoring)"
         )
 
+    async def _monitor_health(self) -> None:
+        """Monitor filesystem watcher health and fall back to polling if needed."""
+        while True:
+            try:
+                await asyncio.sleep(2.0)
+                if not self.observer or not self.watch_path:
+                    continue
+                if self.observer.is_alive():
+                    continue
+                if not self._using_polling:
+                    logger.warning("Watchdog observer not alive; switching to polling")
+                    self._debug("watchdog observer not alive; switching to polling")
+                    await self._ensure_polling_started()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Health monitor error: {e}")
+
+    async def _ensure_polling_started(self) -> None:
+        if not self.watch_path:
+            return
+        if self._using_polling and self._polling_task and not self._polling_task.done():
+            return
+        self._using_polling = True
+        if not self._polling_task or self._polling_task.done():
+            self._polling_task = asyncio.create_task(self._polling_monitor(self.watch_path))
+            # Give it a moment to spin up
+            await asyncio.sleep(0.1)
+
+    async def _periodic_sweep(self) -> None:
+        """Periodically scan to recover from dropped filesystem events."""
+        while True:
+            try:
+                await asyncio.sleep(self._periodic_sweep_interval_s)
+                if not self.watch_path:
+                    continue
+                # Avoid reindexing everything on first sweep if we only want a baseline
+                if not self._using_polling and not self._poll_state:
+                    await self._scan_for_changes(self.watch_path, emit_changes=False)
+                    continue
+                await self._scan_for_changes(self.watch_path, emit_changes=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Periodic sweep error: {e}")
+
     async def _polling_monitor(self, watch_path: Path) -> None:
         """Simple polling monitor for large directories."""
         logger.debug(f"Starting polling monitor for {watch_path}")
         self._debug(f"polling monitor active for {watch_path}")
-        known_files = set()
-
-        # Create a simple event handler for shouldIndex check once
-        simple_handler = SimpleEventHandler(None, self.config, None)
 
         # Use a shorter interval during the first few seconds to ensure
         # freshly created files are detected quickly after startup/fallback.
@@ -456,46 +650,7 @@ class RealtimeIndexingService:
 
         while True:
             try:
-                current_files = set()
-                files_checked = 0
-
-                # Walk directory tree but with limits to avoid hanging
-                for file_path in watch_path.rglob("*"):
-                    try:
-                        if file_path.is_file():
-                            files_checked += 1
-                            if simple_handler._should_index(file_path):
-                                current_files.add(file_path)
-                                if file_path not in known_files:
-                                    # New file detected
-                                    logger.debug(
-                                        f"Polling detected new file: {file_path}"
-                                    )
-                                    self._debug(
-                                        f"polling detected new file: {file_path}"
-                                    )
-                                    await self.add_file(file_path, priority="change")
-
-                        # Yield control periodically and limit total files checked
-                        if files_checked % 100 == 0:
-                            await asyncio.sleep(0)  # Yield control
-                            if files_checked > 5000:  # Limit to prevent hanging
-                                logger.warning(
-                                    f"Polling checked {files_checked} files, skipping rest to avoid blocking"
-                                )
-                                break
-                    except (OSError, PermissionError):
-                        # Skip files we can't access
-                        continue
-
-                # Check for deleted files
-                deleted = known_files - current_files
-                for file_path in deleted:
-                    logger.debug(f"Polling detected deleted file: {file_path}")
-                    await self.remove_file(file_path)
-                    self._debug(f"polling detected deleted file: {file_path}")
-
-                known_files = current_files
+                await self._scan_for_changes(watch_path)
 
                 # Adaptive poll interval: 1s for the first 10s, then 5s
                 elapsed = time.time() - polling_start
@@ -508,6 +663,16 @@ class RealtimeIndexingService:
 
     async def add_file(self, file_path: Path, priority: str = "change") -> None:
         """Add file to processing queue with deduplication and debouncing."""
+        if file_path in self.pending_files:
+            if priority == "change":
+                # Mark dirty so we reprocess after the current pass
+                self.dirty_files.add(file_path)
+                file_str = str(file_path)
+                # If a debounce is in-flight, extend its window to the latest change
+                if file_str in self._pending_debounce:
+                    self._pending_debounce[file_str] = time.time()
+                self._debug(f"marked dirty {file_path} priority={priority}")
+            return
         if file_path not in self.pending_files:
             self.pending_files.add(file_path)
 
@@ -561,6 +726,7 @@ class RealtimeIndexingService:
                 except asyncio.TimeoutError:
                     # Normal timeout, continue to check if task should stop
                     continue
+                self._last_event_time = time.time()
 
                 # Layer 3: Event deduplication to prevent redundant processing
                 # Suppress duplicate events within 2-second window (e.g., created + modified from same editor save)
@@ -570,8 +736,13 @@ class RealtimeIndexingService:
                 if file_key in self._recent_file_events:
                     last_event_type, last_event_time = self._recent_file_events[file_key]
                     if last_event_type == event_type and (current_time - last_event_time) < self._EVENT_DEDUP_WINDOW_SECONDS:
-                        logger.debug(f"Suppressing duplicate {event_type} event for {file_path} (within {self._EVENT_DEDUP_WINDOW_SECONDS}s window)")
+                        logger.debug(
+                            f"Suppressing duplicate {event_type} event for {file_path} "
+                            f"(within {self._EVENT_DEDUP_WINDOW_SECONDS}s window)"
+                        )
                         self._debug(f"suppressed duplicate {event_type}: {file_path}")
+                        if event_type in ("created", "modified"):
+                            await self.add_file(file_path, priority="change")
                         self.event_queue.task_done()
                         continue
 
@@ -615,6 +786,10 @@ class RealtimeIndexingService:
         """Remove file from database."""
         try:
             logger.debug(f"Removing file from database: {file_path}")
+            if file_path.exists():
+                logger.debug(f"File still exists; re-queueing change: {file_path}")
+                await self.add_file(file_path, priority="change")
+                return
             self.services.provider.delete_file_completely(str(file_path))
             self._debug(f"removed file from database: {file_path}")
         except Exception as e:
@@ -647,22 +822,42 @@ class RealtimeIndexingService:
     async def _cleanup_deleted_directory(self, dir_path: str) -> None:
         """Clean up database entries for files in a deleted directory."""
         try:
-            # Get all files that were in this directory from database
-            # Use the provider's search capability to find files with this path prefix
-            search_results, _ = self.services.provider.search_regex(
-                pattern=f"^{dir_path}/.*",
-                page_size=1000,  # Large page to get all matches
-            )
+            # Normalize directory path to DB-relative scope prefix
+            base_dir = None
+            if hasattr(self.services.provider, "get_base_directory"):
+                base_dir = self.services.provider.get_base_directory()
+
+            try:
+                scope_prefix = normalize_path_for_lookup(dir_path, base_dir)
+            except Exception:
+                # Fallback: best-effort normalization
+                scope_prefix = str(dir_path).replace("\\", "/").lstrip("/")
+
+            if not scope_prefix or scope_prefix in (".", "/"):
+                logger.debug(
+                    f"Skipping cleanup for invalid scope prefix: {scope_prefix!r}"
+                )
+                return
+
+            if not scope_prefix.endswith("/"):
+                scope_prefix += "/"
+
+            # Use file-path scoped query (fast) instead of regex over code content
+            if not hasattr(self.services.provider, "get_scope_file_paths"):
+                logger.warning(
+                    "Provider missing get_scope_file_paths; skipping deleted directory cleanup"
+                )
+                return
+
+            file_paths = self.services.provider.get_scope_file_paths(scope_prefix)
 
             # Delete each file found in the directory
-            for result in search_results:
-                file_path = result.get("file_path", result.get("path", ""))
-                if file_path:
-                    logger.debug(f"Cleaning up deleted file: {file_path}")
-                    self.services.provider.delete_file_completely(file_path)
+            for file_path in file_paths:
+                logger.debug(f"Cleaning up deleted file: {file_path}")
+                self.services.provider.delete_file_completely(file_path)
 
             logger.info(
-                f"Cleaned up {len(search_results)} files from deleted directory: {dir_path}"
+                f"Cleaned up {len(file_paths)} files from deleted directory: {dir_path}"
             )
 
         except Exception as e:
@@ -710,7 +905,17 @@ class RealtimeIndexingService:
                 # Check if file still exists (prevent race condition with deletion)
                 if not file_path.exists():
                     logger.debug(f"Skipping {file_path} - file no longer exists")
+                    self.dirty_files.discard(file_path)
                     continue
+                # Avoid indexing mid-write; if unstable, requeue and continue.
+                if priority == "change":
+                    stable = await self._wait_for_file_stability(file_path)
+                    if not stable:
+                        if file_path.exists():
+                            await self.add_file(file_path, priority="change")
+                        else:
+                            self.dirty_files.discard(file_path)
+                        continue
 
                 # Process the file
                 logger.debug(f"Processing {file_path} (priority: {priority})")
@@ -724,9 +929,14 @@ class RealtimeIndexingService:
                         logger.warning(f"Embedding generation failed in realtime (embed pass): {e}")
                     continue
 
-                # Skip embeddings for initial and change events to keep loop responsive.
-                # An explicit 'embed' follow-up event will generate embeddings.
-                skip_embeddings = True
+                embed_now = self._realtime_embed_immediate
+                if embed_now and self._realtime_embed_backlog > 0:
+                    if self.file_queue.qsize() > self._realtime_embed_backlog:
+                        embed_now = False
+
+                # Skip embeddings for initial and change events unless configured
+                # to embed immediately.
+                skip_embeddings = not embed_now
 
                 # Use existing indexing coordinator
                 result = await self.services.indexing_coordinator.process_file(
@@ -737,9 +947,15 @@ class RealtimeIndexingService:
                 if hasattr(self.services.provider, "flush"):
                     await self.services.provider.flush()
 
-                # If we skipped embeddings, queue for embedding generation
+                # If we skipped embeddings (or embedding failed), queue for embedding generation
                 if skip_embeddings:
                     await self.add_file(file_path, priority="embed")
+                else:
+                    try:
+                        if isinstance(result, dict) and result.get("embedding_error"):
+                            await self.add_file(file_path, priority="embed")
+                    except Exception:
+                        pass
 
                 # Record processing summary into MCP debug log
                 try:
@@ -757,6 +973,10 @@ class RealtimeIndexingService:
                     )
                 except Exception:
                     pass
+                # If file changed again while processing, requeue it
+                if file_path in self.dirty_files:
+                    self.dirty_files.discard(file_path)
+                    await self.add_file(file_path, priority="change")
 
             except asyncio.CancelledError:
                 logger.debug("Processing loop cancelled")
@@ -773,7 +993,7 @@ class RealtimeIndexingService:
         monitoring_active = False
         if self.observer and self.observer.is_alive():
             monitoring_active = True
-        elif hasattr(self, "_using_polling"):
+        elif self._using_polling:
             # If we're using polling mode, consider it "alive"
             monitoring_active = True
 
@@ -786,6 +1006,162 @@ class RealtimeIndexingService:
             "watching_directory": str(self.watch_path) if self.watch_path else None,
             "watched_directories_count": len(self.watched_directories),  # Added
         }
+
+    def _handle_queue_overflow(self, event_type: str, file_path: Path) -> None:
+        """Schedule a polling sweep to recover from dropped watchdog events."""
+        now = time.time()
+        if (now - self._last_overflow_time) < self._overflow_debounce_seconds:
+            return
+        self._last_overflow_time = now
+        if not self.watch_path:
+            return
+        if self._overflow_task and not self._overflow_task.done():
+            return
+        self._debug(f"queue overflow; scheduling sweep ({event_type}: {file_path})")
+        self._overflow_task = asyncio.create_task(self._overflow_sweep())
+
+    def _handle_filter_invalidation(self, event_type: str, file_path: Path) -> None:
+        """Invalidate ignore/include caches and trigger a sweep."""
+        try:
+            if self.event_handler:
+                self.event_handler.invalidate_filters()
+            if self._polling_handler:
+                self._polling_handler.invalidate_filters()
+        except Exception:
+            pass
+        self._debug(f"filters invalidated by {file_path}")
+        self._handle_queue_overflow(event_type, file_path)
+
+    async def _overflow_sweep(self) -> None:
+        """Run a one-off polling sweep to catch missed changes."""
+        if not self.watch_path:
+            return
+        try:
+            await self._scan_for_changes(self.watch_path)
+        except Exception as e:
+            logger.error(f"Overflow sweep failed: {e}")
+
+    def _build_poll_state(self, stat: os.stat_result) -> tuple[int, int] | tuple[int, int, int]:
+        if IS_WINDOWS:
+            return (stat.st_mtime_ns, stat.st_size)
+        return (stat.st_mtime_ns, stat.st_size, stat.st_ctime_ns)
+
+    def _should_verify_hash(self, file_key: str, stat: os.stat_result, now: float) -> bool:
+        if not self._poll_verify_hash:
+            return False
+        if self._poll_hash_max_size_kb > 0 and stat.st_size > (self._poll_hash_max_size_kb * 1024):
+            return False
+        last = self._poll_hash_checked.get(file_key)
+        if last is None:
+            return True
+        return (now - last) >= self._poll_hash_interval_s
+
+    async def _scan_for_changes(self, watch_path: Path, emit_changes: bool = True) -> None:
+        """Scan filesystem and enqueue new/modified files; remove deleted files."""
+        async with self._polling_lock:
+            if self._polling_handler is None:
+                self._polling_handler = SimpleEventHandler(None, self.config, None)
+            current_state: dict[str, tuple[int, ...]] = {}
+            files_checked = 0
+            now = time.time()
+            hash_budget_deadline: float | None = None
+            if emit_changes and self._poll_verify_hash and self._poll_hash_budget_ms > 0:
+                hash_budget_deadline = now + (self._poll_hash_budget_ms / 1000.0)
+
+            for file_path in watch_path.rglob("*"):
+                try:
+                    if not file_path.is_file():
+                        continue
+                    if not self._polling_handler._should_index(file_path):
+                        continue
+                    file_key = normalize_file_path(file_path)
+                    stat = file_path.stat()
+                    state = self._build_poll_state(stat)
+                    current_state[file_key] = state
+
+                    prev_state = self._poll_state.get(file_key)
+                    if prev_state is None:
+                        if emit_changes:
+                            logger.debug(f"Polling detected new file: {file_path}")
+                            self._debug(f"polling detected new file: {file_path}")
+                            await self.add_file(file_path, priority="change")
+                    elif prev_state != state:
+                        if emit_changes:
+                            logger.debug(f"Polling detected modified file: {file_path}")
+                            self._debug(f"polling detected modified file: {file_path}")
+                            await self.add_file(file_path, priority="change")
+                    else:
+                        if emit_changes and hash_budget_deadline and time.time() <= hash_budget_deadline:
+                            if self._should_verify_hash(file_key, stat, now):
+                                changed = False
+                                try:
+                                    record = self.services.provider.get_file_by_path(str(file_path), as_model=False)
+                                    db_hash = (
+                                        record.get("content_hash")
+                                        if isinstance(record, dict)
+                                        else None
+                                    )
+                                    if db_hash:
+                                        cur_hash = compute_file_hash(file_path)
+                                        if cur_hash and cur_hash != db_hash:
+                                            changed = True
+                                except Exception:
+                                    changed = False
+                                self._poll_hash_checked[file_key] = time.time()
+                                if changed:
+                                    logger.debug(f"Polling detected content change: {file_path}")
+                                    self._debug(f"polling detected content change: {file_path}")
+                                    await self.add_file(file_path, priority="change")
+                except (OSError, PermissionError, FileNotFoundError):
+                    continue
+
+                files_checked += 1
+                if files_checked % 200 == 0:
+                    await asyncio.sleep(0)
+
+            # Check for deleted files
+            if emit_changes:
+                deleted_keys = set(self._poll_state.keys()) - set(current_state.keys())
+                for file_key in deleted_keys:
+                    file_path = Path(file_key)
+                    logger.debug(f"Polling detected deleted file: {file_path}")
+                    await self.remove_file(file_path)
+                    self._debug(f"polling detected deleted file: {file_path}")
+                    self._poll_hash_checked.pop(file_key, None)
+            else:
+                deleted_keys = set()
+
+            self._poll_state = current_state
+            if deleted_keys:
+                # Drop stale hash checks for deleted files
+                for file_key in deleted_keys:
+                    self._poll_hash_checked.pop(file_key, None)
+            if self._poll_hash_checked:
+                self._poll_hash_checked = {
+                    k: v for k, v in self._poll_hash_checked.items() if k in current_state
+                }
+
+    async def _wait_for_file_stability(
+        self, file_path: Path, max_wait_ms: int = 2000, interval_ms: int = 200
+    ) -> bool:
+        """Wait briefly for file mtime/size to stabilize; return True if stable."""
+        deadline = time.time() + (max_wait_ms / 1000.0)
+        last_state: tuple[int, int] | None = None
+
+        while time.time() < deadline:
+            try:
+                stat = file_path.stat()
+            except FileNotFoundError:
+                return False
+
+            state = (stat.st_mtime_ns, stat.st_size)
+            if last_state is not None and state == last_state:
+                return True
+            last_state = state
+            await asyncio.sleep(interval_ms / 1000.0)
+
+        # If still changing, treat as unstable
+        return False
 
     async def wait_for_monitoring_ready(self, timeout: float = 10.0) -> bool:
         """Wait for filesystem monitoring to be ready."""

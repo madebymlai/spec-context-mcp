@@ -5,7 +5,7 @@
  * - Auto-starts ChunkHound HTTP server if not running
  * - Uses deterministic port based on project path (allows multiple projects)
  * - Multiple Claude sessions share the same server per project
- * - Falls back to stdio mode if HTTP fails
+ * - Uses HTTP/SSE only (no stdio fallback)
  */
 
 import { spawn, ChildProcess } from 'child_process';
@@ -27,7 +27,6 @@ const PORT_RANGE_SIZE = 1000;
 export interface ChunkHoundConfig {
     pythonPath: string;
     voyageaiApiKey?: string;
-    preferHttp?: boolean;  // Default true - use HTTP mode for multi-session support
 }
 
 export interface SearchArgs {
@@ -100,6 +99,7 @@ class SseClient {
     private eventSource: EventSource | null = null;
     private connected = false;
     private connectPromise: Promise<void> | null = null;
+    private readonly connectTimeoutMs = 10000;
 
     constructor(port: number) {
         this.port = port;
@@ -109,14 +109,56 @@ class SseClient {
         if (this.connected) return;
         if (this.connectPromise) return this.connectPromise;
 
-        this.connectPromise = this._connect();
+        this.connectPromise = this._connect().catch((err) => {
+            this.connectPromise = null;
+            throw err;
+        });
         return this.connectPromise;
+    }
+
+    private clearConnectionState(clearPromise = true): void {
+        this.eventSource?.close();
+        this.eventSource = null;
+        this.connected = false;
+        this.messageEndpoint = null;
+        if (clearPromise) {
+            this.connectPromise = null;
+        }
+    }
+
+    private rejectPending(error: Error): void {
+        for (const [id, { reject }] of this.pendingRequests) {
+            reject(error);
+        }
+        this.pendingRequests.clear();
+    }
+
+    private handleDisconnect(error: Error): void {
+        this.clearConnectionState(true);
+        this.rejectPending(error);
     }
 
     private async _connect(): Promise<void> {
         return new Promise((resolve, reject) => {
             const url = `http://localhost:${this.port}/sse`;
             console.error(`[SSE Client] Connecting to ${url}`);
+
+            let settled = false;
+            const safeResolve = () => {
+                if (settled) return;
+                settled = true;
+                resolve();
+            };
+            const safeReject = (error: Error) => {
+                if (settled) return;
+                settled = true;
+                reject(error);
+            };
+
+            if (this.pendingRequests.size > 0) {
+                this.rejectPending(new Error('SSE reconnecting'));
+            }
+            this.clearConnectionState(false);
 
             // Use native EventSource
             this.eventSource = new EventSource(url);
@@ -127,9 +169,13 @@ class SseClient {
 
             this.eventSource.onerror = (err: Event) => {
                 console.error('[SSE Client] Connection error:', err);
+                const error = new Error('SSE connection failed');
                 if (!this.connected) {
-                    reject(new Error('SSE connection failed'));
+                    this.handleDisconnect(error);
+                    safeReject(error);
+                    return;
                 }
+                this.handleDisconnect(error);
             };
 
             // @ts-ignore - EventSource types are limited
@@ -138,7 +184,7 @@ class SseClient {
                 this.messageEndpoint = `http://localhost:${this.port}${event.data}`;
                 console.error(`[SSE Client] Message endpoint: ${this.messageEndpoint}`);
                 this.connected = true;
-                resolve();
+                safeResolve();
             });
 
             this.eventSource.onmessage = (event: MessageEvent) => {
@@ -163,10 +209,11 @@ class SseClient {
             // Timeout after 10 seconds
             setTimeout(() => {
                 if (!this.connected) {
-                    this.eventSource?.close();
-                    reject(new Error('SSE connection timeout'));
+                    const error = new Error('SSE connection timeout');
+                    this.handleDisconnect(error);
+                    safeReject(error);
                 }
-            }, 10000);
+            }, this.connectTimeoutMs);
         });
     }
 
@@ -186,13 +233,22 @@ class SseClient {
         return new Promise((resolve, reject) => {
             this.pendingRequests.set(id, { resolve, reject });
 
+            const postTimeoutMs = Math.min(10000, timeoutMs);
+            const controller = new AbortController();
+            const postTimeout = setTimeout(() => controller.abort(), postTimeoutMs);
+
             fetch(this.messageEndpoint!, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(request),
+                signal: controller.signal,
             }).catch(err => {
                 this.pendingRequests.delete(id);
-                reject(err);
+                const error = err instanceof Error ? err : new Error('SSE request failed');
+                this.handleDisconnect(error);
+                reject(error);
+            }).finally(() => {
+                clearTimeout(postTimeout);
             });
 
             setTimeout(() => {
@@ -205,16 +261,7 @@ class SseClient {
     }
 
     close(): void {
-        this.eventSource?.close();
-        this.eventSource = null;
-        this.connected = false;
-        this.connectPromise = null;
-        this.messageEndpoint = null;
-
-        for (const [id, { reject }] of this.pendingRequests) {
-            reject(new Error('Connection closed'));
-        }
-        this.pendingRequests.clear();
+        this.handleDisconnect(new Error('Connection closed'));
     }
 
     isConnected(): boolean {
@@ -248,7 +295,11 @@ export class ChunkHoundBridge extends EventEmitter {
     private initialized = false;
     private initPromise: Promise<void> | null = null;
     private scanComplete = false;
-    private useHttpMode = false;
+    private lastScanStatusCheck = 0;
+    private readonly scanStatusCheckIntervalMs = 5000;
+    private httpStartPromise: Promise<void> | null = null;
+    private httpInitPromise: Promise<void> | null = null;
+    private reconnectPromise: Promise<void> | null = null;
 
     constructor(config: ChunkHoundConfig, projectPath: string) {
         super();
@@ -266,65 +317,88 @@ export class ChunkHoundBridge extends EventEmitter {
             return this.initPromise;
         }
 
-        this.initPromise = this._start();
+        this.initPromise = this._start().catch(err => {
+            this.initialized = false;
+            this.initPromise = null;
+            throw err;
+        });
         return this.initPromise;
     }
 
     private async _start(): Promise<void> {
         // Ensure .chunkhound.json exists
         await this.ensureConfig();
+        await this.ensureHttpConnected();
+        this.initialized = true;
+        console.error('[ChunkHound Bridge] Connected via HTTP');
+    }
 
-        // Try HTTP mode first (preferred for multi-session)
-        if (this.config.preferHttp !== false) {
-            const httpSuccess = await this.tryHttpMode();
-            if (httpSuccess) {
-                this.useHttpMode = true;
-                this.initialized = true;
-                console.error('[ChunkHound Bridge] Connected via HTTP');
+    /**
+     * Ensure HTTP server is running and SSE connection initialized.
+     */
+    private async ensureHttpConnected(): Promise<void> {
+        const client = getSseClient(this.port);
+        if (client.isConnected() && this.initialized) {
+            return;
+        }
+
+        if (this.httpInitPromise) {
+            return this.httpInitPromise;
+        }
+
+        this.httpInitPromise = (async () => {
+            await this.ensureHttpServerReady(30000);
+            await this.initializeHttp();
+            this.initialized = true;
+        })().finally(() => {
+            this.httpInitPromise = null;
+        });
+
+        return this.httpInitPromise;
+    }
+
+    /**
+     * Ensure HTTP server is healthy, starting it if needed.
+     */
+    private async ensureHttpServerReady(timeoutMs: number): Promise<void> {
+        if (await isServerRunning(this.port)) {
+            console.error(`[ChunkHound Bridge] Server already running on port ${this.port}`);
+            await this.checkScanStatus();
+            return;
+        }
+
+        console.error(`[ChunkHound Bridge] Starting HTTP server on port ${this.port}...`);
+        await this.startHttpServerOnce();
+
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            if (await isServerRunning(this.port)) {
+                await this.checkScanStatus();
                 return;
             }
         }
 
-        // Fall back to stdio mode
-        console.error('[ChunkHound Bridge] Falling back to stdio mode');
-        await this.startStdioServer();
-        this.initialized = true;
+        throw new Error('ChunkHound HTTP server failed to start in time');
     }
 
-    /**
-     * Try to connect via HTTP, starting server if needed
-     */
-    private async tryHttpMode(): Promise<boolean> {
-        // Check if server is already running
-        if (await isServerRunning(this.port)) {
-            console.error(`[ChunkHound Bridge] Server already running on port ${this.port}`);
-            // Check if scan is complete via health endpoint
-            await this.checkScanStatus();
-            await this.initializeHttp();
-            return true;
+    private async startHttpServerOnce(): Promise<void> {
+        if (this.httpStartPromise) {
+            return this.httpStartPromise;
         }
 
-        // Try to start the HTTP server
-        console.error(`[ChunkHound Bridge] Starting HTTP server on port ${this.port}...`);
-
-        try {
-            await this.startHttpServer();
-
-            // Wait for server to be ready (up to 30 seconds)
-            for (let i = 0; i < 60; i++) {
-                await new Promise(resolve => setTimeout(resolve, 500));
-                if (await isServerRunning(this.port)) {
-                    await this.initializeHttp();
-                    return true;
-                }
+        this.httpStartPromise = (async () => {
+            try {
+                await this.startHttpServer();
+            } catch (err) {
+                this.httpStartPromise = null;
+                throw err;
             }
+        })().finally(() => {
+            this.httpStartPromise = null;
+        });
 
-            console.error('[ChunkHound Bridge] HTTP server failed to start in time');
-            return false;
-        } catch (err) {
-            console.error('[ChunkHound Bridge] Failed to start HTTP server:', err);
-            return false;
-        }
+        return this.httpStartPromise;
     }
 
     /**
@@ -375,18 +449,25 @@ export class ChunkHoundBridge extends EventEmitter {
      */
     private async initializeHttp(): Promise<void> {
         const client = getSseClient(this.port);
-        await client.connect();
+        try {
+            await client.connect();
 
-        const response = await client.sendRequest('initialize', {
-            protocolVersion: '2024-11-05',
-            capabilities: {},
-            clientInfo: {
-                name: 'spec-context-mcp',
-                version: '1.0.0',
-            },
-        });
+            const response = await client.sendRequest('initialize', {
+                protocolVersion: '2024-11-05',
+                capabilities: {},
+                clientInfo: {
+                    name: 'spec-context-mcp',
+                    version: '1.0.0',
+                },
+            });
 
-        console.error('[ChunkHound Bridge] SSE initialized:', JSON.stringify(response));
+            console.error('[ChunkHound Bridge] SSE initialized:', JSON.stringify(response));
+            await this.waitForHealthReady(10000);
+        } catch (err) {
+            client.close();
+            this.initialized = false;
+            throw err;
+        }
 
         // Note: notifications/initialized doesn't need a response, skip it for SSE
         // The server is already initialized at this point
@@ -465,7 +546,7 @@ export class ChunkHoundBridge extends EventEmitter {
     }
 
     /**
-     * Start the MCP server subprocess (stdio mode fallback)
+     * Legacy stdio mode (no longer used)
      */
     private async startStdioServer(): Promise<void> {
         const pythonPath = this.config.pythonPath;
@@ -563,7 +644,7 @@ export class ChunkHoundBridge extends EventEmitter {
     /**
      * Send a JSON-RPC request (stdio mode)
      */
-    private async sendStdioRequest(method: string, params?: unknown): Promise<unknown> {
+    private async sendStdioRequest(method: string, params?: unknown, timeoutMs = 120000): Promise<unknown> {
         if (!this.process?.stdin) {
             throw new Error('ChunkHound process not running');
         }
@@ -587,7 +668,7 @@ export class ChunkHoundBridge extends EventEmitter {
                     this.pendingRequests.delete(id);
                     reject(new Error(`Request ${method} timed out`));
                 }
-            }, 120000);
+            }, timeoutMs);
         });
     }
 
@@ -610,32 +691,40 @@ export class ChunkHoundBridge extends EventEmitter {
     }
 
     /**
-     * Send request using appropriate transport
+     * Send request over HTTP/SSE transport
      */
-    private async sendRequest(method: string, params?: unknown): Promise<unknown> {
-        if (this.useHttpMode) {
-            const client = getSseClient(this.port);
-            return client.sendRequest(method, params);
-        } else {
-            return this.sendStdioRequest(method, params);
-        }
+    private async sendRequest(method: string, params?: unknown, timeoutMs = 120000): Promise<unknown> {
+        const client = getSseClient(this.port);
+        return client.sendRequest(method, params, timeoutMs);
     }
 
     /**
      * Call a ChunkHound tool
      */
-    async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    async callTool(name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
         if (!this.initialized) {
             await this.start();
+        } else {
+            await this.ensureHttpConnected();
         }
 
+        try {
+            return await this.callToolOnce(name, args, timeoutMs);
+        } catch (err) {
+            console.error(`[ChunkHound Bridge] Tool ${name} failed; reconnecting and retrying...`, err);
+            await this.recoverHttpTransport(err);
+            return this.callToolOnce(name, args, timeoutMs);
+        }
+    }
+
+    private async callToolOnce(name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
         console.error(`[ChunkHound Bridge] Calling tool: ${name}`);
         const startTime = Date.now();
 
         const response = await this.sendRequest('tools/call', {
             name,
             arguments: args,
-        }) as { content?: Array<{ type: string; text: string }> };
+        }, timeoutMs) as { content?: Array<{ type: string; text: string }> };
 
         console.error(`[ChunkHound Bridge] Tool ${name} completed in ${Date.now() - startTime}ms`);
 
@@ -643,7 +732,35 @@ export class ChunkHoundBridge extends EventEmitter {
             const textContent = response.content.find(c => c.type === 'text');
             if (textContent?.text) {
                 try {
-                    return JSON.parse(textContent.text);
+                    const parsed = JSON.parse(textContent.text) as any;
+
+                    // Retry once if SSE server received request before initialization
+                    if (
+                        parsed &&
+                        (parsed.error?.message?.includes('Received request before initialization') ||
+                            parsed.error?.includes?.('Invalid request parameters') ||
+                            (parsed.success === false && typeof parsed.error === 'string' &&
+                                parsed.error.includes('Invalid request parameters')))
+                    ) {
+                        console.error('[ChunkHound Bridge] Server not initialized; waiting for health and retrying...');
+                        await this.waitForHealthReady(10000);
+                        const retryResponse = await this.sendRequest('tools/call', {
+                            name,
+                            arguments: args,
+                        }, timeoutMs) as { content?: Array<{ type: string; text: string }> };
+
+                        const retryText = retryResponse?.content?.find(c => c.type === 'text')?.text;
+                        if (retryText) {
+                            try {
+                                return JSON.parse(retryText);
+                            } catch {
+                                return retryText;
+                            }
+                        }
+                        return retryResponse;
+                    }
+
+                    return parsed;
                 } catch {
                     return textContent.text;
                 }
@@ -653,11 +770,90 @@ export class ChunkHoundBridge extends EventEmitter {
         return response;
     }
 
+    private async recoverHttpTransport(reason: unknown): Promise<void> {
+        if (this.reconnectPromise) {
+            return this.reconnectPromise;
+        }
+
+        this.reconnectPromise = (async () => {
+            const message = reason instanceof Error ? reason.message : String(reason);
+            console.error(`[ChunkHound Bridge] Reconnecting HTTP transport after error: ${message}`);
+            const client = getSseClient(this.port);
+            client.close();
+            this.initialized = false;
+            this.initPromise = null;
+            this.httpInitPromise = null;
+            await this.ensureHttpConnected();
+        })().finally(() => {
+            this.reconnectPromise = null;
+        });
+
+        return this.reconnectPromise;
+    }
+
+    /**
+     * Wait until SSE server health reports initialized or timeout.
+     */
+    private async waitForHealthReady(timeoutMs: number): Promise<void> {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            try {
+                const response = await fetch(`http://localhost:${this.port}/health`, {
+                    signal: AbortSignal.timeout(2000),
+                });
+                if (response.ok) {
+                    const health = await response.json() as { initialized?: boolean; scan_progress?: { scan_completed_at?: string } };
+                    if (health.initialized) {
+                        if (health.scan_progress?.scan_completed_at) {
+                            this.scanComplete = true;
+                        }
+                        return;
+                    }
+                }
+            } catch {
+                // Ignore and retry
+            }
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+    }
+
+    /**
+     * Refresh scan status from health endpoint.
+     */
+    private async refreshScanStatus(): Promise<void> {
+        if (this.scanComplete) {
+            return;
+        }
+
+        const now = Date.now();
+        if (now - this.lastScanStatusCheck < this.scanStatusCheckIntervalMs) {
+            return;
+        }
+        this.lastScanStatusCheck = now;
+
+        try {
+            const response = await fetch(`http://localhost:${this.port}/health`, {
+                signal: AbortSignal.timeout(2000),
+            });
+            if (response.ok) {
+                const health = await response.json() as { scan_progress?: { scan_completed_at?: string } };
+                if (health.scan_progress?.scan_completed_at) {
+                    this.scanComplete = true;
+                }
+            }
+        } catch {
+            // Ignore health check failures; we'll retry later
+        }
+    }
+
     /**
      * Search code using ChunkHound
      */
     async search(args: SearchArgs): Promise<unknown> {
+        await this.waitForHealthReady(10000);
         const result = await this.callTool('search', args as unknown as Record<string, unknown>);
+
+        await this.refreshScanStatus();
 
         if (!this.scanComplete) {
             const warning = '⚠ INDEXING IN PROGRESS: ChunkHound is indexing files in the background. ' +
@@ -676,32 +872,28 @@ export class ChunkHoundBridge extends EventEmitter {
      * Research code using ChunkHound
      */
     async codeResearch(args: CodeResearchArgs): Promise<unknown> {
-        return this.callTool('code_research', args as unknown as Record<string, unknown>);
+        const timeoutMs = 180000; // 3 minutes
+        return this.callTool('code_research', args as unknown as Record<string, unknown>, timeoutMs);
     }
 
     /**
-     * Stop the ChunkHound subprocess (only affects stdio mode)
+     * Stop the bridge connection
      * HTTP servers are left running for other sessions
      */
     stop(): void {
-        if (this.process && !this.useHttpMode) {
-            this.process.kill();
-            this.process = null;
-        }
+        getSseClient(this.port).close();
+        this.process = null;
         this.initialized = false;
         this.initPromise = null;
+        this.httpInitPromise = null;
+        this.reconnectPromise = null;
     }
 
     /**
      * Check if bridge is healthy
      */
     isHealthy(): boolean {
-        if (this.useHttpMode) {
-            // For HTTP mode, we're healthy if initialized
-            // The server runs independently
-            return this.initialized;
-        }
-        return this.process !== null && this.initialized;
+        return this.initialized && getSseClient(this.port).isConnected();
     }
 
     /**
@@ -760,7 +952,6 @@ export function getChunkHoundBridge(projectPath?: string): ChunkHoundBridge {
     const config: ChunkHoundConfig = {
         pythonPath: process.env.CHUNKHOUND_PYTHON || defaultPython,
         voyageaiApiKey: process.env.VOYAGEAI_API_KEY,
-        preferHttp: true,  // Default to HTTP mode for multi-session support
     };
 
     const bridge = new ChunkHoundBridge(config, resolvedPath);
