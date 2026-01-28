@@ -42,13 +42,13 @@ function copyDir(src, dest) {
   }
 }
 
-// Copy markdown directory
-const markdownSrc = path.join(__dirname, '..', 'src', 'markdown');
-const markdownDest = path.join(__dirname, '..', 'dist', 'markdown');
+// Copy templates directory
+const templatesSrc = path.join(__dirname, '..', 'src', 'templates');
+const templatesDest = path.join(__dirname, '..', 'dist', 'templates');
 
-if (fs.existsSync(markdownSrc)) {
-  copyDir(markdownSrc, markdownDest);
-  console.log('✓ Copied markdown files');
+if (fs.existsSync(templatesSrc)) {
+  copyDir(templatesSrc, templatesDest);
+  console.log('✓ Copied template files');
 }
 
 // Copy locales directory

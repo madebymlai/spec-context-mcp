@@ -277,6 +277,7 @@ class RealtimeIndexingService:
         self.pending_files: set[Path] = set()
         self.failed_files: set[str] = set()
         self.dirty_files: set[Path] = set()
+        self._pending_embed_files: set[str] = set()
 
         # Simple debouncing for rapid file changes
         self._pending_debounce: dict[str, float] = {}  # file_path -> timestamp
@@ -308,6 +309,17 @@ class RealtimeIndexingService:
         if self._periodic_sweep_interval_s < 0:
             self._periodic_sweep_interval_s = 0.0
         self._periodic_sweep_enabled = self._periodic_sweep_interval_s > 0
+
+        self._embed_sweep_interval_s = 0.0
+        try:
+            self._embed_sweep_interval_s = float(
+                os.getenv("CHUNKHOUND_EMBED_SWEEP_SECONDS", "300")
+            )
+        except Exception:
+            self._embed_sweep_interval_s = 300.0
+        if self._embed_sweep_interval_s < 0:
+            self._embed_sweep_interval_s = 0.0
+        self._embed_sweep_enabled = self._embed_sweep_interval_s > 0
 
         self._poll_verify_hash = _parse_bool(
             os.getenv("CHUNKHOUND_POLL_VERIFY_HASH"),
@@ -356,6 +368,7 @@ class RealtimeIndexingService:
         self._polling_lock = asyncio.Lock()
         self._health_task: asyncio.Task | None = None
         self._periodic_sweep_task: asyncio.Task | None = None
+        self._embed_sweep_task: asyncio.Task | None = None
 
         # Directory watch management for progressive monitoring
         self.watched_directories: set[str] = set()  # Track watched dirs
@@ -402,6 +415,8 @@ class RealtimeIndexingService:
         self._health_task = asyncio.create_task(self._monitor_health())
         if self._periodic_sweep_enabled:
             self._periodic_sweep_task = asyncio.create_task(self._periodic_sweep())
+        if self._embed_sweep_enabled:
+            self._embed_sweep_task = asyncio.create_task(self._periodic_embedding_sweep())
 
         # Setup watchdog with timeout
         self._watchdog_setup_task = asyncio.create_task(
@@ -475,6 +490,13 @@ class RealtimeIndexingService:
             self._periodic_sweep_task.cancel()
             try:
                 await self._periodic_sweep_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._embed_sweep_task:
+            self._embed_sweep_task.cancel()
+            try:
+                await self._embed_sweep_task
             except asyncio.CancelledError:
                 pass
 
@@ -639,6 +661,19 @@ class RealtimeIndexingService:
             except Exception as e:
                 logger.warning(f"Periodic sweep error: {e}")
 
+    async def _periodic_embedding_sweep(self) -> None:
+        """Periodically generate missing embeddings as a safety net."""
+        while True:
+            try:
+                await asyncio.sleep(self._embed_sweep_interval_s)
+                if not self.services or not hasattr(self.services, "indexing_coordinator"):
+                    continue
+                await self.services.indexing_coordinator.generate_missing_embeddings()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Periodic embedding sweep error: {e}")
+
     async def _polling_monitor(self, watch_path: Path) -> None:
         """Simple polling monitor for large directories."""
         logger.debug(f"Starting polling monitor for {watch_path}")
@@ -663,6 +698,20 @@ class RealtimeIndexingService:
 
     async def add_file(self, file_path: Path, priority: str = "change") -> None:
         """Add file to processing queue with deduplication and debouncing."""
+        if priority == "embed":
+            file_key = str(file_path)
+            if file_key in self._pending_embed_files:
+                self._debug(f"skipping duplicate embed for {file_path}")
+                return
+            if file_path in self.pending_files:
+                # Avoid pinning embed requests while a change is pending.
+                self._debug(f"skipping embed while pending change for {file_path}")
+                return
+            self._pending_embed_files.add(file_key)
+            self.pending_files.add(file_path)
+            await self.file_queue.put((priority, file_path))
+            self._debug(f"queued {file_path} priority={priority}")
+            return
         if file_path in self.pending_files:
             if priority == "change":
                 # Mark dirty so we reprocess after the current pass
@@ -890,6 +939,25 @@ class RealtimeIndexingService:
         except Exception as e:
             logger.error(f"Error indexing new directory {dir_path}: {e}")
 
+    async def _embed_missing_for_file(self, file_path: Path) -> None:
+        """Generate missing embeddings for a single file."""
+        try:
+            if not self.services or not hasattr(self.services, "embedding_service"):
+                return
+            base_dir = None
+            if hasattr(self.services.provider, "get_base_directory"):
+                base_dir = self.services.provider.get_base_directory()
+            try:
+                rel_path = normalize_path_for_lookup(file_path, base_dir)
+            except Exception:
+                rel_path = file_path.as_posix().lstrip("/")
+
+            await self.services.embedding_service.generate_missing_embeddings_for_file(
+                rel_path
+            )
+        except Exception as e:
+            logger.warning(f"Embedding generation failed for {file_path}: {e}")
+
     async def _process_loop(self) -> None:
         """Main processing loop - simple and robust."""
         logger.debug("Starting processing loop")
@@ -924,9 +992,13 @@ class RealtimeIndexingService:
                 # without re-parsing the file. Keeps the loop snappy and avoids diffing.
                 if priority == "embed":
                     try:
-                        await self.services.indexing_coordinator.generate_missing_embeddings()
+                        await self._embed_missing_for_file(file_path)
                     except Exception as e:
-                        logger.warning(f"Embedding generation failed in realtime (embed pass): {e}")
+                        logger.warning(
+                            f"Embedding generation failed in realtime (embed pass): {e}"
+                        )
+                    finally:
+                        self._pending_embed_files.discard(str(file_path))
                     continue
 
                 embed_now = self._realtime_embed_immediate

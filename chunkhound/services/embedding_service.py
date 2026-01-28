@@ -1,6 +1,7 @@
 """Embedding service for ChunkHound - manages embedding generation and caching."""
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -8,6 +9,7 @@ from rich.progress import Progress, TaskID
 
 from chunkhound.core.types.common import ChunkId
 from chunkhound.core.utils import estimate_tokens
+from chunkhound.core.utils.path_utils import normalize_path_for_lookup
 from chunkhound.interfaces.database_provider import DatabaseProvider
 from chunkhound.interfaces.embedding_provider import EmbeddingProvider
 
@@ -235,6 +237,87 @@ class EmbeddingService(BaseService):
             logger.error(f"Failed to generate missing embeddings: {e}")
             return {"status": "error", "error": str(e), "generated": 0}
 
+    async def generate_missing_embeddings_for_file(
+        self, file_path: str
+    ) -> dict[str, Any]:
+        """Generate embeddings for missing chunks in a single file.
+
+        Args:
+            file_path: File path (absolute or relative) to embed chunks for
+
+        Returns:
+            Dictionary with generation statistics
+        """
+        if not self._embedding_provider:
+            return {
+                "status": "error",
+                "error": "No embedding provider configured",
+                "generated": 0,
+            }
+
+        normalized_path = self._normalize_file_path(file_path)
+        file_record = self._db.get_file_by_path(normalized_path, as_model=False)
+        if not file_record:
+            return {
+                "status": "complete",
+                "generated": 0,
+                "message": "File not indexed",
+            }
+
+        file_id = file_record.get("id") if isinstance(file_record, dict) else file_record.id
+        if file_id is None:
+            return {"status": "error", "error": "Missing file id", "generated": 0}
+
+        chunks = self._db.get_chunks_by_file_id(file_id, as_model=False)
+        if not chunks:
+            return {
+                "status": "complete",
+                "generated": 0,
+                "message": "No chunks found",
+            }
+
+        # Normalize chunk payloads for embedding
+        from chunkhound.core.utils.chunk_utils import get_chunk_id
+
+        chunk_ids: list[ChunkId] = []
+        chunk_texts: list[str] = []
+        for chunk in chunks:
+            chunk_id = get_chunk_id(chunk)
+            if chunk_id is None:
+                continue
+            if isinstance(chunk, dict):
+                text = chunk.get("code", chunk.get("content", ""))
+            else:
+                text = getattr(chunk, "code", "")
+            chunk_ids.append(ChunkId(int(chunk_id)))
+            chunk_texts.append(text)
+
+        if not chunk_ids:
+            return {
+                "status": "complete",
+                "generated": 0,
+                "message": "No chunk IDs found",
+            }
+
+        generated_count = await self.generate_embeddings_for_chunks(
+            chunk_ids, chunk_texts, show_progress=False
+        )
+
+        if generated_count == 0:
+            return {
+                "status": "complete",
+                "generated": 0,
+                "message": "All chunks have embeddings",
+            }
+
+        return {
+            "status": "success",
+            "generated": generated_count,
+            "total_chunks": len(chunk_ids),
+            "provider": self._embedding_provider.name,
+            "model": self._embedding_provider.model,
+        }
+
     async def regenerate_embeddings(
         self, file_path: str | None = None, chunk_ids: list[ChunkId] | None = None
     ) -> dict[str, Any]:
@@ -304,6 +387,20 @@ class EmbeddingService(BaseService):
         except Exception as e:
             logger.error(f"Failed to regenerate embeddings: {e}")
             return {"status": "error", "error": str(e), "regenerated": 0}
+
+    def _normalize_file_path(self, file_path: str) -> str:
+        """Normalize file path for database lookup."""
+        try:
+            base_dir = (
+                self._db.get_base_directory()
+                if hasattr(self._db, "get_base_directory")
+                else None
+            )
+            if base_dir:
+                return normalize_path_for_lookup(file_path, base_dir)
+        except Exception:
+            pass
+        return Path(file_path).as_posix()
 
     def get_embedding_stats(self) -> dict[str, Any]:
         """Get statistics about embeddings in the database.

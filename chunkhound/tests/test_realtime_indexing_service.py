@@ -55,6 +55,7 @@ if not _MISSING_MODULES:
 
         async def add_file(self, file_path: Path, priority: str = "change") -> None:
             self.added.append((Path(file_path), priority))
+            await super().add_file(file_path, priority=priority)
 
         async def remove_file(self, file_path: Path) -> None:
             self.removed.append(Path(file_path))
@@ -141,3 +142,17 @@ class RealtimeIndexingPollingTests(unittest.IsolatedAsyncioTestCase):
         await writer_task
 
         self.assertFalse(stable)
+
+    async def test_embed_dedupe_does_not_pin_when_pending_change(self) -> None:
+        file_path = self.root / "embed.py"
+        file_path.write_text("print('embed')\n")
+
+        # Simulate pending change in-flight
+        self.service.pending_files.add(file_path)
+
+        # Embed request should be skipped without pinning
+        await self.service.add_file(file_path, priority="embed")
+
+        self.assertNotIn(str(file_path), self.service._pending_embed_files)
+        # Ensure no embed task was queued
+        self.assertTrue(self.service.file_queue.empty())

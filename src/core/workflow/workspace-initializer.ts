@@ -65,7 +65,7 @@ export class WorkspaceInitializer {
     const targetFileName = `${templateName}.md`;
     const targetPath = join(targetDir, targetFileName);
     
-    const sourcePath = join(__dirname, '..', 'markdown', 'templates', `${templateName}.md`);
+    const sourcePath = join(__dirname, '..', '..', 'templates', `${templateName}.md`);
     
     try {
       const content = await fs.readFile(sourcePath, 'utf-8');

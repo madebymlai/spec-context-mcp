@@ -52,6 +52,7 @@ Add to your Claude Code config (`.mcp.json` in project root):
 | `EMBEDDING_MODEL`     | No       | Model for embeddings (default: `qwen/qwen3-embedding-8b`) |
 | `EMBEDDING_DIMENSION` | No       | Vector dimension (default: `4096`)                        |
 | `QDRANT_API_KEY`      | No       | Qdrant API key if auth enabled                            |
+| `CHUNKHOUND_EMBED_SWEEP_SECONDS` | No | Periodic safety sweep for missing embeddings (default: `300`) |
 
 ## Tools
 
