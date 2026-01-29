@@ -4,25 +4,34 @@ import { validateConfig, createConfig } from './config.js';
 import { SpecContextServer } from './server.js';
 
 async function main(): Promise<void> {
+    const args = process.argv.slice(2);
+
     // Check for help flag
-    if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    if (args.includes('--help') || args.includes('-h')) {
         console.log(`
 spec-context-mcp - Unified MCP server for semantic code search
 
 Usage: spec-context-mcp [options]
+       spec-context-mcp doctor
+
 
 Options:
   --help, -h    Show this help message
+  --doctor      Run preflight checks (alias: doctor)
 
 Environment Variables:
-  OPENROUTER_API_KEY  (required) Your OpenRouter API key
-  QDRANT_URL          (required) Qdrant server URL (e.g., http://localhost:6333)
-  EMBEDDING_MODEL     Embedding model (default: qwen/qwen3-embedding-8b)
-  EMBEDDING_DIMENSION Vector dimension (default: 4096)
-  QDRANT_API_KEY      Qdrant API key if authentication enabled
+  EMBEDDING_PROVIDER  Embedding provider (default: voyageai)
+  EMBEDDING_API_KEY   API key for embedding provider (required for hosted providers)
+  EMBEDDING_MODEL     Embedding model name (provider-specific)
+  EMBEDDING_BASE_URL  Base URL for embedding API (optional)
+  VOYAGEAI_API_KEY    Alias for EMBEDDING_API_KEY when provider=voyageai
+  OPENAI_API_KEY      Alias for EMBEDDING_API_KEY when provider=openai
+  CHUNKHOUND_PYTHON   Python executable for ChunkHound (default: python3)
+  DASHBOARD_URL       Dashboard URL shown in prompts (default: http://localhost:3000)
+  OPENROUTER_API_KEY  Required only for dashboard AI review
 
 Example:
-  OPENROUTER_API_KEY=sk-or-xxx QDRANT_URL=http://localhost:6333 spec-context-mcp
+  EMBEDDING_PROVIDER=voyageai EMBEDDING_API_KEY=sk-embed-xxx spec-context-mcp
 
 For Claude Desktop, add to your config:
   {
@@ -31,14 +40,23 @@ For Claude Desktop, add to your config:
         "command": "npx",
         "args": ["spec-context-mcp"],
         "env": {
-          "OPENROUTER_API_KEY": "sk-or-xxx",
-          "QDRANT_URL": "http://localhost:6333"
+          "EMBEDDING_PROVIDER": "voyageai",
+          "EMBEDDING_API_KEY": "sk-embed-xxx",
+          "EMBEDDING_MODEL": "voyage-code-3",
+          "CHUNKHOUND_PYTHON": "python3",
+          "DASHBOARD_URL": "http://localhost:3000"
         }
       }
     }
   }
 `);
         process.exit(0);
+    }
+
+    if (args.includes('doctor') || args.includes('--doctor')) {
+        const { runDoctor } = await import('./doctor.js');
+        const exitCode = await runDoctor();
+        process.exit(exitCode);
     }
 
     // Validate configuration

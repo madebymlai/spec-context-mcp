@@ -1,6 +1,7 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.js';
+import { resolveDashboardUrl } from '../../core/workflow/dashboard-url.js';
 
 /**
  * Safely translate a path, with defensive checks
@@ -90,7 +91,7 @@ export async function waitForApprovalHandler(
     const translatedPath = safeTranslatePath(validatedProjectPath);
 
     // Get dashboard URL from context
-    const dashboardUrl = context.dashboardUrl || 'http://localhost:3000';
+    const dashboardUrl = context.dashboardUrl || await resolveDashboardUrl();
 
     // We need to find the projectId for this project path
     // First, get the project list from the dashboard
@@ -98,7 +99,7 @@ export async function waitForApprovalHandler(
     if (!projectsResponse.ok) {
       return {
         success: false,
-        message: `Dashboard not available at ${dashboardUrl}. Please start dashboard with: spec-workflow-mcp --dashboard`
+        message: `Dashboard not available at ${dashboardUrl}. Please start dashboard with: spec-context-dashboard`
       };
     }
 
@@ -117,7 +118,7 @@ export async function waitForApprovalHandler(
         success: false,
         message: `Project not registered with dashboard. Path: ${validatedProjectPath}`,
         nextSteps: [
-          'Ensure dashboard is running: spec-workflow-mcp --dashboard',
+          'Ensure dashboard is running: spec-context-dashboard',
           'The MCP server should auto-register on startup'
         ]
       };

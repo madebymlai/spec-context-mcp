@@ -8,7 +8,7 @@ import { promises as fs } from 'fs';
 import { fileURLToPath } from 'url';
 import open from 'open';
 import { WebSocket } from 'ws';
-import { validateAndCheckPort, DASHBOARD_TEST_MESSAGE } from './utils.js';
+import { validateAndCheckPort, DASHBOARD_HEALTH_MESSAGE } from './utils.js';
 import { parseTasksFromMarkdown } from '../core/workflow/task-parser.js';
 import { ProjectManager } from './project-manager.js';
 import { JobScheduler } from './job-scheduler.js';
@@ -108,22 +108,41 @@ export class MultiProjectDashboardServer {
     console.error(`   - Allowed Origins: ${this.securityConfig.allowedOrigins.join(', ')}`);
     console.error('');
 
-    // Fetch package version once at startup
-    try {
-      const response = await fetch('https://registry.npmjs.org/@pimzino/spec-workflow-mcp/latest');
-      if (response.ok) {
-        const packageInfo = await response.json() as { version?: string };
-        this.packageVersion = packageInfo.version || 'unknown';
-      }
-    } catch {
-      // Fallback to local package.json version if npm request fails
+    // Fetch package version once at startup (can be disabled via env)
+    const disableVersionCheck = ['1', 'true', 'yes']
+      .includes((process.env.SPEC_CONTEXT_DISABLE_VERSION_CHECK || '').trim().toLowerCase());
+    const loadLocalVersion = async (): Promise<string | null> => {
       try {
         const packageJsonPath = join(__dirname, '..', '..', 'package.json');
         const packageJsonContent = await readFile(packageJsonPath, 'utf-8');
         const packageJson = JSON.parse(packageJsonContent) as { version?: string };
-        this.packageVersion = packageJson.version || 'unknown';
+        return packageJson.version || null;
       } catch {
-        // Keep default 'unknown' if both npm and local package.json fail
+        return null;
+      }
+    };
+
+    if (!disableVersionCheck) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+        const response = await fetch('https://registry.npmjs.org/spec-context-mcp/latest', {
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (response.ok) {
+          const packageInfo = await response.json() as { version?: string };
+          this.packageVersion = packageInfo.version || 'unknown';
+        }
+      } catch {
+        // Ignore network errors and fall back to local version.
+      }
+    }
+
+    if (this.packageVersion === 'unknown') {
+      const localVersion = await loadLocalVersion();
+      if (localVersion) {
+        this.packageVersion = localVersion;
       }
     }
 
@@ -389,9 +408,9 @@ export class MultiProjectDashboardServer {
   }
 
   private registerApiRoutes() {
-    // Health check / test endpoint (used by utils.ts to detect running dashboard)
-    this.app.get('/api/test', async () => {
-      return { message: DASHBOARD_TEST_MESSAGE };
+    // Health check endpoint (used by utils.ts to detect running dashboard)
+    this.app.get('/health', async () => {
+      return { message: DASHBOARD_HEALTH_MESSAGE };
     });
 
     // Projects list

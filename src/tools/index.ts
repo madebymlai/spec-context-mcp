@@ -1,5 +1,6 @@
-import type { ToolContext as WorkflowToolContext } from '../workflow-types.js';
+import type { ToolContext as WorkflowToolContext, ToolResponse } from '../workflow-types.js';
 import { getChunkHoundBridge, SearchArgs, CodeResearchArgs } from '../bridge/chunkhound-bridge.js';
+import { resolveDashboardUrl } from '../core/workflow/dashboard-url.js';
 
 // Workflow tools
 import {
@@ -50,7 +51,7 @@ TYPE SELECTION:
 WHEN TO USE: Quick lookup, finding references, exploring unfamiliar code.
 DO NOT USE: Multi-file architecture questions (use code_research instead).
 
-OUTPUT: {results: [{file_path, content, start_line, end_line}], pagination}
+OUTPUT: ToolResponse with data = {results: [{file_path, content, start_line, end_line}], pagination}
 COST: Fast, cheap - use liberally.`,
     inputSchema: {
         type: 'object',
@@ -97,7 +98,7 @@ DO NOT USE:
 - Simple pattern matching (use search with type="regex")
 - You already know where the code is (read files directly)
 
-OUTPUT: Comprehensive markdown with architecture overview, key locations, relationships.
+OUTPUT: ToolResponse with data = markdown string (architecture overview, key locations, relationships).
 COST: Expensive (LLM synthesis). 10-60s latency. One call often replaces 5-10 searches.
 
 ERROR RECOVERY: If incomplete, try narrower query or use path parameter to scope.`,
@@ -137,21 +138,32 @@ export async function handleToolCall(
     workflowContext?: WorkflowToolContext
 ): Promise<unknown> {
     // Create workflow context if not provided
-    const wfCtx: WorkflowToolContext = workflowContext || {
-        projectPath: (args.projectPath as string) || process.cwd(),
-        dashboardUrl: process.env.DASHBOARD_URL || 'http://localhost:3000',
+    const projectPath = (args.projectPath as string) || workflowContext?.projectPath || process.cwd();
+    const dashboardUrl = workflowContext?.dashboardUrl || await resolveDashboardUrl();
+    const wfCtx: WorkflowToolContext = {
+        ...workflowContext,
+        projectPath,
+        dashboardUrl,
     };
+
+    const buildSuccess = (message: string, data?: unknown): ToolResponse => ({
+        success: true,
+        message,
+        data,
+    });
 
     switch (name) {
         // ChunkHound context tools
         case 'search': {
             const bridge = getChunkHoundBridge(wfCtx.projectPath);
-            return bridge.search(args as unknown as SearchArgs);
+            const result = await bridge.search(args as unknown as SearchArgs);
+            return buildSuccess('Search completed', result);
         }
 
         case 'code_research': {
             const bridge = getChunkHoundBridge(wfCtx.projectPath);
-            return bridge.codeResearch(args as unknown as CodeResearchArgs);
+            const result = await bridge.codeResearch(args as unknown as CodeResearchArgs);
+            return buildSuccess('Code research completed', result);
         }
 
         // Workflow tools

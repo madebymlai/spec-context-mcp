@@ -12,7 +12,7 @@ describe('SpecWatcher Error Handling', () => {
 
   beforeEach(async () => {
     // Create a temporary test directory
-    testDir = join(tmpdir(), `spec-workflow-test-${Date.now()}`);
+    testDir = join(tmpdir(), `spec-context-test-${Date.now()}`);
     await fs.mkdir(testDir, { recursive: true });
     
     // Create the workflow directory structure

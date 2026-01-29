@@ -4,10 +4,10 @@ Unified MCP server combining semantic code search with spec-driven development w
 
 ## Features
 
-- **Semantic Code Search**: Index your codebase and search using natural language via Qdrant
+- **Semantic Code Search**: Index your codebase and search using natural language via ChunkHound (local index)
 - **Spec Workflow**: Requirements → Design → Tasks → Implementation with approval gates
 - **Dashboard UI**: Web interface for managing specs, approvals, and implementation logs
-- **Multi-Project Support**: Each project gets its own vector collection and spec directory
+- **Multi-Project Support**: Each project gets its own ChunkHound index and spec directory
 
 ## Installation
 
@@ -32,9 +32,11 @@ Add to your Claude Code config (`.mcp.json` in project root):
       "command": "npx",
       "args": ["spec-context-mcp"],
       "env": {
-        "OPENROUTER_API_KEY": "sk-or-xxx",
-        "QDRANT_URL": "http://localhost:6333",
-        "DASHBOARD_URL": "https://your-dashboard.example.com"
+        "EMBEDDING_PROVIDER": "voyageai",
+        "EMBEDDING_API_KEY": "sk-embed-xxx",
+        "EMBEDDING_MODEL": "voyage-code-3",
+        "CHUNKHOUND_PYTHON": "python3",
+        "DASHBOARD_URL": "http://localhost:3000"
       }
     }
   }
@@ -45,13 +47,21 @@ Add to your Claude Code config (`.mcp.json` in project root):
 
 | Variable              | Required | Description                                               |
 |-----------------------|----------|-----------------------------------------------------------|
-| `OPENROUTER_API_KEY`  | Yes      | OpenRouter API key for embeddings                         |
-| `QDRANT_URL`          | Yes      | Qdrant server URL                                         |
-| `DASHBOARD_URL`       | No       | Dashboard URL for remote registration                     |
-| `DASHBOARD_API_KEY`   | No       | API key for dashboard authentication                      |
-| `EMBEDDING_MODEL`     | No       | Model for embeddings (default: `qwen/qwen3-embedding-8b`) |
-| `EMBEDDING_DIMENSION` | No       | Vector dimension (default: `4096`)                        |
-| `QDRANT_API_KEY`      | No       | Qdrant API key if auth enabled                            |
+| `EMBEDDING_PROVIDER`  | No       | Embedding provider for ChunkHound (default: `voyageai`)                  |
+| `EMBEDDING_API_KEY`   | Conditional | API key for embedding provider (required for hosted providers)       |
+| `EMBEDDING_MODEL`     | No       | Embedding model name (provider-specific)                               |
+| `EMBEDDING_BASE_URL`  | No       | Base URL for embedding API (e.g., OpenAI-compatible endpoints)         |
+| `EMBEDDING_RERANK_MODEL` | No    | Reranking model name (enables multi-hop search)                        |
+| `EMBEDDING_RERANK_URL` | No     | Rerank endpoint URL (absolute or relative to base URL)                 |
+| `EMBEDDING_RERANK_FORMAT` | No  | Reranking API format (`auto`, `cohere`, `tei`)                         |
+| `EMBEDDING_RERANK_BATCH_SIZE` | No | Max docs per rerank batch                                            |
+| `EMBEDDING_DIMENSION` | No       | Optional; currently ignored (model defines dimensions)                 |
+| `VOYAGEAI_API_KEY`    | No       | Alias for `EMBEDDING_API_KEY` when provider is `voyageai`              |
+| `OPENAI_API_KEY`      | No       | Alias for `EMBEDDING_API_KEY` when provider is `openai`                |
+| `CHUNKHOUND_PYTHON`   | No       | Python executable for ChunkHound (default: `python3`)     |
+| `DASHBOARD_URL`       | No       | Dashboard URL shown in prompts (default: `http://localhost:3000`) |
+| `OPENROUTER_API_KEY`  | No       | Required only for dashboard AI review                     |
+| `SPEC_CONTEXT_DISABLE_VERSION_CHECK` | No | Disable dashboard startup version check (default: `false`) |
 | `CHUNKHOUND_EMBED_SWEEP_SECONDS` | No | Periodic safety sweep for missing embeddings (default: `300`) |
 | `CHUNKHOUND_EMBED_SWEEP_BACKOFF_SECONDS` | No | Skip sweep if recent per-file embeds occurred (default: `30`) |
 | `CHUNKHOUND_FILE_QUEUE_MAXSIZE` | No | Max realtime file queue size (default: `2000`, 0 = unbounded) |
@@ -95,8 +105,10 @@ MCP prompts available as slash commands in Claude Code:
 Run the dashboard server:
 
 ```bash
-npx spec-context-mcp dashboard --port 3000
+npx spec-context-dashboard --port 3000
 ```
+
+To skip the dashboard's startup version check, set `SPEC_CONTEXT_DISABLE_VERSION_CHECK=true`.
 
 The dashboard provides:
 - Project overview and stats
@@ -130,22 +142,16 @@ Each phase requires approval before proceeding. Documents are stored in:
     └── structure.md
 ```
 
-## Setting up Qdrant
+## Semantic Search Setup
 
-### Docker
+ChunkHound runs locally and stores its index in your project. No external vector
+database is required. To enable semantic search, set `EMBEDDING_PROVIDER` and
+`EMBEDDING_API_KEY` (or `VOYAGEAI_API_KEY` / `OPENAI_API_KEY`). If no embedding
+API key is set, regex search and workflow tools still work.
 
-```bash
-docker run -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
-```
-
-### With authentication
-
-```bash
-docker run -p 6333:6333 \
-  -e QDRANT__SERVICE__API_KEY=your-api-key \
-  -v qdrant_storage:/qdrant/storage \
-  qdrant/qdrant
-```
+You may also need Python 3.10+ available as `python3` (or set `CHUNKHOUND_PYTHON`).
+The default embedding provider is `voyageai`; set `EMBEDDING_PROVIDER=openai` and
+`EMBEDDING_BASE_URL` for OpenAI-compatible endpoints.
 
 ## Development
 
@@ -153,6 +159,14 @@ docker run -p 6333:6333 \
 npm install          # Install dependencies
 npm run build        # Build server and dashboard
 npm run dev          # Run in development mode
+```
+
+## Doctor
+
+Run a preflight check for Python, ChunkHound, embeddings, and dashboard connectivity:
+
+```bash
+npx spec-context-mcp doctor
 ```
 
 ## License

@@ -15,6 +15,7 @@ import * as crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
 import { EventSource } from 'eventsource';
+import { getPackageVersion } from '../core/workflow/constants.js';
 
 // ESM equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -457,7 +458,7 @@ export class ChunkHoundBridge extends EventEmitter {
                 capabilities: {},
                 clientInfo: {
                     name: 'spec-context-mcp',
-                    version: '1.0.0',
+                    version: getPackageVersion('1.0.0'),
                 },
             });
 
@@ -504,31 +505,81 @@ export class ChunkHoundBridge extends EventEmitter {
             return;
         }
 
-        // Try to get API key from: 1) constructor config, 2) env var, 3) spec-context-mcp's own config
-        let apiKey = this.config.voyageaiApiKey || process.env.VOYAGEAI_API_KEY || '';
+        const getEnv = (key: string): string | undefined => {
+            const value = process.env[key];
+            if (value === undefined) return undefined;
+            const trimmed = value.trim();
+            return trimmed.length ? trimmed : undefined;
+        };
+        const parseOptionalInt = (value: unknown): number | undefined => {
+            if (value === undefined || value === null || value === '') return undefined;
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+            return Math.floor(parsed);
+        };
 
-        if (!apiKey) {
-            // Fallback: read from spec-context-mcp's .chunkhound.json
-            const specContextRoot = path.resolve(__dirname, '..', '..');
-            const specContextConfig = path.join(specContextRoot, '.chunkhound.json');
-            if (fs.existsSync(specContextConfig)) {
-                try {
-                    const configData = JSON.parse(fs.readFileSync(specContextConfig, 'utf-8'));
-                    apiKey = configData?.embedding?.api_key || '';
-                    if (apiKey) {
-                        console.error('[ChunkHound Bridge] Using API key from spec-context-mcp config');
-                    }
-                } catch {
-                    // Ignore parse errors
+        const specContextRoot = path.resolve(__dirname, '..', '..');
+        const specContextConfig = path.join(specContextRoot, '.chunkhound.json');
+        let fallbackEmbedding: Record<string, any> = {};
+        if (fs.existsSync(specContextConfig)) {
+            try {
+                const configData = JSON.parse(fs.readFileSync(specContextConfig, 'utf-8'));
+                if (configData?.embedding && typeof configData.embedding === 'object') {
+                    fallbackEmbedding = configData.embedding;
                 }
+            } catch {
+                // Ignore parse errors
             }
         }
 
+        const envProvider = getEnv('EMBEDDING_PROVIDER') || getEnv('CHUNKHOUND_EMBEDDING__PROVIDER');
+        const envModel = getEnv('EMBEDDING_MODEL') || getEnv('CHUNKHOUND_EMBEDDING__MODEL');
+        const envApiKey = getEnv('EMBEDDING_API_KEY') || getEnv('CHUNKHOUND_EMBEDDING__API_KEY');
+        const envBaseUrl = getEnv('EMBEDDING_BASE_URL') || getEnv('CHUNKHOUND_EMBEDDING__BASE_URL');
+        const envRerankModel = getEnv('EMBEDDING_RERANK_MODEL') || getEnv('CHUNKHOUND_EMBEDDING__RERANK_MODEL');
+        const envRerankUrl = getEnv('EMBEDDING_RERANK_URL') || getEnv('CHUNKHOUND_EMBEDDING__RERANK_URL');
+        const envRerankFormat = getEnv('EMBEDDING_RERANK_FORMAT') || getEnv('CHUNKHOUND_EMBEDDING__RERANK_FORMAT');
+        const envRerankBatchSize = getEnv('EMBEDDING_RERANK_BATCH_SIZE') || getEnv('CHUNKHOUND_EMBEDDING__RERANK_BATCH_SIZE');
+        const envDimension = getEnv('EMBEDDING_DIMENSION') || getEnv('CHUNKHOUND_EMBEDDING__DIMENSION');
+
+        const voyageKey = this.config.voyageaiApiKey || getEnv('VOYAGEAI_API_KEY');
+        const openaiKey = getEnv('OPENAI_API_KEY');
+
+        const provider = envProvider || fallbackEmbedding.provider || (voyageKey ? 'voyageai' : 'openai');
+        let apiKey = envApiKey;
+        if (!apiKey) {
+            if (provider === 'voyageai') {
+                apiKey = voyageKey;
+            } else if (provider === 'openai') {
+                apiKey = openaiKey;
+            }
+        }
+        if (!apiKey && fallbackEmbedding.api_key) {
+            apiKey = fallbackEmbedding.api_key;
+        }
+
+        const model = envModel || fallbackEmbedding.model;
+        const baseUrl = envBaseUrl || fallbackEmbedding.base_url;
+        const rerankModel = envRerankModel || fallbackEmbedding.rerank_model;
+        const rerankUrl = envRerankUrl || fallbackEmbedding.rerank_url;
+        const rerankFormat = envRerankFormat || fallbackEmbedding.rerank_format;
+        const rerankBatchSize = parseOptionalInt(envRerankBatchSize ?? fallbackEmbedding.rerank_batch_size);
+        const embeddingDimensions = parseOptionalInt(envDimension);
+
+        const embeddingConfig: Record<string, any> = {
+            provider,
+        };
+        if (apiKey) embeddingConfig.api_key = apiKey;
+        if (model) embeddingConfig.model = model;
+        if (baseUrl) embeddingConfig.base_url = baseUrl;
+        if (rerankModel) embeddingConfig.rerank_model = rerankModel;
+        if (rerankUrl) embeddingConfig.rerank_url = rerankUrl;
+        if (rerankFormat) embeddingConfig.rerank_format = rerankFormat;
+        if (rerankBatchSize) embeddingConfig.rerank_batch_size = rerankBatchSize;
+        if (embeddingDimensions) embeddingConfig.dimensions = embeddingDimensions;
+
         const config = {
-            embedding: {
-                provider: 'voyageai',
-                api_key: apiKey,
-            },
+            embedding: embeddingConfig,
             llm: {
                 provider: 'claude-code-cli',
             },
@@ -537,8 +588,15 @@ export class ChunkHoundBridge extends EventEmitter {
             },
         };
 
+        if (envDimension && !embeddingDimensions) {
+            console.error('[ChunkHound Bridge] WARNING: EMBEDDING_DIMENSION is invalid and will be ignored.');
+        } else if (embeddingDimensions) {
+            console.error('[ChunkHound Bridge] NOTE: EMBEDDING_DIMENSION is currently ignored by ChunkHound (model defines dimensions).');
+        }
+
         if (!config.embedding.api_key) {
-            console.error('[ChunkHound Bridge] WARNING: VOYAGEAI_API_KEY not set. Semantic search will not work.');
+            console.error('[ChunkHound Bridge] WARNING: No embedding API key set. Semantic search may not work.');
+            console.error('[ChunkHound Bridge] Set EMBEDDING_API_KEY (or VOYAGEAI_API_KEY / OPENAI_API_KEY).');
         }
 
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
@@ -601,7 +659,7 @@ export class ChunkHoundBridge extends EventEmitter {
             capabilities: {},
             clientInfo: {
                 name: 'spec-context-mcp',
-                version: '1.0.0',
+                version: getPackageVersion('1.0.0'),
             },
         });
 

@@ -10,17 +10,17 @@ import { join, isAbsolute } from 'path';
  * 
  * @example
  * // Set to an absolute path
- * SPEC_WORKFLOW_HOME=/workspace/.spec-context-mcp npx spec-workflow-mcp /workspace
+ * SPEC_WORKFLOW_HOME=/workspace/.spec-context-mcp npx spec-context-mcp /workspace
  * 
  * // Set to a relative path (resolved against current working directory)
- * SPEC_WORKFLOW_HOME=./.spec-context-mcp npx spec-workflow-mcp /workspace
+ * SPEC_WORKFLOW_HOME=./.spec-context-mcp npx spec-context-mcp /workspace
  */
 export const SPEC_WORKFLOW_HOME_ENV = 'SPEC_WORKFLOW_HOME';
 
 const DEFAULT_DIR_NAME = '.spec-context-mcp';
 
 /**
- * Get the global directory path for storing spec-workflow-mcp state files.
+ * Get the global directory path for storing spec-context-mcp state files.
  * 
  * Resolution order:
  * 1. SPEC_WORKFLOW_HOME environment variable (if set)
@@ -66,15 +66,14 @@ This error typically occurs in sandboxed environments where $HOME is read-only.
 
 To fix this, set the SPEC_WORKFLOW_HOME environment variable to a writable location:
 
-  SPEC_WORKFLOW_HOME=/path/to/writable/dir npx spec-workflow-mcp [project-path]
+  SPEC_WORKFLOW_HOME=/path/to/writable/dir npx spec-context-mcp [project-path]
 
 For example, to store state files in your workspace:
 
-  SPEC_WORKFLOW_HOME=/workspace/.spec-context-mcp npx spec-workflow-mcp /workspace
+  SPEC_WORKFLOW_HOME=/workspace/.spec-context-mcp npx spec-context-mcp /workspace
 
 Or use a relative path:
 
-  SPEC_WORKFLOW_HOME=./.spec-context-mcp npx spec-workflow-mcp .
+  SPEC_WORKFLOW_HOME=./.spec-context-mcp npx spec-context-mcp .
 `.trim();
 }
-

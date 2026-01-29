@@ -1,6 +1,6 @@
 {
   "documentTitle": "{{projectName}} ダッシュボード",
-  "projectNameDefault": "スペックワークフロー",
+  "projectNameDefault": "Spec Context",
   "projectDescription": "開発ワークフローダッシュボード",
   "nav": {
     "statistics": "統計",

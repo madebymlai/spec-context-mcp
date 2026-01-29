@@ -1,7 +1,7 @@
 import { createServer } from 'net';
 
 // Dashboard constants
-export const DASHBOARD_TEST_MESSAGE = 'MCP Workflow Dashboard Online!';
+export const DASHBOARD_HEALTH_MESSAGE = 'MCP Workflow Dashboard Online!';
 
 async function isPortAvailable(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -68,7 +68,7 @@ export async function isSpecificPortAvailable(port: number, host: string): Promi
  */
 export async function checkExistingDashboard(port: number, host: string): Promise<boolean> {
   try {
-    const response = await fetch(`http://${host}:${port}/api/test`, {
+    const response = await fetch(`http://${host}:${port}/health`, {
       method: 'GET',
       signal: AbortSignal.timeout(1000) // 1 second timeout
     });
@@ -76,7 +76,7 @@ export async function checkExistingDashboard(port: number, host: string): Promis
     if (response.ok) {
       const data = await response.json() as { message?: string };
       // Check if it's actually our dashboard
-      return data.message === DASHBOARD_TEST_MESSAGE;
+      return data.message === DASHBOARD_HEALTH_MESSAGE;
     }
     return false;
   } catch {

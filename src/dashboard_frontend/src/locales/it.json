@@ -1,6 +1,6 @@
 {
   "documentTitle": "Dashboard {{projectName}}",
-  "projectNameDefault": "Spec Workflow",
+  "projectNameDefault": "Spec Context",
   "projectDescription": "Dashboard flusso di lavoro sviluppo",
   "nav": {
     "statistics": "Statistiche",

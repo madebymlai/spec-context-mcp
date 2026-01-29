@@ -164,7 +164,7 @@ function Header({ toggleSidebar }: { toggleSidebar: () => void }) {
                         className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors cursor-pointer"
                         title={t('changelog.viewChangelog', 'View changelog')}
                       >
-                        Spec-Workflow-MCP v{info.version}
+                        Spec-Context-MCP v{info.version}
                       </button>
                     </div>
                   </div>
@@ -288,5 +288,4 @@ export default function App() {
     </I18nErrorBoundary>
   );
 }
-
 

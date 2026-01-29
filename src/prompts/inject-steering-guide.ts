@@ -29,7 +29,7 @@ ${guide}
 
 **Current Context:**
 - Project: ${context.projectPath}
-${dashboardUrl ? `- Dashboard: ${dashboardUrl}` : '- Dashboard: Please start the dashboard or use VS Code extension "Spec Workflow MCP"'}
+${dashboardUrl ? `- Dashboard: ${dashboardUrl}` : '- Dashboard: Please start the dashboard or use VS Code extension "Spec Context MCP"'}
 
 **Next Steps:**
 ${nextSteps.map(step => `- ${step}`).join('\n')}

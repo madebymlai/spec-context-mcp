@@ -8,11 +8,13 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import type { SpecContextConfig } from './config.js';
+import type { ToolResponse, MCPToolResponse } from './workflow-types.js';
 import { getTools, handleToolCall } from './tools/index.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
 import { initChunkHoundBridge } from './bridge/chunkhound-bridge.js';
-
-const LOCAL_DASHBOARD_URL = 'http://127.0.0.1:3000';
+import { resolveDashboardUrl } from './core/workflow/dashboard-url.js';
+import { DEFAULT_DASHBOARD_URL } from './core/workflow/constants.js';
+import { toMCPResponse } from './workflow-types.js';
 
 export class SpecContextServer {
     private server: Server;
@@ -54,27 +56,14 @@ export class SpecContextServer {
                     args as Record<string, unknown>
                 );
 
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify(result, null, 2),
-                        },
-                    ],
-                };
+                return normalizeToolResult(result);
             } catch (error) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: error instanceof Error ? error.message : String(error),
-                            }),
-                        },
-                    ],
-                    isError: true,
+                const message = error instanceof Error ? error.message : String(error);
+                const errorResponse: ToolResponse = {
+                    success: false,
+                    message,
                 };
+                return toMCPResponse(errorResponse, true);
             }
         });
 
@@ -86,9 +75,12 @@ export class SpecContextServer {
         // Handle prompt requests
         this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
             const { name, arguments: args } = request.params;
+            const dashboardUrl = await resolveDashboardUrl({
+                defaultUrl: DEFAULT_DASHBOARD_URL,
+            });
             const context = {
                 projectPath: process.cwd(),
-                dashboardUrl: this.config.dashboardUrl,
+                dashboardUrl,
             };
             return handlePromptGet(name, args || {}, context);
         });
@@ -118,17 +110,53 @@ export class SpecContextServer {
         const projectPath = process.cwd();
 
         try {
-            const response = await fetch(`${LOCAL_DASHBOARD_URL}/api/projects/add`, {
+            const dashboardUrl = await resolveDashboardUrl({
+                defaultUrl: DEFAULT_DASHBOARD_URL,
+            });
+            const response = await fetch(`${dashboardUrl}/api/projects/add`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ projectPath }),
             });
 
             if (response.ok) {
-                console.error(`[${this.config.name}] Registered with local dashboard`);
+                console.error(`[${this.config.name}] Registered with dashboard at ${dashboardUrl}`);
             }
         } catch {
             // Dashboard not running - that's fine
         }
     }
+}
+
+function isMCPToolResponse(value: unknown): value is MCPToolResponse {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+    const candidate = value as MCPToolResponse;
+    return Array.isArray(candidate.content);
+}
+
+function isToolResponse(value: unknown): value is ToolResponse {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+    const candidate = value as ToolResponse;
+    return typeof candidate.success === 'boolean' && typeof candidate.message === 'string';
+}
+
+function normalizeToolResult(result: unknown): MCPToolResponse {
+    if (isMCPToolResponse(result)) {
+        return result;
+    }
+    if (isToolResponse(result)) {
+        return toMCPResponse(result);
+    }
+    return {
+        content: [
+            {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+            },
+        ],
+    };
 }

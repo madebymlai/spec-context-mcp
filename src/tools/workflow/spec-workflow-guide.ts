@@ -20,7 +20,7 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
   // Dashboard URL is populated from registry in server.ts
   const dashboardMessage = context.dashboardUrl ?
     `Monitor progress on dashboard: ${context.dashboardUrl}` :
-    'Please start the dashboard with: spec-workflow-mcp --dashboard';
+    'Please start the dashboard with: spec-context-dashboard';
 
   // Read steering docs if they exist
   const steeringContent = getSteeringDocsContent(context.projectPath);

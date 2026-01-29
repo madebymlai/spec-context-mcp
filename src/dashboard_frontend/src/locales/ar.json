@@ -1,6 +1,6 @@
 {
   "documentTitle": "لوحة تحكم {{projectName}}",
-  "projectNameDefault": "Spec Workflow",
+  "projectNameDefault": "Spec Context",
   "projectDescription": "لوحة تحكم سير عمل التطوير",
   "nav": {
     "statistics": "الإحصائيات",

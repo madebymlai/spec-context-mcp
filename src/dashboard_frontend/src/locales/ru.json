@@ -1,6 +1,6 @@
 {
   "documentTitle": "{{projectName}} Панель управления",
-  "projectNameDefault": "Spec Workflow",
+  "projectNameDefault": "Spec Context",
   "projectDescription": "Панель управления рабочим процессом разработки",
   "nav": {
     "statistics": "Статистика",

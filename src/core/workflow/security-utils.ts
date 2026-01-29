@@ -7,9 +7,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { writeFile, appendFile, mkdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { SecurityConfig } from '../../workflow-types.js';
-
-// Default port for the dashboard
-export const DEFAULT_DASHBOARD_PORT = 5000;
+import { DEFAULT_DASHBOARD_PORT } from './constants.js';
 
 // Default security configuration (secure by default)
 // Note: allowedOrigins should be dynamically generated based on the actual port
@@ -299,4 +297,3 @@ export function getCorsConfig(config: SecurityConfig) {
     allowedHeaders: ['Content-Type']
   };
 }
-

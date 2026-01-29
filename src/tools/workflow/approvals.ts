@@ -21,7 +21,7 @@ function safeTranslatePath(path: string): string {
     throw new Error(
       `PathUtils.translatePath is not available (got ${typeof PathUtils?.translatePath}). ` +
       'This may indicate a module loading issue. Please reinstall the package with: ' +
-      'npm uninstall @pimzino/spec-workflow-mcp && npm install @pimzino/spec-workflow-mcp'
+      'npm uninstall spec-context-mcp && npm install spec-context-mcp'
     );
   }
   return PathUtils.translatePath(path);
@@ -240,7 +240,7 @@ async function handleRequestApproval(
           `NEXT: Call wait-for-approval approvalId:"${existingApproval.id}"`,
           'This will block until user approves/rejects/requests-revision',
           'Auto-cleanup happens on resolution',
-          context.dashboardUrl ? `Dashboard: ${context.dashboardUrl}` : 'Start dashboard: spec-workflow-mcp --dashboard'
+          context.dashboardUrl ? `Dashboard: ${context.dashboardUrl}` : 'Start dashboard: spec-context-dashboard'
         ],
         projectContext: {
           projectPath: validatedProjectPath,
@@ -321,7 +321,7 @@ async function handleRequestApproval(
         `NEXT: Call wait-for-approval approvalId:"${approvalId}"`,
         'This will block until user approves/rejects/requests-revision',
         'Auto-cleanup happens on resolution',
-        context.dashboardUrl ? `Dashboard: ${context.dashboardUrl}` : 'Start dashboard: spec-workflow-mcp --dashboard'
+        context.dashboardUrl ? `Dashboard: ${context.dashboardUrl}` : 'Start dashboard: spec-context-dashboard'
       ],
       projectContext: {
         projectPath: validatedProjectPath,

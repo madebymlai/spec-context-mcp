@@ -83,7 +83,7 @@ export class WorkspaceInitializer {
 
     const readmeContent = `# User Templates
 
-This directory allows you to create custom templates that override the default Spec Workflow templates.
+This directory allows you to create custom templates that override the default Spec Context templates.
 
 ## How to Use Custom Templates
 

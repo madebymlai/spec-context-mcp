@@ -3,8 +3,7 @@
 import 'dotenv/config';
 import { MultiProjectDashboardServer } from './multi-server.js';
 import { DashboardSessionManager } from '../core/workflow/dashboard-session.js';
-
-const DEFAULT_DASHBOARD_PORT = 3000;
+import { DEFAULT_DASHBOARD_PORT } from '../core/workflow/constants.js';
 
 function showHelp() {
   console.error(`
