@@ -48,7 +48,7 @@ This replaces the need to manually poll with approvals action:"status" and manua
       },
       timeoutMs: {
         type: 'number',
-        description: 'Maximum time to wait in milliseconds (default: 300000 = 5 minutes, max: 600000 = 10 minutes)'
+        description: 'Maximum time to wait in milliseconds (default: 600000 = 10 minutes, max: 1800000 = 30 minutes)'
       },
       autoDelete: {
         type: 'boolean',
@@ -124,7 +124,7 @@ export async function waitForApprovalHandler(
     }
 
     // Build wait endpoint URL
-    const timeoutMs = Math.min(args.timeoutMs || 300000, 600000);
+    const timeoutMs = Math.min(args.timeoutMs || 600000, 1800000);
     const autoDelete = args.autoDelete !== false;
     const waitUrl = `${dashboardUrl}/api/projects/${project.projectId}/approvals/${args.approvalId}/wait?timeout=${timeoutMs}&autoDelete=${autoDelete}`;
 

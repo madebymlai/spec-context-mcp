@@ -702,7 +702,7 @@ export class MultiProjectDashboardServer {
         return reply.code(404).send({ error: 'Project not found' });
       }
 
-      const timeoutMs = Math.min(parseInt(timeout || '300000', 10), 600000); // Max 10 minutes
+      const timeoutMs = Math.min(parseInt(timeout || '600000', 10), 1800000); // Default 10 minutes, max 30 minutes
       const shouldAutoDelete = autoDelete !== 'false'; // Default true
 
       // Check current status first
