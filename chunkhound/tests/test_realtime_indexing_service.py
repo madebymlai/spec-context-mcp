@@ -183,3 +183,18 @@ class RealtimeIndexingPollingTests(unittest.IsolatedAsyncioTestCase):
         queued_priority, queued_path = service.file_queue.get_nowait()
         self.assertEqual(queued_priority, "scan")
         self.assertEqual(queued_path, file_b)
+
+    async def test_overflow_without_drain_clears_pending(self) -> None:
+        os.environ["CHUNKHOUND_FILE_QUEUE_MAXSIZE"] = "1"
+        os.environ["CHUNKHOUND_FILE_QUEUE_DRAIN_SECONDS"] = "0"
+        service = _TrackingRealtimeIndexingService(self.config)
+        file_a = self.root / "c.py"
+        file_b = self.root / "d.py"
+        file_a.write_text("print('c')\n")
+        file_b.write_text("print('d')\n")
+
+        await service.add_file(file_a, priority="scan")
+        await service.add_file(file_b, priority="scan")
+
+        self.assertNotIn(file_b, service.pending_files)
+        self.assertNotIn(str(file_b), service._overflow_pending_files)

@@ -1026,6 +1026,8 @@ class RealtimeIndexingService:
         return 2 if priority == "change" else 1 if priority == "scan" else 0
 
     def _record_overflow_pending(self, priority: str, file_path: Path) -> None:
+        if self._overflow_drain_interval_s <= 0:
+            return
         if priority == "embed":
             return
         key = str(file_path)
@@ -1075,7 +1077,10 @@ class RealtimeIndexingService:
         except asyncio.QueueFull:
             logger.warning(f"File queue full; dropping {priority} for {file_path}")
             self._debug(f"file queue full; dropping {priority} for {file_path}")
-            self._record_overflow_pending(priority, file_path)
+            if self._overflow_drain_interval_s > 0:
+                self._record_overflow_pending(priority, file_path)
+            else:
+                self.pending_files.discard(file_path)
             self._handle_queue_overflow(priority, file_path)
             return False
 
