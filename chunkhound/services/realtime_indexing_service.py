@@ -347,6 +347,16 @@ class RealtimeIndexingService:
         self._last_embed_activity_time = 0.0
         self._last_embed_sweep_time = 0.0
 
+        self._overflow_drain_interval_s = 0.0
+        try:
+            self._overflow_drain_interval_s = float(
+                os.getenv("CHUNKHOUND_FILE_QUEUE_DRAIN_SECONDS", "1.0")
+            )
+        except Exception:
+            self._overflow_drain_interval_s = 1.0
+        if self._overflow_drain_interval_s < 0:
+            self._overflow_drain_interval_s = 0.0
+
         self._poll_verify_hash = _parse_bool(
             os.getenv("CHUNKHOUND_POLL_VERIFY_HASH"),
             default=True,
@@ -395,6 +405,7 @@ class RealtimeIndexingService:
         self._health_task: asyncio.Task | None = None
         self._periodic_sweep_task: asyncio.Task | None = None
         self._embed_sweep_task: asyncio.Task | None = None
+        self._overflow_drain_task: asyncio.Task | None = None
 
         # Directory watch management for progressive monitoring
         self.watched_directories: set[str] = set()  # Track watched dirs
@@ -412,6 +423,7 @@ class RealtimeIndexingService:
         self._overflow_task: asyncio.Task | None = None
         self._last_overflow_time = 0.0
         self._overflow_debounce_seconds = 2.0
+        self._overflow_pending_files: dict[str, tuple[Path, str]] = {}
 
     # Internal helper to forward realtime events into the MCP debug log file
     def _debug(self, message: str) -> None:
@@ -443,6 +455,8 @@ class RealtimeIndexingService:
             self._periodic_sweep_task = asyncio.create_task(self._periodic_sweep())
         if self._embed_sweep_enabled:
             self._embed_sweep_task = asyncio.create_task(self._periodic_embedding_sweep())
+        if self._overflow_drain_interval_s > 0:
+            self._overflow_drain_task = asyncio.create_task(self._drain_overflow_loop())
 
         # Setup watchdog with timeout
         self._watchdog_setup_task = asyncio.create_task(
@@ -523,6 +537,13 @@ class RealtimeIndexingService:
             self._embed_sweep_task.cancel()
             try:
                 await self._embed_sweep_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._overflow_drain_task:
+            self._overflow_drain_task.cancel()
+            try:
+                await self._overflow_drain_task
             except asyncio.CancelledError:
                 pass
 
@@ -788,8 +809,7 @@ class RealtimeIndexingService:
                     self._debug(f"queued (debounced) {file_path} priority={priority}")
             else:
                 # Priority scan events bypass debouncing
-                if not self._queue_file(priority, file_path):
-                    self.pending_files.discard(file_path)
+                self._queue_file(priority, file_path)
 
     async def _debounced_add_file(self, file_path: Path, priority: str) -> None:
         """Process file after debounce delay."""
@@ -805,8 +825,6 @@ class RealtimeIndexingService:
                 if self._queue_file(priority, file_path):
                     logger.debug(f"Processing debounced file: {file_path}")
                     self._debug(f"processing debounced file: {file_path}")
-                else:
-                    self.pending_files.discard(file_path)
 
     async def _consume_events(self) -> None:
         """Simple event consumer - pure asyncio queue."""
@@ -1004,6 +1022,50 @@ class RealtimeIndexingService:
         except Exception as e:
             logger.warning(f"Embedding generation failed for {file_path}: {e}")
 
+    def _priority_rank(self, priority: str) -> int:
+        return 2 if priority == "change" else 1 if priority == "scan" else 0
+
+    def _record_overflow_pending(self, priority: str, file_path: Path) -> None:
+        if priority == "embed":
+            return
+        key = str(file_path)
+        existing = self._overflow_pending_files.get(key)
+        if existing:
+            _, existing_priority = existing
+            if self._priority_rank(priority) <= self._priority_rank(existing_priority):
+                return
+        self._overflow_pending_files[key] = (file_path, priority)
+
+    async def _drain_overflow_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(self._overflow_drain_interval_s)
+                await self._drain_overflow_pending_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Overflow drain error: {e}")
+
+    async def _drain_overflow_pending_once(self) -> int:
+        if not self._overflow_pending_files:
+            return 0
+        if self.file_queue.full():
+            return 0
+        drained = 0
+        for key, (path, priority) in list(self._overflow_pending_files.items()):
+            if self.file_queue.full():
+                break
+            if path not in self.pending_files:
+                self.pending_files.add(path)
+            try:
+                self.file_queue.put_nowait((priority, path))
+                self._debug(f"drained overflow {path} priority={priority}")
+                self._overflow_pending_files.pop(key, None)
+                drained += 1
+            except asyncio.QueueFull:
+                break
+        return drained
+
     def _queue_file(self, priority: str, file_path: Path) -> bool:
         """Queue a file for processing; schedule sweep if queue is full."""
         try:
@@ -1013,6 +1075,7 @@ class RealtimeIndexingService:
         except asyncio.QueueFull:
             logger.warning(f"File queue full; dropping {priority} for {file_path}")
             self._debug(f"file queue full; dropping {priority} for {file_path}")
+            self._record_overflow_pending(priority, file_path)
             self._handle_queue_overflow(priority, file_path)
             return False
 

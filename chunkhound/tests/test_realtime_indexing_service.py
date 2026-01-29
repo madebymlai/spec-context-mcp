@@ -72,6 +72,7 @@ class RealtimeIndexingPollingTests(unittest.IsolatedAsyncioTestCase):
             self.skipTest(
                 f"Missing python deps ({missing}); install chunkhound requirements to run this test."
             )
+        self._original_env = os.environ.copy()
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.config = _FakeConfig(self.root)
@@ -79,6 +80,8 @@ class RealtimeIndexingPollingTests(unittest.IsolatedAsyncioTestCase):
         self.service.watch_path = self.root
 
     async def asyncTearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._original_env)
         self.temp_dir.cleanup()
 
     async def test_polling_detects_modified_files(self) -> None:
@@ -156,3 +159,27 @@ class RealtimeIndexingPollingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(str(file_path), self.service._pending_embed_files)
         # Ensure no embed task was queued
         self.assertTrue(self.service.file_queue.empty())
+
+    async def test_overflow_pending_drains_to_queue(self) -> None:
+        os.environ["CHUNKHOUND_FILE_QUEUE_MAXSIZE"] = "1"
+        service = _TrackingRealtimeIndexingService(self.config)
+        file_a = self.root / "a.py"
+        file_b = self.root / "b.py"
+        file_a.write_text("print('a')\n")
+        file_b.write_text("print('b')\n")
+
+        await service.add_file(file_a, priority="scan")
+        await service.add_file(file_b, priority="scan")
+
+        self.assertIn(str(file_b), service._overflow_pending_files)
+
+        # Simulate processing the first item
+        service.file_queue.get_nowait()
+        service.pending_files.discard(file_a)
+
+        drained = await service._drain_overflow_pending_once()
+        self.assertGreaterEqual(drained, 1)
+        self.assertNotIn(str(file_b), service._overflow_pending_files)
+        queued_priority, queued_path = service.file_queue.get_nowait()
+        self.assertEqual(queued_priority, "scan")
+        self.assertEqual(queued_path, file_b)

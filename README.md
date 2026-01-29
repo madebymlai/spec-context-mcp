@@ -55,6 +55,7 @@ Add to your Claude Code config (`.mcp.json` in project root):
 | `CHUNKHOUND_EMBED_SWEEP_SECONDS` | No | Periodic safety sweep for missing embeddings (default: `300`) |
 | `CHUNKHOUND_EMBED_SWEEP_BACKOFF_SECONDS` | No | Skip sweep if recent per-file embeds occurred (default: `30`) |
 | `CHUNKHOUND_FILE_QUEUE_MAXSIZE` | No | Max realtime file queue size (default: `2000`, 0 = unbounded) |
+| `CHUNKHOUND_FILE_QUEUE_DRAIN_SECONDS` | No | Interval to drain overflowed file queue entries (default: `1.0`) |
 
 ## Tools
 
