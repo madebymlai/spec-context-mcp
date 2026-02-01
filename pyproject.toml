@@ -13,7 +13,7 @@ dependencies = [
     "openai>=1.0.0",
     "packaging>=21.0",
     "aiohttp>=3.12.15",
-    "rapidyaml @ git+https://github.com/biojppm/rapidyaml.git@v0.10.0",
+    "rapidyaml @ git+https://github.com/biojppm/rapidyaml.git@653eac9741c7728f2a87435b981737894149e002",
     "tree-sitter>=0.25.0",
     "tree-sitter-python>=0.25.0",
     "tree-sitter-markdown>=0.5.1",

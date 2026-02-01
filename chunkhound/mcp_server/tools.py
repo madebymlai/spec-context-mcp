@@ -25,7 +25,7 @@ from chunkhound.llm_manager import LLMManager
 from chunkhound.services.research.factory import ResearchServiceFactory
 
 # Response size limits (tokens)
-MAX_RESPONSE_TOKENS = 20000
+MAX_RESPONSE_TOKENS = 8000
 MIN_RESPONSE_TOKENS = 1000
 MAX_ALLOWED_TOKENS = 25000
 
@@ -471,7 +471,7 @@ async def search_impl(
         )
     else:  # regex
         # Perform regex search
-        results, pagination = services.search_service.search_regex(
+        results, pagination = await services.search_service.search_regex_async(
             pattern=query,
             page_size=page_size,
             offset=offset,

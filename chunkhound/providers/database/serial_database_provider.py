@@ -253,6 +253,81 @@ class SerialDatabaseProvider(ABC):
             path_filter,
         )
 
+    async def search_semantic_async(
+        self,
+        query_embedding: list[float],
+        provider: str,
+        model: str,
+        page_size: int = 10,
+        offset: int = 0,
+        threshold: float | None = None,
+        path_filter: str | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Perform semantic vector search if supported (asynchronous).
+
+        This method avoids blocking the event loop while waiting on the serialized
+        DB thread, which is critical for responsive MCP SSE transport.
+        """
+        if not hasattr(self, "_executor_search_semantic"):
+            return [], {"error": "Semantic search not supported by this provider"}
+
+        return await self._execute_in_db_thread(
+            "search_semantic",
+            query_embedding,
+            provider,
+            model,
+            page_size,
+            offset,
+            threshold,
+            path_filter,
+        )
+
+    async def find_similar_chunks_async(
+        self,
+        chunk_id: int,
+        provider: str,
+        model: str,
+        limit: int = 10,
+        threshold: float | None = None,
+        path_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Find chunks similar to the given chunk (asynchronous)."""
+        if not hasattr(self, "_executor_find_similar_chunks"):
+            return []
+
+        return await self._execute_in_db_thread(
+            "find_similar_chunks",
+            chunk_id,
+            provider,
+            model,
+            limit,
+            threshold,
+            path_filter,
+        )
+
+    async def search_by_embedding_async(
+        self,
+        query_embedding: list[float],
+        provider: str,
+        model: str,
+        limit: int = 10,
+        threshold: float | None = None,
+        path_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Find chunks similar to the given embedding vector (asynchronous)."""
+        if not hasattr(self, "_executor_search_by_embedding"):
+            return []
+
+        return await self._execute_in_db_thread(
+            "search_by_embedding",
+            query_embedding,
+            provider,
+            model,
+            limit,
+            threshold,
+            path_filter,
+        )
+
     def search_regex(
         self,
         pattern: str,

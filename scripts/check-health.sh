@@ -4,9 +4,9 @@ set -euo pipefail
 PROJECT_PATH="${1:-$(pwd)}"
 
 PORT=$(python3 - "$PROJECT_PATH" <<'PY'
-import hashlib, sys
-path = sys.argv[1]
-md5 = hashlib.md5(path.encode()).hexdigest()
+import hashlib, os, sys
+path = os.path.realpath(sys.argv[1])
+md5 = hashlib.md5(path.encode("utf-8")).hexdigest()
 port = 31000 + (int(md5[:8], 16) % 1000)
 print(port)
 PY

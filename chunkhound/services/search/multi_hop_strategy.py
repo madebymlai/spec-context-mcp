@@ -19,6 +19,7 @@ Best for:
 - Cases where initial HNSW results miss relevant context
 """
 
+import asyncio
 import time
 from typing import Any
 
@@ -209,14 +210,25 @@ class MultiHopStrategy:
                         if self._config and self._config.exhaustive_mode
                         else NEIGHBORS_PER_CANDIDATE_NORMAL
                     )
-                    neighbors = self._db.find_similar_chunks(
-                        chunk_id=candidate["chunk_id"],
-                        provider=provider,
-                        model=model,
-                        limit=neighbor_limit,
-                        threshold=None,
-                        path_filter=path_filter,
-                    )
+                    if hasattr(self._db, "find_similar_chunks_async"):
+                        neighbors = await self._db.find_similar_chunks_async(
+                            chunk_id=candidate["chunk_id"],
+                            provider=provider,
+                            model=model,
+                            limit=neighbor_limit,
+                            threshold=None,
+                            path_filter=path_filter,
+                        )
+                    else:
+                        neighbors = await asyncio.to_thread(
+                            self._db.find_similar_chunks,
+                            chunk_id=candidate["chunk_id"],
+                            provider=provider,
+                            model=model,
+                            limit=neighbor_limit,
+                            threshold=None,
+                            path_filter=path_filter,
+                        )
 
                     # Filter out already seen chunks
                     for neighbor in neighbors:

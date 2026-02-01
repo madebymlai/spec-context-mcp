@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { resolveDashboardUrl } from './core/workflow/dashboard-url.js';
 import { DEFAULT_DASHBOARD_URL } from './core/workflow/constants.js';
 
@@ -93,11 +94,14 @@ function formatStatus(status: 'ok' | 'warn' | 'fail'): string {
 
 export async function runDoctor(): Promise<number> {
   const results: CheckResult[] = [];
-  const pythonPath = process.env.CHUNKHOUND_PYTHON || 'python3';
 
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
   const repoRoot = resolve(__dirname, '..');
+  const projectRoot = process.cwd();
+  const venvPython = resolve(repoRoot, '.venv', 'bin', 'python');
+  const defaultPython = existsSync(venvPython) ? venvPython : 'python3';
+  const pythonPath = process.env.CHUNKHOUND_PYTHON || defaultPython;
 
   const pythonVersionResult = await runCommand(
     pythonPath,
@@ -165,6 +169,112 @@ export async function runDoctor(): Promise<number> {
         hint: 'Ensure Python dependencies are installed (see pyproject.toml).',
       });
     }
+
+    const rapidYamlCheck = await runCommand(
+      pythonPath,
+      [
+        '-c',
+        [
+          'import json, re',
+          'import importlib.metadata as m',
+          'try:',
+          '  import ryml',
+          'except Exception as e:',
+          '  print(json.dumps({\"ok\": False, \"error\": str(e)}))',
+          '  raise SystemExit(0)',
+          'dist = None',
+          'try:',
+          '  dist = m.version(\"rapidyaml\")',
+          'except Exception:',
+          '  dist = None',
+          'mod = getattr(ryml, \"__version__\", None) or dist',
+          'def parse(v):',
+          '  if not v: return None',
+          '  m_ = re.match(r\"^(\\d+)\\.(\\d+)\\.(\\d+)\", str(v))',
+          '  return tuple(int(x) for x in m_.groups()) if m_ else None',
+          'required = (0, 10, 0)',
+          'ver = parse(mod)',
+          'missing = [a for a in (\"Tree\", \"walk\", \"parse_in_place\", \"emit_yaml\") if not hasattr(ryml, a)]',
+          'print(json.dumps({\"ok\": True, \"dist\": dist, \"module\": mod, \"ver\": ver, \"required\": required, \"missing\": missing}))',
+        ].join('\n'),
+      ],
+      { timeoutMs: 8000 }
+    );
+
+    if (!rapidYamlCheck.ok) {
+      results.push({
+        name: 'RapidYAML (ryml)',
+        status: 'warn',
+        details: `Unable to run RapidYAML check with ${pythonPath}.`,
+        hint:
+          'Install rapidyaml>=0.10.0 from the git tag v0.10.0 (PyPI currently ships an older build).',
+      });
+    } else {
+      try {
+        const parsed = JSON.parse((rapidYamlCheck.stdout || rapidYamlCheck.stderr).trim()) as {
+          ok: boolean;
+          error?: string;
+          dist?: string | null;
+          module?: string | null;
+          ver?: [number, number, number] | null;
+          required?: [number, number, number];
+          missing?: string[];
+        };
+
+        if (!parsed.ok) {
+          results.push({
+            name: 'RapidYAML (ryml)',
+            status: 'warn',
+            details: `ryml import failed: ${parsed.error || 'unknown error'}`,
+            hint:
+              'Install: pip install \"rapidyaml @ git+https://github.com/biojppm/rapidyaml.git@v0.10.0\"',
+          });
+        } else if (parsed.missing && parsed.missing.length > 0) {
+          results.push({
+            name: 'RapidYAML (ryml)',
+            status: 'warn',
+            details: `ryml is installed but missing API: ${parsed.missing.join(', ')}`,
+            hint:
+              'This usually means an old rapidyaml build is installed. Install from git tag v0.10.0.',
+          });
+        } else if (parsed.ver && parsed.required) {
+          const [a, b, c] = parsed.ver;
+          const [ra, rb, rc] = parsed.required;
+          const tooOld = a < ra || (a === ra && (b < rb || (b === rb && c < rc)));
+          if (tooOld) {
+            results.push({
+              name: 'RapidYAML (ryml)',
+              status: 'warn',
+              details: `rapidyaml ${parsed.module || parsed.dist || 'unknown'} detected (requires >= 0.10.0).`,
+              hint:
+                'Install: pip install \"rapidyaml @ git+https://github.com/biojppm/rapidyaml.git@v0.10.0\"',
+            });
+          } else {
+            results.push({
+              name: 'RapidYAML (ryml)',
+              status: 'ok',
+              details: `rapidyaml ${parsed.module || parsed.dist || 'unknown'} detected.`,
+            });
+          }
+        } else {
+          results.push({
+            name: 'RapidYAML (ryml)',
+            status: 'warn',
+            details: 'Unable to determine rapidyaml version.',
+            hint:
+              'Install rapidyaml>=0.10.0 from the git tag v0.10.0 (PyPI currently ships an older build).',
+          });
+        }
+      } catch {
+        results.push({
+          name: 'RapidYAML (ryml)',
+          status: 'warn',
+          details: 'Unable to parse RapidYAML check output.',
+          hint:
+            'Install rapidyaml>=0.10.0 from the git tag v0.10.0 (PyPI currently ships an older build).',
+        });
+      }
+    }
   } else {
     results.push({
       name: 'ChunkHound Import',
@@ -173,7 +283,7 @@ export async function runDoctor(): Promise<number> {
     });
   }
 
-  const provider = (process.env.EMBEDDING_PROVIDER || process.env.CHUNKHOUND_EMBEDDING__PROVIDER || 'voyageai').trim();
+  const envProvider = (process.env.EMBEDDING_PROVIDER || process.env.CHUNKHOUND_EMBEDDING__PROVIDER || '').trim();
   const embeddingApiKey =
     process.env.EMBEDDING_API_KEY ||
     process.env.CHUNKHOUND_EMBEDDING__API_KEY ||
@@ -181,18 +291,42 @@ export async function runDoctor(): Promise<number> {
     process.env.OPENAI_API_KEY ||
     '';
 
-  if (!embeddingApiKey) {
+  let chunkhoundFileEmbeddingApiKey = '';
+  let chunkhoundFileEmbeddingProvider = '';
+  try {
+    const configPath = resolve(projectRoot, '.chunkhound.json');
+    if (existsSync(configPath)) {
+      const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as {
+        embedding?: { provider?: unknown; api_key?: unknown } | null;
+      };
+      const maybeKey = parsed?.embedding?.api_key;
+      if (typeof maybeKey === 'string') {
+        chunkhoundFileEmbeddingApiKey = maybeKey.trim();
+      }
+      const maybeProvider = parsed?.embedding?.provider;
+      if (typeof maybeProvider === 'string') {
+        chunkhoundFileEmbeddingProvider = maybeProvider.trim();
+      }
+    }
+  } catch {
+    // Ignore parse errors; this is a best-effort convenience check.
+  }
+
+  const effectiveProvider = envProvider || chunkhoundFileEmbeddingProvider || 'voyageai';
+  const effectiveEmbeddingApiKey = embeddingApiKey || chunkhoundFileEmbeddingApiKey;
+
+  if (!effectiveEmbeddingApiKey) {
     results.push({
       name: 'Embedding API Key',
       status: 'warn',
-      details: `No embedding API key set (provider=${provider}).`,
+      details: `No embedding API key set (provider=${effectiveProvider}).`,
       hint: 'Set EMBEDDING_API_KEY or provider-specific key to enable semantic search.',
     });
   } else {
     results.push({
       name: 'Embedding API Key',
       status: 'ok',
-      details: `Embedding provider ${provider} has an API key configured.`,
+      details: `Embedding provider ${effectiveProvider} has an API key configured.`,
     });
   }
 

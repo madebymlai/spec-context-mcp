@@ -89,21 +89,15 @@ export class SpecContextServer {
     async run(): Promise<void> {
         console.error(`[${this.config.name}] Starting MCP server...`);
 
-        // Initialize ChunkHound bridge (auto-indexes if needed)
-        try {
-            await initChunkHoundBridge(process.cwd());
-        } catch (err) {
-            console.error(`[${this.config.name}] ChunkHound initialization failed:`, err);
-            console.error(`[${this.config.name}] Workflow tools will still work, but search/research will be unavailable`);
-        }
-
-        // Register with local dashboard
-        await this.registerWithDashboard();
-
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
 
         console.error(`[${this.config.name}] Server running on stdio`);
+
+        // Fire-and-forget: warm up ChunkHound and dashboard registration without
+        // blocking MCP startup (clients like Codex enforce short startup timeouts).
+        void initChunkHoundBridge(process.cwd());
+        void this.registerWithDashboard();
     }
 
     private async registerWithDashboard(): Promise<void> {

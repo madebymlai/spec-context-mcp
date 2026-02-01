@@ -12,6 +12,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import * as net from 'net';
 import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
 import { EventSource } from 'eventsource';
@@ -24,6 +25,139 @@ const __dirname = path.dirname(__filename);
 // Port range for ChunkHound servers (31000-31999)
 const PORT_RANGE_START = 31000;
 const PORT_RANGE_SIZE = 1000;
+
+const HEALTH_PING_TIMEOUT_MS = 2000;
+const HEALTH_ENDPOINT_TIMEOUT_MS = 15000;
+const HEALTH_READY_TIMEOUT_MS = 60000;
+const SSE_CONNECT_TIMEOUT_MS = 30000;
+const SSE_POST_TIMEOUT_MS = 30000;
+
+const STARTUP_LOCK_TTL_MS = 2 * 60_000;
+const STARTUP_LOCK_POLL_MS = 250;
+
+function isTimeoutError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+        return false;
+    }
+    const maybeError = error as { name?: unknown; message?: unknown };
+    const name = typeof maybeError.name === 'string' ? maybeError.name : '';
+    if (name === 'TimeoutError' || name === 'AbortError') {
+        return true;
+    }
+    const message = typeof maybeError.message === 'string' ? maybeError.message : '';
+    return message.toLowerCase().includes('timeout');
+}
+
+function normalizeProjectPath(projectPath?: string): string {
+    const resolved = path.resolve(projectPath || process.cwd());
+    try {
+        return (fs.realpathSync.native ? fs.realpathSync.native(resolved) : fs.realpathSync(resolved));
+    } catch {
+        return resolved;
+    }
+}
+
+async function canConnectTcp(port: number, timeoutMs = 500): Promise<boolean> {
+    return await new Promise<boolean>((resolve) => {
+        const socket = new net.Socket();
+        let settled = false;
+        const finish = (result: boolean) => {
+            if (settled) return;
+            settled = true;
+            socket.destroy();
+            resolve(result);
+        };
+
+        socket.setTimeout(timeoutMs);
+        socket.once('connect', () => finish(true));
+        socket.once('timeout', () => finish(false));
+        socket.once('error', () => finish(false));
+        socket.connect(port, '127.0.0.1');
+    });
+}
+
+async function waitForTcpListening(port: number, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (await canConnectTcp(port)) {
+            return;
+        }
+        await new Promise(resolve => setTimeout(resolve, STARTUP_LOCK_POLL_MS));
+    }
+    throw new Error(`ChunkHound HTTP server did not start listening on port ${port} in time`);
+}
+
+type StartupLock = { path: string; fd: number | null; acquired: boolean };
+
+function tryAcquireStartupLock(projectPath: string, port: number): StartupLock {
+    const lockDir = path.join(projectPath, '.chunkhound');
+    try {
+        fs.mkdirSync(lockDir, { recursive: true });
+    } catch {
+        // Ignore; if we can't create lock dir, we fall back to best-effort startup without lock.
+        return { path: '', fd: null, acquired: true };
+    }
+
+    const lockPath = path.join(lockDir, `sse-start-${port}.lock`);
+    const now = Date.now();
+
+    const openExclusive = (): number => fs.openSync(lockPath, 'wx');
+    const writeLockFile = (fd: number, recovered = false) => {
+        const payload = JSON.stringify({
+            pid: process.pid,
+            port,
+            created_at: new Date().toISOString(),
+            recovered,
+        });
+        fs.writeFileSync(fd, payload);
+    };
+
+    try {
+        const fd = openExclusive();
+        writeLockFile(fd);
+        return { path: lockPath, fd, acquired: true };
+    } catch (err) {
+        const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
+        if (code !== 'EEXIST') {
+            throw err;
+        }
+
+        // Stale lock recovery: if the file is old, assume the starter crashed and retry.
+        try {
+            const stat = fs.statSync(lockPath);
+            if (now - stat.mtimeMs > STARTUP_LOCK_TTL_MS) {
+                fs.unlinkSync(lockPath);
+                const fd = openExclusive();
+                writeLockFile(fd, true);
+                return { path: lockPath, fd, acquired: true };
+            }
+        } catch {
+            // Ignore and treat as not acquired.
+        }
+
+        return { path: lockPath, fd: null, acquired: false };
+    }
+}
+
+function releaseStartupLock(lock: StartupLock): void {
+    if (!lock.acquired) {
+        return;
+    }
+    if (lock.fd !== null) {
+        try {
+            fs.closeSync(lock.fd);
+        } catch {
+            // Ignore
+        }
+    }
+    if (lock.path) {
+        try {
+            fs.unlinkSync(lock.path);
+        } catch {
+            // Ignore
+        }
+    }
+}
 
 export interface ChunkHoundConfig {
     pythonPath: string;
@@ -77,11 +211,19 @@ async function isServerRunning(port: number): Promise<boolean> {
     try {
         const response = await fetch(`http://localhost:${port}/health`, {
             method: 'GET',
-            signal: AbortSignal.timeout(2000),
+            signal: AbortSignal.timeout(HEALTH_PING_TIMEOUT_MS),
         });
-        return response.ok;
-    } catch {
-        return false;
+        if (response.ok) {
+            return true;
+        }
+        return await canConnectTcp(port);
+    } catch (err) {
+        // If /health is slow (CPU/IO bound) we still want to treat the server as
+        // "running" so we don't start a second process (DuckDB lock conflict).
+        if (isTimeoutError(err)) {
+            return await canConnectTcp(port);
+        }
+        return await canConnectTcp(port);
     }
 }
 
@@ -100,7 +242,7 @@ class SseClient {
     private eventSource: EventSource | null = null;
     private connected = false;
     private connectPromise: Promise<void> | null = null;
-    private readonly connectTimeoutMs = 10000;
+    private readonly connectTimeoutMs = SSE_CONNECT_TIMEOUT_MS;
 
     constructor(port: number) {
         this.port = port;
@@ -234,7 +376,7 @@ class SseClient {
         return new Promise((resolve, reject) => {
             this.pendingRequests.set(id, { resolve, reject });
 
-            const postTimeoutMs = Math.min(10000, timeoutMs);
+            const postTimeoutMs = Math.min(SSE_POST_TIMEOUT_MS, timeoutMs);
             const controller = new AbortController();
             const postTimeout = setTimeout(() => controller.abort(), postTimeoutMs);
 
@@ -348,7 +490,7 @@ export class ChunkHoundBridge extends EventEmitter {
         }
 
         this.httpInitPromise = (async () => {
-            await this.ensureHttpServerReady(30000);
+            await this.ensureHttpServerReady(HEALTH_READY_TIMEOUT_MS);
             await this.initializeHttp();
             this.initialized = true;
         })().finally(() => {
@@ -389,11 +531,22 @@ export class ChunkHoundBridge extends EventEmitter {
         }
 
         this.httpStartPromise = (async () => {
+            const lock = tryAcquireStartupLock(this.projectPath, this.port);
+
+            // Another process is already starting the server for this project+port.
+            // Wait for the TCP port to come up instead of racing and causing a
+            // DuckDB file-lock conflict.
+            if (!lock.acquired) {
+                console.error(`[ChunkHound Bridge] Another session is starting the server; waiting for port ${this.port}...`);
+                await waitForTcpListening(this.port, HEALTH_READY_TIMEOUT_MS);
+                return;
+            }
+
             try {
                 await this.startHttpServer();
-            } catch (err) {
-                this.httpStartPromise = null;
-                throw err;
+                await waitForTcpListening(this.port, HEALTH_READY_TIMEOUT_MS);
+            } finally {
+                releaseStartupLock(lock);
             }
         })().finally(() => {
             this.httpStartPromise = null;
@@ -463,7 +616,7 @@ export class ChunkHoundBridge extends EventEmitter {
             });
 
             console.error('[ChunkHound Bridge] SSE initialized:', JSON.stringify(response));
-            await this.waitForHealthReady(10000);
+            await this.waitForHealthReady(HEALTH_READY_TIMEOUT_MS);
         } catch (err) {
             client.close();
             this.initialized = false;
@@ -480,7 +633,7 @@ export class ChunkHoundBridge extends EventEmitter {
     private async checkScanStatus(): Promise<void> {
         try {
             const response = await fetch(`http://localhost:${this.port}/health`, {
-                signal: AbortSignal.timeout(2000),
+                signal: AbortSignal.timeout(HEALTH_ENDPOINT_TIMEOUT_MS),
             });
             if (response.ok) {
                 const health = await response.json() as { scan_progress?: { scan_completed_at?: string } };
@@ -801,7 +954,7 @@ export class ChunkHoundBridge extends EventEmitter {
                                 parsed.error.includes('Invalid request parameters')))
                     ) {
                         console.error('[ChunkHound Bridge] Server not initialized; waiting for health and retrying...');
-                        await this.waitForHealthReady(10000);
+                        await this.waitForHealthReady(HEALTH_READY_TIMEOUT_MS);
                         const retryResponse = await this.sendRequest('tools/call', {
                             name,
                             arguments: args,
@@ -855,9 +1008,11 @@ export class ChunkHoundBridge extends EventEmitter {
     private async waitForHealthReady(timeoutMs: number): Promise<void> {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
+            const remainingMs = deadline - Date.now();
+            const requestTimeoutMs = Math.min(HEALTH_ENDPOINT_TIMEOUT_MS, Math.max(1, remainingMs));
             try {
                 const response = await fetch(`http://localhost:${this.port}/health`, {
-                    signal: AbortSignal.timeout(2000),
+                    signal: AbortSignal.timeout(requestTimeoutMs),
                 });
                 if (response.ok) {
                     const health = await response.json() as { initialized?: boolean; scan_progress?: { scan_completed_at?: string } };
@@ -873,6 +1028,7 @@ export class ChunkHoundBridge extends EventEmitter {
             }
             await new Promise(resolve => setTimeout(resolve, 500));
         }
+        throw new Error(`ChunkHound server on port ${this.port} did not report initialized in time`);
     }
 
     /**
@@ -891,7 +1047,7 @@ export class ChunkHoundBridge extends EventEmitter {
 
         try {
             const response = await fetch(`http://localhost:${this.port}/health`, {
-                signal: AbortSignal.timeout(2000),
+                signal: AbortSignal.timeout(HEALTH_ENDPOINT_TIMEOUT_MS),
             });
             if (response.ok) {
                 const health = await response.json() as { scan_progress?: { scan_completed_at?: string } };
@@ -908,7 +1064,7 @@ export class ChunkHoundBridge extends EventEmitter {
      * Search code using ChunkHound
      */
     async search(args: SearchArgs): Promise<unknown> {
-        await this.waitForHealthReady(10000);
+        await this.waitForHealthReady(HEALTH_READY_TIMEOUT_MS);
         const result = await this.callTool('search', args as unknown as Record<string, unknown>);
 
         await this.refreshScanStatus();
@@ -970,10 +1126,11 @@ const bridgeInstances = new Map<string, ChunkHoundBridge>();
  */
 export function resetChunkHoundBridge(projectPath?: string): void {
     if (projectPath) {
-        const bridge = bridgeInstances.get(projectPath);
+        const normalizedPath = normalizeProjectPath(projectPath);
+        const bridge = bridgeInstances.get(normalizedPath);
         if (bridge) {
             bridge.stop();
-            bridgeInstances.delete(projectPath);
+            bridgeInstances.delete(normalizedPath);
         }
     } else {
         // Reset all
@@ -989,7 +1146,7 @@ export function resetChunkHoundBridge(projectPath?: string): void {
  * Each project gets its own bridge instance and port.
  */
 export function getChunkHoundBridge(projectPath?: string): ChunkHoundBridge {
-    const resolvedPath = projectPath || process.cwd();
+    const resolvedPath = normalizeProjectPath(projectPath);
 
     // Check if existing bridge is healthy
     const existing = bridgeInstances.get(resolvedPath);

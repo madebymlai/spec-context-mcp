@@ -2439,6 +2439,38 @@ class IndexingCoordinator(BaseService):
         tot_pathspecs = 0
         tot_capped = False
 
+        # Optional post-filter: apply repo-aware ignore engine to Git results.
+        #
+        # Why: `git ls-files` includes tracked files even if they now match patterns
+        # in .gitignore (gitignore only affects untracked files). For indexing/search,
+        # users commonly expect .gitignore to act as an indexing ignore list.
+        #
+        # The Python discovery backend already applies the ignore engine to all files,
+        # so we do the same here for consistency when gitignore is enabled.
+        git_ignore_engine = None
+        try:
+            idx_cfg = (
+                getattr(self, "config", None).indexing
+                if getattr(self, "config", None) and getattr(self.config, "indexing", None)
+                else None
+            )
+            sources = (
+                idx_cfg.resolve_ignore_sources()
+                if idx_cfg is not None and callable(getattr(idx_cfg, "resolve_ignore_sources", None))
+                else ["gitignore"]
+            )
+            if "gitignore" in (sources or []):
+                git_ignore_engine = self._get_or_build_ignore_engine(
+                    root=directory,
+                    sources=list(sources),
+                    chf=(getattr(idx_cfg, "chignore_file", ".chignore") if idx_cfg is not None else ".chignore"),
+                    cfg=list(effective_excludes),
+                    backend=(getattr(idx_cfg, "gitignore_backend", "python") if idx_cfg is not None else "python"),
+                    overlay=bool(getattr(idx_cfg, "workspace_gitignore_nonrepo", False)) if idx_cfg is not None else False,
+                )
+        except Exception:
+            git_ignore_engine = None
+
         # For each repo, list files via Git, restricted to the subtree being indexed
         for rr in repo_roots:
             try:
@@ -2467,6 +2499,18 @@ class IndexingCoordinator(BaseService):
                     config_excludes=effective_excludes,
                     filter_root=directory,
                 )
+                # Apply ignore engine filtering to Git-listed files (see note above).
+                if git_ignore_engine is not None and getattr(git_ignore_engine, "matches", None):
+                    filtered: list[Path] = []
+                    for fp in repo_files:
+                        try:
+                            if git_ignore_engine.matches(fp, is_dir=False):  # type: ignore[attr-defined]
+                                continue
+                        except Exception:
+                            # If ignore evaluation fails for any reason, keep the file
+                            pass
+                        filtered.append(fp)
+                    repo_files = filtered
                 tot_rows_tracked += int(stats.get("git_rows_tracked", 0))
                 tot_rows_others += int(stats.get("git_rows_others", 0))
                 tot_pathspecs += int(stats.get("git_pathspecs", 0))

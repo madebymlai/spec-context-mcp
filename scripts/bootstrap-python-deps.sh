@@ -50,3 +50,10 @@ case "${os_id}" in
     exit 1
     ;;
 esac
+
+if command -v swig >/dev/null 2>&1; then
+  if ! PYTHONNOUSERSITE=1 swig -version >/dev/null 2>&1; then
+    echo "WARNING: 'swig' in PATH fails under PYTHONNOUSERSITE=1 (pip build isolation)." >&2
+    echo "         If rapidyaml builds fail, ensure a real system swig binary is used (avoid ~/.local/bin/swig wrappers)." >&2
+  fi
+fi

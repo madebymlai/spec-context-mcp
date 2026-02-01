@@ -35,6 +35,21 @@ def _env_wants_tree_sitter() -> bool:
     return value in {"tree", "treesitter", "tree_sitter", "ts"}
 
 
+def _env_requires_rapidyaml() -> bool:
+    """Return True when RapidYAML should be required (fail fast if unavailable)."""
+    value = os.environ.get("CHUNKHOUND_REQUIRE_RAPIDYAML", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _parse_semver(value: str | None) -> tuple[int, int, int] | None:
+    if not value:
+        return None
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)", str(value).strip())
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
 class RapidYamlParser(LanguageParser):
     """LanguageParser implementation that prefers RapidYAML, with fallback."""
 
@@ -68,9 +83,41 @@ class RapidYamlParser(LanguageParser):
             try:
                 import ryml  # type: ignore[import-not-found]
 
+                # Validate API + version before accepting ryml.
+                missing = [
+                    name
+                    for name in ("Tree", "walk", "parse_in_place", "emit_yaml")
+                    if not hasattr(ryml, name)
+                ]
+                if missing:
+                    raise RuntimeError(
+                        "ryml is installed but missing required API: "
+                        + ", ".join(missing)
+                        + ". This usually means an old rapidyaml build is installed. "
+                        "Install rapidyaml>=0.10.0 from the git tag v0.10.0."
+                    )
+
+                version_str = getattr(ryml, "__version__", None)
+                if not version_str:
+                    try:
+                        import importlib.metadata as metadata
+
+                        version_str = metadata.version("rapidyaml")
+                    except Exception:
+                        version_str = None
+
+                parsed = _parse_semver(version_str)
+                if parsed is not None and parsed < (0, 10, 0):
+                    raise RuntimeError(
+                        f"rapidyaml {version_str} detected (requires >= 0.10.0). "
+                        "Install rapidyaml from the git tag v0.10.0."
+                    )
+
                 self._ryml = ryml
                 self._tree = ryml.Tree()
             except Exception as exc:  # pragma: no cover - import-time guard
+                if _env_requires_rapidyaml():
+                    raise
                 self._enabled = False
                 logger.info(
                     "RapidYAML disabled (import failure): %s. Falling back to tree-sitter.",

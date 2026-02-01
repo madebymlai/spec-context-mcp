@@ -35,7 +35,6 @@ Add to your Claude Code config (`.mcp.json` in project root):
         "EMBEDDING_PROVIDER": "voyageai",
         "EMBEDDING_API_KEY": "sk-embed-xxx",
         "EMBEDDING_MODEL": "voyage-code-3",
-        "CHUNKHOUND_PYTHON": "python3",
         "DASHBOARD_URL": "http://localhost:3000"
       }
     }
@@ -58,7 +57,7 @@ Add to your Claude Code config (`.mcp.json` in project root):
 | `EMBEDDING_DIMENSION` | No       | Optional; currently ignored (model defines dimensions)                 |
 | `VOYAGEAI_API_KEY`    | No       | Alias for `EMBEDDING_API_KEY` when provider is `voyageai`              |
 | `OPENAI_API_KEY`      | No       | Alias for `EMBEDDING_API_KEY` when provider is `openai`                |
-| `CHUNKHOUND_PYTHON`   | No       | Python executable for ChunkHound (default: `python3`)     |
+| `CHUNKHOUND_PYTHON`   | No       | Python executable for ChunkHound (default: auto-detect `.venv/bin/python`, else `python3`) |
 | `DASHBOARD_URL`       | No       | Dashboard URL shown in prompts (default: `http://localhost:3000`) |
 | `OPENROUTER_API_KEY`  | No       | Required only for dashboard AI review                     |
 | `SPEC_CONTEXT_DISABLE_VERSION_CHECK` | No | Disable dashboard startup version check (default: `false`) |
@@ -152,6 +151,10 @@ API key is set, regex search and workflow tools still work.
 You may also need Python 3.10+ available as `python3` (or set `CHUNKHOUND_PYTHON`).
 The default embedding provider is `voyageai`; set `EMBEDDING_PROVIDER=openai` and
 `EMBEDDING_BASE_URL` for OpenAI-compatible endpoints.
+
+Note: ChunkHound's YAML parser uses `rapidyaml`/`ryml` (requires `rapidyaml>=0.10.0`).
+PyPI currently ships an older `rapidyaml` build; install from the git tag `v0.10.0`
+if you're managing the Python environment yourself.
 
 ## Development
 

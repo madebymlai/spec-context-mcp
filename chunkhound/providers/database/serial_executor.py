@@ -215,7 +215,11 @@ class SerialDatabaseExecutor:
             search_timeout = float(os.getenv("CHUNKHOUND_DB_SEARCH_TIMEOUT", str(base_timeout)))
         except Exception:
             search_timeout = base_timeout
-        timeout_s = search_timeout if operation_name.startswith("search_") else base_timeout
+        is_search_op = operation_name.startswith("search_") or operation_name in (
+            "find_similar_chunks",
+            "search_by_embedding",
+        )
+        timeout_s = search_timeout if is_search_op else base_timeout
         try:
             result = future.result(timeout=timeout_s)
             elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -255,7 +259,7 @@ class SerialDatabaseExecutor:
                 logger.warning("No DB connection available to interrupt after timeout")
 
             import os
-            reset_on_timeout = os.getenv("CHUNKHOUND_DB_RESET_ON_TIMEOUT", "1").lower() in (
+            reset_on_timeout = os.getenv("CHUNKHOUND_DB_RESET_ON_TIMEOUT", "0").lower() in (
                 "1",
                 "true",
                 "yes",
@@ -282,7 +286,7 @@ class SerialDatabaseExecutor:
         Returns:
             The result of the operation, fully materialized
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def executor_operation():
             # Get thread-local connection (created on first access)
@@ -309,15 +313,61 @@ class SerialDatabaseExecutor:
         # Capture context for async compatibility
         ctx = contextvars.copy_context()
 
-        # Run in executor with context
+        # Run in executor with context + timeout (env override)
         start = time.perf_counter()
-        result = await loop.run_in_executor(
-            self._db_executor, ctx.run, executor_operation
+        future = loop.run_in_executor(self._db_executor, ctx.run, executor_operation)
+        import os
+
+        try:
+            base_timeout = float(os.getenv("CHUNKHOUND_DB_EXECUTE_TIMEOUT", "30"))
+        except Exception:
+            base_timeout = 30.0
+        try:
+            search_timeout = float(os.getenv("CHUNKHOUND_DB_SEARCH_TIMEOUT", str(base_timeout)))
+        except Exception:
+            search_timeout = base_timeout
+        is_search_op = operation_name.startswith("search_") or operation_name in (
+            "find_similar_chunks",
+            "search_by_embedding",
         )
+        timeout_s = search_timeout if is_search_op else base_timeout
+
+        try:
+            result = await asyncio.wait_for(future, timeout=timeout_s)
+        except asyncio.TimeoutError:
+            active_op, active_start, last_activity = self._get_operation_snapshot()
+            active_age = (
+                f"{(time.time() - active_start):.1f}s"
+                if active_start is not None
+                else "unknown"
+            )
+            last_activity_age = (
+                f"{(time.time() - last_activity):.1f}s"
+                if last_activity is not None
+                else "unknown"
+            )
+            logger.error(
+                f"Database operation '{operation_name}' timed out after {timeout_s} seconds "
+                f"(active_op={active_op or 'unknown'} active_age={active_age} last_activity_age={last_activity_age})"
+            )
+            interrupted = self._interrupt_connection()
+            if interrupted:
+                logger.warning("Issued interrupt on DB connection after timeout")
+            else:
+                logger.warning("No DB connection available to interrupt after timeout")
+
+            reset_on_timeout = os.getenv("CHUNKHOUND_DB_RESET_ON_TIMEOUT", "0").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if reset_on_timeout:
+                logger.warning("Resetting DB executor after timeout to recover")
+                self._reset_executor()
+            raise TimeoutError(f"Operation '{operation_name}' timed out")
+
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         try:
-            import os
-
             slow_ms = float(os.getenv("CHUNKHOUND_DB_LOG_SLOW_MS", "5000"))
         except Exception:
             slow_ms = 5000.0

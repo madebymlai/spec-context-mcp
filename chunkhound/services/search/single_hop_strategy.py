@@ -11,6 +11,7 @@ Best for:
 - Queries where top HNSW results are sufficient
 """
 
+import asyncio
 from typing import Any
 
 from loguru import logger
@@ -68,15 +69,28 @@ class SingleHopStrategy:
         query_vector = query_results[0]
 
         # Perform vector similarity search
-        results, pagination = self._db.search_semantic(
-            query_embedding=query_vector,
-            provider=provider,
-            model=model,
-            page_size=page_size,
-            offset=offset,
-            threshold=threshold,
-            path_filter=path_filter,
-        )
+        if hasattr(self._db, "search_semantic_async"):
+            results, pagination = await self._db.search_semantic_async(
+                query_embedding=query_vector,
+                provider=provider,
+                model=model,
+                page_size=page_size,
+                offset=offset,
+                threshold=threshold,
+                path_filter=path_filter,
+            )
+        else:
+            # Fallback for non-async providers: run sync call off the event loop.
+            results, pagination = await asyncio.to_thread(
+                self._db.search_semantic,
+                query_embedding=query_vector,
+                provider=provider,
+                model=model,
+                page_size=page_size,
+                offset=offset,
+                threshold=threshold,
+                path_filter=path_filter,
+            )
 
         logger.info(
             f"Standard semantic search completed: {len(results)} results found"

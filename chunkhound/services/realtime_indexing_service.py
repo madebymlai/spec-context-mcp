@@ -13,6 +13,7 @@ Architecture:
 
 import asyncio
 import os
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -290,6 +291,20 @@ class RealtimeIndexingService:
         # Polling/health state
         self._using_polling = False
         self._last_event_time = 0.0
+        self._stop_event = threading.Event()
+
+        # Watchdog startup can be slow on large repos or slow filesystems.
+        # If it takes too long we may temporarily fall back to polling, but we
+        # should never block the asyncio loop during that decision.
+        self._watchdog_setup_timeout_s = 30.0
+        try:
+            self._watchdog_setup_timeout_s = float(
+                os.getenv("CHUNKHOUND_WATCHDOG_SETUP_TIMEOUT_SEC", "30")
+            )
+        except Exception:
+            self._watchdog_setup_timeout_s = 30.0
+        if self._watchdog_setup_timeout_s <= 0:
+            self._watchdog_setup_timeout_s = 30.0
 
         def _parse_bool(value: str | None, default: bool = False) -> bool:
             if value is None:
@@ -440,6 +455,8 @@ class RealtimeIndexingService:
         logger.debug(f"Starting real-time indexing for {watch_path}")
         self._debug(f"start watch on {watch_path}")
 
+        self._stop_event.clear()
+
         # Store the watch path
         self.watch_path = watch_path
 
@@ -474,6 +491,7 @@ class RealtimeIndexingService:
         """Stop the service gracefully."""
         logger.debug("Stopping real-time indexing service")
         self._debug("stopping service")
+        self._stop_event.set()
 
         # Cancel watchdog setup if still running
         if hasattr(self, "_watchdog_setup_task") and self._watchdog_setup_task:
@@ -571,59 +589,85 @@ class RealtimeIndexingService:
         self, watch_path: Path, loop: asyncio.AbstractEventLoop
     ) -> None:
         """Setup watchdog with timeout - fall back to polling if it takes too long."""
-        # run_in_executor returns an awaitable Future - no create_task needed
-        watchdog_task = loop.run_in_executor(
-            None, self._start_fs_monitor, watch_path, loop
-        )
+        if self._stop_event.is_set():
+            return
+
+        # run_in_executor returns an awaitable Future
+        watchdog_future = loop.run_in_executor(None, self._start_fs_monitor, watch_path, loop)
+
+        async def _stop_polling_if_running() -> None:
+            if self._polling_task and not self._polling_task.done():
+                self._polling_task.cancel()
+                try:
+                    await self._polling_task
+                except asyncio.CancelledError:
+                    pass
+            self._polling_task = None
+
+        def _on_watchdog_done(fut: asyncio.Future) -> None:
+            # This callback runs on the event loop thread.
+            if self._stop_event.is_set():
+                return
+            try:
+                fut.result()
+            except Exception:
+                # Failure is handled by the await below (or we are already in polling mode).
+                return
+
+            # If we temporarily fell back to polling, stop it once watchdog is live.
+            if self._using_polling:
+                self._debug("watchdog ready; stopping polling fallback")
+                asyncio.create_task(_stop_polling_if_running())
+                self._using_polling = False
+
+            if not self.monitoring_ready.is_set():
+                self._monitoring_ready_time = time.time()
+                self.monitoring_ready.set()
+
+        watchdog_future.add_done_callback(_on_watchdog_done)
 
         try:
-            # Try recursive setup with reasonable timeout for large directories
-            await asyncio.wait_for(watchdog_task, timeout=5.0)
+            # Shield to avoid cancelling the underlying executor work on timeout.
+            await asyncio.wait_for(
+                asyncio.shield(watchdog_future),
+                timeout=self._watchdog_setup_timeout_s,
+            )
             logger.debug("Watchdog setup completed successfully (recursive mode)")
             self._debug("watchdog setup complete (recursive)")
             self._monitoring_ready_time = time.time()
-            self.monitoring_ready.set()  # Signal monitoring is ready
+            self.monitoring_ready.set()
 
         except asyncio.TimeoutError:
-            # Cancel the watchdog task before falling back to polling
-            watchdog_task.cancel()
-            try:
-                await watchdog_task
-            except asyncio.CancelledError:
-                pass
-
             logger.info(
-                f"Watchdog setup timed out for {watch_path} - falling back to polling"
+                f"Watchdog setup still in progress after {self._watchdog_setup_timeout_s:.1f}s for {watch_path} - "
+                "enabling polling fallback until watchdog is ready"
             )
             self._using_polling = True
-            self._polling_task = asyncio.create_task(self._polling_monitor(watch_path))
+            if not self._polling_task or self._polling_task.done():
+                self._polling_task = asyncio.create_task(self._polling_monitor(watch_path))
             # Wait a moment for polling to start
             await asyncio.sleep(0.5)
             self._monitoring_ready_time = time.time()
-            self.monitoring_ready.set()  # Signal monitoring is ready (polling mode)
-            self._debug("watchdog timed out; switched to polling")
-        except Exception as e:
-            # Cancel watchdog task on other errors too
-            if not watchdog_task.done():
-                watchdog_task.cancel()
-                try:
-                    await watchdog_task
-                except asyncio.CancelledError:
-                    pass
+            self.monitoring_ready.set()
+            self._debug("watchdog delayed; switched to polling fallback")
 
+        except Exception as e:
             logger.warning(f"Watchdog setup failed: {e} - falling back to polling")
             self._using_polling = True
-            self._polling_task = asyncio.create_task(self._polling_monitor(watch_path))
+            if not self._polling_task or self._polling_task.done():
+                self._polling_task = asyncio.create_task(self._polling_monitor(watch_path))
             # Wait a moment for polling to start
             await asyncio.sleep(0.5)
             self._monitoring_ready_time = time.time()
-            self.monitoring_ready.set()  # Signal monitoring is ready (polling mode)
-            self._debug("watchdog failed; switched to polling")
+            self.monitoring_ready.set()
+            self._debug("watchdog failed; switched to polling fallback")
 
     def _start_fs_monitor(
         self, watch_path: Path, loop: asyncio.AbstractEventLoop
     ) -> None:
         """Start filesystem monitoring with recursive watching for complete coverage."""
+        if self._stop_event.is_set():
+            return
         self.event_handler = SimpleEventHandler(
             self.event_queue,
             self.config,
@@ -642,6 +686,12 @@ class RealtimeIndexingService:
         )
         self.watched_directories.add(str(watch_path))
         self.observer.start()
+        if self._stop_event.is_set():
+            try:
+                self.observer.stop()
+            except Exception:
+                pass
+            return
 
         # Wait for observer thread to be fully running
         # On Windows, observer thread startup can be noticeably slower.
@@ -1254,86 +1304,121 @@ class RealtimeIndexingService:
             return True
         return (now - last) >= self._poll_hash_interval_s
 
+    def _snapshot_poll_state(self, watch_path: Path) -> dict[str, tuple[int, ...]]:
+        """Build a filesystem snapshot for polling/sweeps (runs off the event loop)."""
+        if self._polling_handler is None:
+            self._polling_handler = SimpleEventHandler(None, self.config, None)
+
+        current_state: dict[str, tuple[int, ...]] = {}
+        for file_path in watch_path.rglob("*"):
+            try:
+                if not file_path.is_file():
+                    continue
+                if not self._polling_handler._should_index(file_path):
+                    continue
+                file_key = normalize_file_path(file_path)
+                stat = file_path.stat()
+                current_state[file_key] = self._build_poll_state(stat)
+            except (OSError, PermissionError, FileNotFoundError):
+                continue
+        return current_state
+
     async def _scan_for_changes(self, watch_path: Path, emit_changes: bool = True) -> None:
         """Scan filesystem and enqueue new/modified files; remove deleted files."""
         async with self._polling_lock:
-            if self._polling_handler is None:
-                self._polling_handler = SimpleEventHandler(None, self.config, None)
-            current_state: dict[str, tuple[int, ...]] = {}
-            files_checked = 0
             now = time.time()
             hash_budget_deadline: float | None = None
             if emit_changes and self._poll_verify_hash and self._poll_hash_budget_ms > 0:
                 hash_budget_deadline = now + (self._poll_hash_budget_ms / 1000.0)
 
-            for file_path in watch_path.rglob("*"):
-                try:
-                    if not file_path.is_file():
-                        continue
-                    if not self._polling_handler._should_index(file_path):
-                        continue
-                    file_key = normalize_file_path(file_path)
-                    stat = file_path.stat()
-                    state = self._build_poll_state(stat)
-                    current_state[file_key] = state
+            current_state = await asyncio.to_thread(self._snapshot_poll_state, watch_path)
 
-                    prev_state = self._poll_state.get(file_key)
-                    if prev_state is None:
-                        if emit_changes:
-                            logger.debug(f"Polling detected new file: {file_path}")
-                            self._debug(f"polling detected new file: {file_path}")
-                            await self.add_file(file_path, priority="change")
-                    elif prev_state != state:
-                        if emit_changes:
-                            logger.debug(f"Polling detected modified file: {file_path}")
-                            self._debug(f"polling detected modified file: {file_path}")
-                            await self.add_file(file_path, priority="change")
-                    else:
-                        if emit_changes and hash_budget_deadline and time.time() <= hash_budget_deadline:
-                            if self._should_verify_hash(file_key, stat, now):
-                                changed = False
-                                try:
-                                    record = self.services.provider.get_file_by_path(str(file_path), as_model=False)
-                                    db_hash = (
-                                        record.get("content_hash")
-                                        if isinstance(record, dict)
-                                        else None
-                                    )
-                                    if db_hash:
-                                        cur_hash = compute_file_hash(file_path)
-                                        if cur_hash and cur_hash != db_hash:
-                                            changed = True
-                                except Exception:
-                                    changed = False
-                                self._poll_hash_checked[file_key] = time.time()
-                                if changed:
-                                    logger.debug(f"Polling detected content change: {file_path}")
-                                    self._debug(f"polling detected content change: {file_path}")
-                                    await self.add_file(file_path, priority="change")
-                except (OSError, PermissionError, FileNotFoundError):
-                    continue
+            if not emit_changes:
+                self._poll_state = current_state
+                if self._poll_hash_checked:
+                    self._poll_hash_checked = {
+                        k: v for k, v in self._poll_hash_checked.items() if k in current_state
+                    }
+                return
 
-                files_checked += 1
-                if files_checked % 200 == 0:
+            prev_state = self._poll_state
+            new_paths: list[Path] = []
+            modified_paths: list[Path] = []
+            unchanged_keys: list[str] = []
+
+            for file_key, state in current_state.items():
+                prev = prev_state.get(file_key)
+                if prev is None:
+                    new_paths.append(Path(file_key))
+                elif prev != state:
+                    modified_paths.append(Path(file_key))
+                else:
+                    unchanged_keys.append(file_key)
+
+            # Update snapshot early to avoid thrashing if downstream actions trigger sweeps.
+            self._poll_state = current_state
+
+            for idx, file_path in enumerate(new_paths, 1):
+                logger.debug(f"Polling detected new file: {file_path}")
+                self._debug(f"polling detected new file: {file_path}")
+                await self.add_file(file_path, priority="change")
+                if idx % 200 == 0:
                     await asyncio.sleep(0)
 
-            # Check for deleted files
-            if emit_changes:
-                deleted_keys = set(self._poll_state.keys()) - set(current_state.keys())
-                for file_key in deleted_keys:
-                    file_path = Path(file_key)
-                    logger.debug(f"Polling detected deleted file: {file_path}")
-                    await self.remove_file(file_path)
-                    self._debug(f"polling detected deleted file: {file_path}")
-                    self._poll_hash_checked.pop(file_key, None)
-            else:
-                deleted_keys = set()
+            for idx, file_path in enumerate(modified_paths, 1):
+                logger.debug(f"Polling detected modified file: {file_path}")
+                self._debug(f"polling detected modified file: {file_path}")
+                await self.add_file(file_path, priority="change")
+                if idx % 200 == 0:
+                    await asyncio.sleep(0)
 
-            self._poll_state = current_state
-            if deleted_keys:
-                # Drop stale hash checks for deleted files
-                for file_key in deleted_keys:
-                    self._poll_hash_checked.pop(file_key, None)
+            # Opportunistic checksum verification for a small time budget.
+            if hash_budget_deadline:
+                for idx, file_key in enumerate(unchanged_keys, 1):
+                    if time.time() > hash_budget_deadline:
+                        break
+                    file_path = Path(file_key)
+                    try:
+                        stat = file_path.stat()
+                    except (OSError, PermissionError, FileNotFoundError):
+                        continue
+                    if not self._should_verify_hash(file_key, stat, now):
+                        continue
+
+                    changed = False
+                    try:
+                        record = self.services.provider.get_file_by_path(
+                            str(file_path), as_model=False
+                        )
+                        db_hash = (
+                            record.get("content_hash") if isinstance(record, dict) else None
+                        )
+                        if db_hash:
+                            cur_hash = await asyncio.to_thread(compute_file_hash, file_path)
+                            if cur_hash and cur_hash != db_hash:
+                                changed = True
+                    except Exception:
+                        changed = False
+
+                    self._poll_hash_checked[file_key] = time.time()
+                    if changed:
+                        logger.debug(f"Polling detected content change: {file_path}")
+                        self._debug(f"polling detected content change: {file_path}")
+                        await self.add_file(file_path, priority="change")
+
+                    if idx % 200 == 0:
+                        await asyncio.sleep(0)
+
+            # Check for deleted files
+            deleted_keys = set(prev_state.keys()) - set(current_state.keys())
+            for idx, file_key in enumerate(deleted_keys, 1):
+                file_path = Path(file_key)
+                logger.debug(f"Polling detected deleted file: {file_path}")
+                await self.remove_file(file_path)
+                self._debug(f"polling detected deleted file: {file_path}")
+                self._poll_hash_checked.pop(file_key, None)
+                if idx % 200 == 0:
+                    await asyncio.sleep(0)
             if self._poll_hash_checked:
                 self._poll_hash_checked = {
                     k: v for k, v in self._poll_hash_checked.items() if k in current_state

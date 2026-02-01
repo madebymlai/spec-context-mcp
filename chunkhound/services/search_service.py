@@ -331,8 +331,10 @@ class SearchService(BaseService):
                 async def get_regex_results() -> tuple[
                     list[dict[str, Any]], dict[str, Any]
                 ]:
-                    return self.search_regex(
-                        regex_pattern, page_size=page_size * 2, offset=offset
+                    return await self.search_regex_async(
+                        pattern=regex_pattern,
+                        page_size=page_size * 2,
+                        offset=offset,
                     )
 
                 tasks.append(("regex", asyncio.create_task(get_regex_results())))
