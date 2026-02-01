@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,6 +29,18 @@ if not _MISSING_MODULES:
     class _DummyServices:
         pass
 
+    class _DummyProvider:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def delete_file_completely(self, file_path: str) -> bool:
+            self.deleted.append(file_path)
+            return True
+
+    class _ServicesWithProvider:
+        def __init__(self, provider: _DummyProvider) -> None:
+            self.provider = provider
+
     class _FakeIndexing:
         def __init__(self) -> None:
             self.include = ["**/*.py"]
@@ -46,6 +59,15 @@ if not _MISSING_MODULES:
             self.target_dir = Path(target_dir)
             self.indexing = _FakeIndexing()
 
+    class _FakeIndexingWithGitIgnore(_FakeIndexing):
+        def resolve_ignore_sources(self) -> list[str]:
+            return ["gitignore"]
+
+    class _FakeConfigWithGitIgnore(_FakeConfig):
+        def __init__(self, target_dir: Path) -> None:
+            self.target_dir = Path(target_dir)
+            self.indexing = _FakeIndexingWithGitIgnore()
+
     class _TrackingRealtimeIndexingService(RealtimeIndexingService):
         def __init__(self, config: _FakeConfig) -> None:
             super().__init__(services=_DummyServices(), config=config)
@@ -63,6 +85,14 @@ if not _MISSING_MODULES:
         async def _scan_for_changes(self, watch_path: Path) -> None:
             self.sweeps += 1
             await super()._scan_for_changes(watch_path)
+
+    class _PurgeTrackingRealtimeIndexingService(RealtimeIndexingService):
+        def __init__(self, services: _ServicesWithProvider, config: _FakeConfig) -> None:
+            super().__init__(services=services, config=config)
+            self.added: list[tuple[Path, str]] = []
+
+        async def add_file(self, file_path: Path, priority: str = "change") -> None:
+            self.added.append((Path(file_path), priority))
 
 
 class RealtimeIndexingPollingTests(unittest.IsolatedAsyncioTestCase):
@@ -108,6 +138,39 @@ class RealtimeIndexingPollingTests(unittest.IsolatedAsyncioTestCase):
         await self.service._scan_for_changes(self.root)
 
         self.assertEqual(self.service.removed, [file_path])
+
+    async def test_polling_purges_newly_ignored_files(self) -> None:
+        provider = _DummyProvider()
+        config = _FakeConfigWithGitIgnore(self.root)
+        service = _PurgeTrackingRealtimeIndexingService(
+            services=_ServicesWithProvider(provider), config=config
+        )
+        service.watch_path = self.root
+
+        # Make this directory a Git repo so repo-aware gitignore logic is active.
+        subprocess.run(
+            ["git", "init"],
+            cwd=self.root,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        file_path = self.root / "ignored.py"
+        file_path.write_text("print('ignore me')\n")
+
+        # Baseline scan sees the file and would enqueue it.
+        await service._scan_for_changes(self.root)
+
+        # Introduce a new ignore rule; future snapshots should exclude the file.
+        (self.root / ".gitignore").write_text("ignored.py\n")
+        # Force ignore caches to rebuild for the next snapshot.
+        service._polling_handler = None
+        service.event_handler = None
+
+        await service._scan_for_changes(self.root)
+
+        self.assertTrue(any(path.endswith("ignored.py") for path in provider.deleted))
 
     async def test_queue_overflow_triggers_sweep(self) -> None:
         file_path = self.root / "overflow.py"

@@ -949,9 +949,21 @@ class RealtimeIndexingService:
         try:
             logger.debug(f"Removing file from database: {file_path}")
             if file_path.exists():
-                logger.debug(f"File still exists; re-queueing change: {file_path}")
-                await self.add_file(file_path, priority="change")
-                return
+                # The file might still exist but no longer be eligible for indexing
+                # (e.g., ignore/include rules changed). In that case, treat this as
+                # an index deletion rather than re-queueing work.
+                should_index = True
+                try:
+                    handler = self._polling_handler or self.event_handler
+                    if handler is not None and hasattr(handler, "_should_index"):
+                        should_index = bool(handler._should_index(file_path))
+                except Exception:
+                    should_index = True
+
+                if should_index:
+                    logger.debug(f"File still exists; re-queueing change: {file_path}")
+                    await self.add_file(file_path, priority="change")
+                    return
             self.services.provider.delete_file_completely(str(file_path))
             self._debug(f"removed file from database: {file_path}")
         except Exception as e:
