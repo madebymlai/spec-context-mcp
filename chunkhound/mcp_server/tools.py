@@ -25,7 +25,7 @@ from chunkhound.llm_manager import LLMManager
 from chunkhound.services.research.factory import ResearchServiceFactory
 
 # Response size limits (tokens)
-MAX_RESPONSE_TOKENS = 8000
+MAX_RESPONSE_TOKENS = 20000
 MIN_RESPONSE_TOKENS = 1000
 MAX_ALLOWED_TOKENS = 25000
 
