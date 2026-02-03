@@ -453,10 +453,11 @@ class IndexingCoordinator(BaseService):
             mtime_eps = 0.01
             try:
                 if self.config and getattr(self.config, "indexing", None):
-                    mtime_eps = float(
-                        getattr(self.config.indexing, "mtime_epsilon_seconds", 0.01)
-                        or 0.01
+                    mtime_eps_raw = getattr(
+                        self.config.indexing, "mtime_epsilon_seconds", None
                     )
+                    if mtime_eps_raw is not None:
+                        mtime_eps = float(mtime_eps_raw)
             except Exception:
                 mtime_eps = 0.01
             if mtime_eps < 0:
@@ -1130,10 +1131,11 @@ class IndexingCoordinator(BaseService):
             mtime_eps = 0.01
             try:
                 if self.config and getattr(self.config, "indexing", None):
-                    mtime_eps = float(
-                        getattr(self.config.indexing, "mtime_epsilon_seconds", 0.01)
-                        or 0.01
+                    mtime_eps_raw = getattr(
+                        self.config.indexing, "mtime_epsilon_seconds", None
                     )
+                    if mtime_eps_raw is not None:
+                        mtime_eps = float(mtime_eps_raw)
             except Exception:
                 mtime_eps = 0.01
             if mtime_eps < 0:

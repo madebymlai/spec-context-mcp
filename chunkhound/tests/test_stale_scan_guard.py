@@ -2,6 +2,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from chunkhound.core.types.common import Language
@@ -115,6 +116,44 @@ class StaleScanGuardTests(unittest.IsolatedAsyncioTestCase):
             )
 
             result = await coord.process_directory(root)
+
+            self.assertEqual(result.get("status"), "success")
+            self.assertEqual(result.get("stale_during_scan"), 1)
+            self.assertEqual(result.get("stale_reindexed"), 1)
+            self.assertEqual(result.get("stale_reindex_failed"), 0)
+            self.assertEqual(coord.reindexed, [file_path])
+
+    async def test_directory_scan_honors_zero_mtime_epsilon(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            file_path = root / "example.py"
+            file_path.write_text("print('old')\n")
+            old_stat = file_path.stat()
+
+            coord = _StaleParseCoordinator(
+                target_dir=root,
+                file_path=file_path,
+                old_size=old_stat.st_size,
+                old_mtime=old_stat.st_mtime,
+            )
+
+            # Simulate a small-but-nonzero mtime change with the same size.
+            # With mtime_epsilon_seconds=0.0, the stale scan guard must treat this
+            # parse result as stale and reindex it.
+            fake_stat = type(
+                "_Stat",
+                (),
+                {"st_size": old_stat.st_size, "st_mtime": old_stat.st_mtime + 0.005},
+            )()
+            real_stat = Path.stat
+
+            def patched_stat(self):  # type: ignore[no-untyped-def]
+                if self == file_path:
+                    return fake_stat
+                return real_stat(self)
+
+            with mock.patch.object(Path, "stat", new=patched_stat):
+                result = await coord.process_directory(root)
 
             self.assertEqual(result.get("status"), "success")
             self.assertEqual(result.get("stale_during_scan"), 1)

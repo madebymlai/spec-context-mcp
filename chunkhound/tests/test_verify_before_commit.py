@@ -2,6 +2,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from chunkhound.core.types.common import Language
@@ -114,3 +115,30 @@ class VerifyBeforeCommitTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.get("status"), "stale")
             self.assertFalse(coord.store_called)
 
+    async def test_process_file_honors_zero_mtime_epsilon(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            file_path = root / "example.py"
+
+            file_path.write_text("print('old')\n")
+            old_stat = file_path.stat()
+
+            coord = _StaleProcessFileCoordinator(
+                target_dir=root,
+                file_path=file_path,
+                parsed_size=old_stat.st_size,
+                parsed_mtime=old_stat.st_mtime,
+            )
+
+            # Simulate a small-but-nonzero mtime change with same size.
+            # With mtime_epsilon_seconds=0.0, this must be treated as stale.
+            fake_stat = type(
+                "_Stat",
+                (),
+                {"st_size": old_stat.st_size, "st_mtime": old_stat.st_mtime + 0.005},
+            )()
+            with mock.patch.object(Path, "stat", return_value=fake_stat):
+                result = await coord.process_file(file_path, skip_embeddings=True)
+
+            self.assertEqual(result.get("status"), "stale")
+            self.assertFalse(coord.store_called)
