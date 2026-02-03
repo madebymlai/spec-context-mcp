@@ -2,13 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApi, DocumentSnapshot, DiffResult } from '../api/api';
 import { ApprovalsAnnotator, ApprovalComment } from '../approvals/ApprovalsAnnotator';
 import { getRandomColor } from '../approvals/colors';
-import { NotificationProvider } from '../notifications/NotificationProvider';
 import { TextInputModal } from '../modals/TextInputModal';
 import { AlertModal } from '../modals/AlertModal';
 import { DiffViewer } from '../diff/DiffViewer';
 import { DiffStats, DiffStatsBadge } from '../diff/DiffStats';
 import { formatSnapshotTimestamp, createVersionLabel, hasDiffChanges, getSnapshotTriggerDescription } from '../diff/utils';
 import { useTranslation } from 'react-i18next';
+import { cn } from '../../lib/utils';
+import { useNotifications } from '../notifications/NotificationProvider';
 
 function formatDate(dateStr?: string, t?: (k: string, o?: any) => string) {
   if (!dateStr) return t ? t('common.unknown') : 'Unknown';
@@ -634,9 +635,77 @@ function ApprovalItem({ a }: { a: any }) {
 }
 
 function Content() {
-  const { approvals } = useApi();
+  const { approvals, projectId } = useApi();
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const { t } = useTranslation();
+  const { showNotification } = useNotifications();
+  const [autoApproveEnabled, setAutoApproveEnabled] = useState<boolean>(false);
+  const [autoApproveLoading, setAutoApproveLoading] = useState<boolean>(true);
+  const [autoApproveSaving, setAutoApproveSaving] = useState<boolean>(false);
+
+  useEffect(() => {
+    let active = true;
+
+    if (!projectId) {
+      setAutoApproveEnabled(false);
+      setAutoApproveLoading(false);
+      return () => { active = false; };
+    }
+
+    setAutoApproveLoading(true);
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/approvals/auto-approve`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`GET auto-approve failed: ${res.status}`);
+        return res.json() as Promise<{ enabled?: boolean }>;
+      })
+      .then((data) => {
+        if (!active) return;
+        setAutoApproveEnabled(data.enabled === true);
+      })
+      .catch((error) => {
+        console.error('Failed to load auto-approve mode:', error);
+        if (active) setAutoApproveEnabled(false);
+      })
+      .finally(() => {
+        if (active) setAutoApproveLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [projectId]);
+
+  const toggleAutoApprove = async () => {
+    if (!projectId || autoApproveLoading || autoApproveSaving) return;
+
+    const previous = autoApproveEnabled;
+    const next = !previous;
+    setAutoApproveEnabled(next);
+    setAutoApproveSaving(true);
+
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/approvals/auto-approve`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!res.ok) throw new Error(`PUT auto-approve failed: ${res.status}`);
+      const data = await res.json().catch(() => null) as { enabled?: boolean } | null;
+      if (typeof data?.enabled === 'boolean') {
+        setAutoApproveEnabled(data.enabled);
+      }
+    } catch (error) {
+      console.error('Failed to update auto-approve mode:', error);
+      setAutoApproveEnabled(previous);
+      showNotification(
+        t(
+          'approvalsPage.autoApprove.updateFailed',
+          'Failed to update auto-approve mode. Try restarting the dashboard.'
+        ),
+        'error'
+      );
+    } finally {
+      setAutoApproveSaving(false);
+    }
+  };
 
   // Get unique categories from approvals
   const categories = useMemo(() => {
@@ -678,7 +747,35 @@ function Content() {
                 {t('approvalsPage.header.subtitle')}
               </p>
             </div>
-            <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <div className="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+              <label
+                className={cn(
+                  'inline-flex items-center gap-2 select-none',
+                  (!projectId || autoApproveLoading || autoApproveSaving) ? 'cursor-not-allowed' : 'cursor-pointer'
+                )}
+                title={t('approvalsPage.autoApprove.tooltip', 'Automatically approves all wait-for-approval requests for this project')}
+              >
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                  {t('approvalsPage.autoApprove.label', 'Auto-approve')}
+                </span>
+                <span className="relative inline-flex rounded-full focus-within:ring-2 focus-within:ring-indigo-500 focus-within:ring-offset-2 focus-within:ring-offset-white dark:focus-within:ring-offset-gray-800">
+                  <input
+                    type="checkbox"
+                    className="sr-only"
+                    checked={autoApproveEnabled}
+                    onChange={toggleAutoApprove}
+                    disabled={!projectId || autoApproveLoading || autoApproveSaving}
+                  />
+                  <div
+                    className={cn(
+                      'relative h-6 w-11 rounded-full transition-colors',
+                      autoApproveEnabled ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700',
+                      'after:content-[\"\"] after:absolute after:top-0.5 after:left-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform',
+                      autoApproveEnabled && 'after:translate-x-5'
+                    )}
+                  />
+                </span>
+              </label>
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                 pendingCount > 0
                   ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
@@ -736,5 +833,3 @@ function Content() {
 export function ApprovalsPage() {
   return <Content />;
 }
-
-

@@ -629,6 +629,57 @@ export class MultiProjectDashboardServer {
       return await project.approvalStorage.getAllPendingApprovals();
     });
 
+    // Get auto-approve mode (project-level)
+    this.app.get('/api/projects/:projectId/approvals/auto-approve', async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const project = this.projectManager.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+      return { enabled: project.autoApproveMode === true };
+    });
+
+    // Set auto-approve mode (project-level)
+    this.app.put('/api/projects/:projectId/approvals/auto-approve', async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const { enabled } = request.body as { enabled?: boolean };
+      const project = this.projectManager.getProject(projectId);
+
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      if (typeof enabled !== 'boolean') {
+        return reply.code(400).send({ error: 'enabled must be a boolean' });
+      }
+
+      project.autoApproveMode = enabled;
+
+      // If enabling, immediately resolve any currently pending approvals to unblock wait-for-approval calls.
+      let autoApprovedCount = 0;
+      if (enabled) {
+        try {
+          const pending = await project.approvalStorage.getAllPendingApprovals();
+          for (const a of pending) {
+            try {
+              await project.approvalStorage.updateApproval(
+                a.id,
+                'approved',
+                'Auto-approved by dashboard auto-approve mode'
+              );
+              autoApprovedCount += 1;
+            } catch (error) {
+              console.error(`Failed to auto-approve approval ${a.id}:`, error);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to auto-approve pending approvals:', error);
+        }
+      }
+
+      return { enabled: project.autoApproveMode, autoApprovedCount };
+    });
+
     // Get approval content
     this.app.get('/api/projects/:projectId/approvals/:id/content', async (request, reply) => {
       const { projectId, id } = request.params as { projectId: string; id: string };
@@ -725,7 +776,23 @@ export class MultiProjectDashboardServer {
       const shouldAutoDelete = autoDelete !== 'false'; // Default true
 
       // Check current status first
-      const approval = await project.approvalStorage.getApproval(id);
+      const AUTO_APPROVE_RESPONSE = 'Auto-approved by dashboard auto-approve mode';
+
+      let approval = await project.approvalStorage.getApproval(id);
+      if (!approval) {
+        return reply.code(404).send({ error: 'Approval not found' });
+      }
+
+      // Auto-approve if enabled and still pending
+      if (project.autoApproveMode && approval.status === 'pending') {
+        try {
+          await project.approvalStorage.updateApproval(id, 'approved', AUTO_APPROVE_RESPONSE);
+          approval = await project.approvalStorage.getApproval(id);
+        } catch (error) {
+          console.error('Failed to auto-approve approval:', error);
+        }
+      }
+
       if (!approval) {
         return reply.code(404).send({ error: 'Approval not found' });
       }
@@ -771,7 +838,24 @@ export class MultiProjectDashboardServer {
           if (resolved) return;
 
           try {
-            const currentApproval = await project.approvalStorage.getApproval(id);
+            let currentApproval = await project.approvalStorage.getApproval(id);
+            if (!currentApproval) {
+              resolved = true;
+              cleanup();
+              resolve({ resolved: true, status: 'deleted', error: 'Approval was deleted' });
+              return;
+            }
+
+            // Auto-approve while waiting if the project mode is enabled
+            if (project.autoApproveMode && currentApproval.status === 'pending') {
+              try {
+                await project.approvalStorage.updateApproval(id, 'approved', AUTO_APPROVE_RESPONSE);
+                currentApproval = await project.approvalStorage.getApproval(id);
+              } catch (error) {
+                console.error('Failed to auto-approve approval while waiting:', error);
+              }
+            }
+
             if (!currentApproval) {
               resolved = true;
               cleanup();

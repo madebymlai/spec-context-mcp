@@ -17,6 +17,7 @@ export interface ProjectContext {
   watcher: SpecWatcher;
   approvalStorage: ApprovalStorage;
   archiveService: SpecArchiveService;
+  autoApproveMode: boolean;      // Dashboard-only: auto-approve wait-for-approval requests
 }
 
 export class ProjectManager extends EventEmitter {
@@ -169,7 +170,8 @@ export class ProjectManager extends EventEmitter {
         parser,
         watcher,
         approvalStorage,
-        archiveService
+        archiveService,
+        autoApproveMode: false
       };
 
       this.projects.set(entry.projectId, context);
