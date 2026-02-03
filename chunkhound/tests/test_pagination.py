@@ -1,7 +1,6 @@
 """Tests for pagination logic across the search system."""
 
 import json
-import pytest
 
 from chunkhound.mcp_server.tools import (
     PaginationInfo,

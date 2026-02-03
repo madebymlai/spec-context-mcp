@@ -1081,6 +1081,20 @@ class IndexingCoordinator(BaseService):
             except Exception:
                 force_reindex = False
 
+            # Configurable tolerances (used for both change detection and guarding
+            # against stale parse results during long-running scans).
+            mtime_eps = 0.01
+            try:
+                if self.config and getattr(self.config, "indexing", None):
+                    mtime_eps = float(
+                        getattr(self.config.indexing, "mtime_epsilon_seconds", 0.01)
+                        or 0.01
+                    )
+            except Exception:
+                mtime_eps = 0.01
+            if mtime_eps < 0:
+                mtime_eps = 0.0
+
             files_to_process: list[Path] = files
             skipped_unchanged = 0
             if not force_reindex:
@@ -1093,16 +1107,6 @@ class IndexingCoordinator(BaseService):
 
                 debug_skip = bool(os.getenv("CHUNKHOUND_DEBUG_SKIP"))
                 reasons = {"not_found": 0, "size": 0, "mtime": 0, "ok": 0, "error": 0}
-                # Configurable tolerances
-                mtime_eps = 0.01
-                try:
-                    if self.config and getattr(self.config, "indexing", None):
-                        mtime_eps = float(
-                            getattr(self.config.indexing, "mtime_epsilon_seconds", 0.01)
-                            or 0.01
-                        )
-                except Exception:
-                    mtime_eps = 0.01
 
                 files_to_process = []
                 # Batch-fetch DB metadata once to avoid per-file lookups
@@ -1262,6 +1266,8 @@ class IndexingCoordinator(BaseService):
             agg_errors: list[dict[str, Any]] = []
             agg_skipped = 0
             agg_skipped_timeout: list[str] = []
+            stale_files: set[Path] = set()
+            stale_reindexed_ok = 0
 
             store_progress_counters = {
                 "chunks": 0,
@@ -1277,7 +1283,41 @@ class IndexingCoordinator(BaseService):
                     agg_total_chunks, \
                     agg_errors, \
                     agg_skipped, \
-                    agg_skipped_timeout
+                    agg_skipped_timeout, \
+                    stale_reindexed_ok
+
+                # Guard against a subtle but serious race:
+                # - Directory scans parse files in worker processes
+                # - Files can change on disk (and be reindexed by realtime) while a worker is parsing
+                # If we store the stale parse result after the file changed, we can overwrite newer
+                # chunks with old content, leading to "stale" search hits.
+                #
+                # Mitigation: if the on-disk stat no longer matches the parse-time stat, treat this
+                # batch entry as skipped and reindex it at the end of the scan.
+                for r in batch:
+                    if r.status != "success":
+                        continue
+                    try:
+                        st = r.file_path.stat()
+                    except FileNotFoundError:
+                        stale_files.add(r.file_path)
+                        r.status = "skipped"
+                        r.error = "stale_during_scan"
+                        continue
+                    except Exception:
+                        # If we can't stat it, don't risk overwriting; reindex later.
+                        stale_files.add(r.file_path)
+                        r.status = "skipped"
+                        r.error = "stale_during_scan"
+                        continue
+
+                    same_size = int(st.st_size) == int(r.file_size)
+                    same_mtime = abs(float(st.st_mtime) - float(r.file_mtime)) <= mtime_eps
+                    if not (same_size and same_mtime):
+                        stale_files.add(r.file_path)
+                        r.status = "skipped"
+                        r.error = "stale_during_scan"
+
                 # Update skip counters from parse results
                 for r in batch:
                     if r.status == "skipped":
@@ -1311,6 +1351,36 @@ class IndexingCoordinator(BaseService):
                 task = self.progress.tasks[parse_task]
                 if task.total:
                     self.progress.update(parse_task, completed=task.total)
+
+            # Refresh pass: reindex any files that changed while they were being parsed
+            # by worker processes. This prevents the scan from leaving the DB with stale
+            # content (or missing updates) for actively edited files.
+            if stale_files:
+                logger.debug(
+                    f"Reindexing {len(stale_files)} files modified during scan to avoid stale writes"
+                )
+                for file_path in sorted(stale_files):
+                    try:
+                        if not file_path.exists():
+                            continue
+                        # Reindex without embeddings; embedding generation is handled in the
+                        # unified post-pass (generate_missing_embeddings()).
+                        retry = await self.process_file(file_path, skip_embeddings=True)
+                        if isinstance(retry, dict):
+                            if retry.get("status") == "success":
+                                stale_reindexed_ok += 1
+                                try:
+                                    agg_total_files += 1
+                                    agg_total_chunks += int(retry.get("chunks") or 0)
+                                except Exception:
+                                    pass
+                            else:
+                                err = retry.get("error") or retry.get("errors") or "unknown"
+                                agg_errors.append({"file": str(file_path), "error": f"stale_reindex_failed: {err}"})
+                        else:
+                            agg_errors.append({"file": str(file_path), "error": "stale_reindex_failed: unknown response"})
+                    except Exception as e:
+                        agg_errors.append({"file": str(file_path), "error": f"stale_reindex_failed: {e}"})
 
             # Optimize tables after parsing/chunking if fragmentation high
             if agg_total_chunks > 0 and hasattr(self._db, "optimize_tables"):
@@ -1363,7 +1433,9 @@ class IndexingCoordinator(BaseService):
             }
 
             # Track skipped files (including timeouts)
-            skipped_total = agg_skipped
+            # If a stale file was reindexed successfully, it should not be reported
+            # as skipped even though the original stale parse result was skipped.
+            skipped_total = max(0, agg_skipped - stale_reindexed_ok)
             skipped_due_to_timeout = agg_skipped_timeout
             # Split parse-time skips into timeout vs other (filtered/unsupported/config)
             skipped_filtered = max(0, skipped_total - len(skipped_due_to_timeout))
@@ -1418,6 +1490,9 @@ class IndexingCoordinator(BaseService):
                 "skipped_due_to_timeout": skipped_due_to_timeout,
                 "skipped_unchanged": skipped_unchanged,
                 "skipped_filtered": skipped_filtered,
+                "stale_during_scan": len(stale_files),
+                "stale_reindexed": stale_reindexed_ok,
+                "stale_reindex_failed": max(0, len(stale_files) - stale_reindexed_ok),
             }
 
 
