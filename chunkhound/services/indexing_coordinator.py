@@ -446,6 +446,50 @@ class IndexingCoordinator(BaseService):
             if result.status == "skipped":
                 return {"status": "skipped", "reason": result.error, "chunks": 0}
 
+            # Verify-before-commit: prevent TOCTOU where a file changes on disk
+            # between the parse step and committing chunks into the database.
+            # This is especially important during real-time indexing or when
+            # directory scans run concurrently with edits.
+            mtime_eps = 0.01
+            try:
+                if self.config and getattr(self.config, "indexing", None):
+                    mtime_eps = float(
+                        getattr(self.config.indexing, "mtime_epsilon_seconds", 0.01)
+                        or 0.01
+                    )
+            except Exception:
+                mtime_eps = 0.01
+            if mtime_eps < 0:
+                mtime_eps = 0.0
+            try:
+                st_now = file_path.stat()
+            except FileNotFoundError:
+                return {
+                    "status": "stale",
+                    "chunks": 0,
+                    "error": "File disappeared during processing",
+                }
+            except Exception as e:
+                return {
+                    "status": "stale",
+                    "chunks": 0,
+                    "error": f"Failed to stat file during processing: {e}",
+                }
+
+            same_size = int(st_now.st_size) == int(result.file_size)
+            same_mtime = abs(float(st_now.st_mtime) - float(result.file_mtime)) <= mtime_eps
+            if not (same_size and same_mtime):
+                logger.debug(
+                    f"Skipping stale parse result for {file_path} "
+                    f"(parsed size={result.file_size} mtime={result.file_mtime}; "
+                    f"now size={st_now.st_size} mtime={st_now.st_mtime})"
+                )
+                return {
+                    "status": "stale",
+                    "chunks": 0,
+                    "error": "File changed during processing",
+                }
+
             # Store the single file result
             store_result = await self._store_parsed_results([result], file_task=None)
 

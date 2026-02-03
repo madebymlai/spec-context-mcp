@@ -279,10 +279,29 @@ class RealtimeIndexingService:
 
         # Simple debouncing for rapid file changes
         self._pending_debounce: dict[str, float] = {}  # file_path -> timestamp
-        self._debounce_delay = 0.5  # 500ms delay from research
+        self._debounce_delay = 0.5  # 500ms default
+        try:
+            debounce_env = os.getenv("CHUNKHOUND_REALTIME_DEBOUNCE_SECONDS")
+            if debounce_env is not None:
+                self._debounce_delay = float(debounce_env)
+        except Exception:
+            self._debounce_delay = 0.5
+        if self._debounce_delay < 0:
+            self._debounce_delay = 0.0
         self._debounce_tasks: set[asyncio.Task] = set()  # Track active debounce tasks
 
         self._recent_file_events: dict[str, tuple[str, float]] = {}  # Layer 3: event dedup
+        # Track recent close-after-write signals (inotify IN_CLOSE_WRITE)
+        self._recent_close_events: dict[str, float] = {}
+        self._close_event_window_s = 5.0
+        try:
+            self._close_event_window_s = float(
+                os.getenv("CHUNKHOUND_REALTIME_CLOSE_WINDOW_SECONDS", "5.0")
+            )
+        except Exception:
+            self._close_event_window_s = 5.0
+        if self._close_event_window_s < 0:
+            self._close_event_window_s = 0.0
 
         # Background scan state
         self.scan_iterator: Iterator | None = None
@@ -306,10 +325,17 @@ class RealtimeIndexingService:
         if self._watchdog_setup_timeout_s <= 0:
             self._watchdog_setup_timeout_s = 30.0
 
+        # Allow forcing polling mode for unreliable filesystems (e.g., some
+        # Docker bind mounts / network FS setups).
         def _parse_bool(value: str | None, default: bool = False) -> bool:
             if value is None:
                 return default
             return value.strip().lower() in {"1", "true", "yes", "on"}
+
+        self._force_polling = _parse_bool(
+            os.getenv("CHUNKHOUND_FORCE_POLLING"),
+            default=False,
+        )
 
         self._periodic_sweep_interval_s = 0.0
         try:
@@ -440,6 +466,26 @@ class RealtimeIndexingService:
         self._overflow_debounce_seconds = 2.0
         self._overflow_pending_files: dict[str, tuple[Path, str]] = {}
 
+        # "awaitWriteFinish" style stability checks (cross-platform fallback).
+        self._stability_max_wait_ms = 2000
+        try:
+            self._stability_max_wait_ms = int(
+                os.getenv("CHUNKHOUND_REALTIME_STABILITY_MAX_WAIT_MS", "2000")
+            )
+        except Exception:
+            self._stability_max_wait_ms = 2000
+        if self._stability_max_wait_ms < 0:
+            self._stability_max_wait_ms = 0
+        self._stability_interval_ms = 200
+        try:
+            self._stability_interval_ms = int(
+                os.getenv("CHUNKHOUND_REALTIME_STABILITY_INTERVAL_MS", "200")
+            )
+        except Exception:
+            self._stability_interval_ms = 200
+        if self._stability_interval_ms <= 0:
+            self._stability_interval_ms = 50
+
     # Internal helper to forward realtime events into the MCP debug log file
     def _debug(self, message: str) -> None:
         try:
@@ -475,10 +521,19 @@ class RealtimeIndexingService:
         if self._overflow_drain_interval_s > 0:
             self._overflow_drain_task = asyncio.create_task(self._drain_overflow_loop())
 
-        # Setup watchdog with timeout
-        self._watchdog_setup_task = asyncio.create_task(
-            self._setup_watchdog_with_timeout(watch_path, loop)
-        )
+        # Setup filesystem monitoring (watchdog preferred, polling optional/forced)
+        if self._force_polling:
+            self._debug("polling forced via CHUNKHOUND_FORCE_POLLING")
+            self._using_polling = True
+            if not self._polling_task or self._polling_task.done():
+                self._polling_task = asyncio.create_task(self._polling_monitor(watch_path))
+            self._monitoring_ready_time = time.time()
+            self.monitoring_ready.set()
+        else:
+            # Setup watchdog with timeout
+            self._watchdog_setup_task = asyncio.create_task(
+                self._setup_watchdog_with_timeout(watch_path, loop)
+            )
 
         # Wait for monitoring to be confirmed ready
         monitoring_ok = await self.wait_for_monitoring_ready(timeout=10.0)
@@ -836,12 +891,18 @@ class RealtimeIndexingService:
             return
         if file_path in self.pending_files:
             if priority == "change":
-                # Mark dirty so we reprocess after the current pass
-                self.dirty_files.add(file_path)
                 file_str = str(file_path)
-                # If a debounce is in-flight, extend its window to the latest change
+                # If we're still in the debounce window, just extend it. Don't mark
+                # dirty yet because the eventual debounced pass will index the final
+                # state.
                 if file_str in self._pending_debounce:
                     self._pending_debounce[file_str] = time.time()
+                    self._debug(f"extended debounce {file_path} priority={priority}")
+                    return
+
+                # Otherwise this file is already queued (or about to be processed).
+                # Mark dirty so we reprocess after the current pass.
+                self.dirty_files.add(file_path)
                 self._debug(f"marked dirty {file_path} priority={priority}")
             return
         if file_path not in self.pending_files:
@@ -870,19 +931,28 @@ class RealtimeIndexingService:
                 self._queue_file(priority, file_path)
 
     async def _debounced_add_file(self, file_path: Path, priority: str) -> None:
-        """Process file after debounce delay."""
-        await asyncio.sleep(self._debounce_delay)
-
+        """Wait for a quiet period then queue the file once (trailing-edge debounce)."""
         file_str = str(file_path)
-        if file_str in self._pending_debounce:
-            last_update = self._pending_debounce[file_str]
+        while True:
+            await asyncio.sleep(self._debounce_delay)
 
-            # Check if no recent updates during delay
+            last_update = self._pending_debounce.get(file_str)
+            if last_update is None:
+                return
+
+            # If the file was deleted while waiting, drop the pending work.
+            if not file_path.exists():
+                self._pending_debounce.pop(file_str, None)
+                self.pending_files.discard(file_path)
+                return
+
+            # Check if no recent updates during the debounce interval.
             if time.time() - last_update >= self._debounce_delay:
-                del self._pending_debounce[file_str]
+                self._pending_debounce.pop(file_str, None)
                 if self._queue_file(priority, file_path):
                     logger.debug(f"Processing debounced file: {file_path}")
                     self._debug(f"processing debounced file: {file_path}")
+                return
 
     async def _consume_events(self) -> None:
         """Simple event consumer - pure asyncio queue."""
@@ -911,13 +981,15 @@ class RealtimeIndexingService:
                             f"(within {self._EVENT_DEDUP_WINDOW_SECONDS}s window)"
                         )
                         self._debug(f"suppressed duplicate {event_type}: {file_path}")
-                        if event_type in ("created", "modified"):
+                        if event_type in ("created", "modified", "closed"):
                             await self.add_file(file_path, priority="change")
                         self.event_queue.task_done()
                         continue
 
                 # Record this event
                 self._recent_file_events[file_key] = (event_type, current_time)
+                if event_type == "closed":
+                    self._recent_close_events[file_key] = current_time
 
                 # Cleanup old entries to keep dict bounded (max 1000 files)
                 if len(self._recent_file_events) > 1000:
@@ -926,11 +998,26 @@ class RealtimeIndexingService:
                         k: v for k, v in self._recent_file_events.items()
                         if v[1] > cutoff
                     }
+                if len(self._recent_close_events) > 1000:
+                    cutoff = current_time - self._close_event_window_s
+                    self._recent_close_events = {
+                        k: ts for k, ts in self._recent_close_events.items()
+                        if ts > cutoff
+                    }
 
-                if event_type in ("created", "modified"):
-                    # Use existing add_file method for deduplication and priority
-                    await self.add_file(file_path, priority="change")
-                    self._debug(f"event {event_type}: {file_path}")
+                if event_type in ("created", "modified", "closed"):
+                    # Prefer close-after-write when available (inotify emits "closed" via IN_CLOSE_WRITE).
+                    # If a file is already pending from earlier "modified"/"created" events, the "closed"
+                    # signal usually just indicates the write finished; avoid scheduling a redundant second pass.
+                    if event_type == "closed" and file_path in self.pending_files:
+                        file_str = str(file_path)
+                        if file_str in self._pending_debounce:
+                            self._pending_debounce[file_str] = time.time()
+                        self._debug(f"event closed (pending): {file_path}")
+                    else:
+                        # Use existing add_file method for deduplication and priority
+                        await self.add_file(file_path, priority="change")
+                        self._debug(f"event {event_type}: {file_path}")
                 elif event_type == "deleted":
                     # Handle deletion immediately
                     await self.remove_file(file_path)
@@ -1173,13 +1260,31 @@ class RealtimeIndexingService:
                     continue
                 # Avoid indexing mid-write; if unstable, requeue and continue.
                 if priority == "change":
-                    stable = await self._wait_for_file_stability(file_path)
-                    if not stable:
-                        if file_path.exists():
-                            await self.add_file(file_path, priority="change")
+                    # If we recently observed a close-after-write signal, we can
+                    # skip the stability polling (it's already a strong indicator
+                    # the write completed).
+                    file_key = str(file_path)
+                    closed_at = self._recent_close_events.get(file_key)
+                    skip_stability = False
+                    if closed_at is not None:
+                        if (time.time() - closed_at) <= self._close_event_window_s:
+                            skip_stability = True
                         else:
-                            self.dirty_files.discard(file_path)
-                        continue
+                            # Expired
+                            self._recent_close_events.pop(file_key, None)
+
+                    if not skip_stability and self._stability_max_wait_ms > 0:
+                        stable = await self._wait_for_file_stability(
+                            file_path,
+                            max_wait_ms=self._stability_max_wait_ms,
+                            interval_ms=self._stability_interval_ms,
+                        )
+                        if not stable:
+                            if file_path.exists():
+                                await self.add_file(file_path, priority="change")
+                            else:
+                                self.dirty_files.discard(file_path)
+                            continue
 
                 # Process the file
                 logger.debug(f"Processing {file_path} (priority: {priority})")
@@ -1214,6 +1319,17 @@ class RealtimeIndexingService:
                 # Ensure database transaction is flushed for immediate visibility
                 if hasattr(self.services.provider, "flush"):
                     await self.services.provider.flush()
+
+                # If the file changed during parse/store (TOCTOU), skip leaving stale
+                # content and requeue for a clean pass.
+                try:
+                    if isinstance(result, dict) and result.get("status") == "stale":
+                        self._debug(f"stale during processing; requeue {file_path}")
+                        if file_path.exists():
+                            await self.add_file(file_path, priority="change")
+                        continue
+                except Exception:
+                    pass
 
                 # If we skipped embeddings (or embedding failed), queue for embedding generation
                 if skip_embeddings:

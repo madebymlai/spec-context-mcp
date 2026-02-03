@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import importlib.util
 import os
 import subprocess
@@ -127,6 +128,62 @@ class RealtimeIndexingPollingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(self.service.added), 1)
         self.assertEqual(self.service.added[0][0], file_path)
+
+    async def test_closed_event_triggers_reindex(self) -> None:
+        file_path = self.root / "closed.py"
+        file_path.write_text("print('x')\n")
+
+        consumer = asyncio.create_task(self.service._consume_events())
+        try:
+            await self.service.event_queue.put(("closed", file_path))
+            await asyncio.sleep(0.1)
+        finally:
+            consumer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer
+
+        self.assertTrue(any(path == file_path for path, _ in self.service.added))
+
+    async def test_trailing_edge_debounce_queues_after_quiet_period(self) -> None:
+        os.environ["CHUNKHOUND_REALTIME_DEBOUNCE_SECONDS"] = "0.05"
+        service = _TrackingRealtimeIndexingService(self.config)
+        file_path = self.root / "debounce.py"
+        file_path.write_text("print('x')\n")
+
+        await service.add_file(file_path, priority="change")
+        await asyncio.sleep(0.02)
+        await service.add_file(file_path, priority="change")
+
+        await asyncio.sleep(0.12)
+
+        self.assertEqual(service.file_queue.qsize(), 1)
+        queued_priority, queued_path = service.file_queue.get_nowait()
+        self.assertEqual(queued_priority, "change")
+        self.assertEqual(queued_path, file_path)
+
+    async def test_force_polling_start_sets_monitoring_ready(self) -> None:
+        os.environ["CHUNKHOUND_FORCE_POLLING"] = "1"
+        os.environ["CHUNKHOUND_REALTIME_SWEEP_SECONDS"] = "0"
+        os.environ["CHUNKHOUND_EMBED_SWEEP_SECONDS"] = "0"
+
+        class _ForcePollingService(_TrackingRealtimeIndexingService):
+            def __init__(self, config: _FakeConfig) -> None:
+                super().__init__(config)
+                self.polling_started = False
+
+            async def _polling_monitor(self, watch_path: Path) -> None:  # type: ignore[override]
+                self.polling_started = True
+                return
+
+        service = _ForcePollingService(self.config)
+        await service.start(self.root)
+        try:
+            await asyncio.sleep(0)
+            self.assertTrue(service._using_polling)
+            self.assertTrue(service.monitoring_ready.is_set())
+            self.assertTrue(service.polling_started)
+        finally:
+            await service.stop()
 
     async def test_polling_detects_deleted_files(self) -> None:
         file_path = self.root / "gone.py"
