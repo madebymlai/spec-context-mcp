@@ -798,11 +798,19 @@ class RealtimeIndexingService:
 
         while True:
             try:
+                scan_start = time.time()
                 await self._scan_for_changes(watch_path)
+                scan_duration = max(0.0, time.time() - scan_start)
 
-                # Adaptive poll interval: 1s for the first 10s, then 5s
+                # Adaptive poll interval:
+                # - Always be responsive right after startup/fallback
+                # - After that, scale interval with scan cost (cap at 5s) so large repos
+                #   don't pin a CPU core in polling mode.
                 elapsed = time.time() - polling_start
-                interval = 1.0 if elapsed < 10.0 else 5.0
+                if elapsed < 10.0:
+                    interval = 1.0
+                else:
+                    interval = max(1.0, min(5.0, scan_duration * 2.0))
                 await asyncio.sleep(interval)
 
             except Exception as e:
@@ -1322,12 +1330,44 @@ class RealtimeIndexingService:
             self._polling_handler = SimpleEventHandler(None, self.config, None)
 
         current_state: dict[str, tuple[int, ...]] = {}
-        for file_path in watch_path.rglob("*"):
+        root = watch_path.resolve()
+        patterns: list[str] = []
+        exclude_patterns: list[str] = []
+        try:
+            patterns = list(getattr(self.config.indexing, "include", []) or [])
+        except Exception:
+            patterns = []
+        try:
+            exclude_patterns = list(
+                getattr(self.config.indexing, "get_effective_config_excludes")() or []
+            )
+        except Exception:
             try:
-                if not file_path.is_file():
-                    continue
-                if not self._polling_handler._should_index(file_path):
-                    continue
+                exclude_patterns = list(getattr(self.config.indexing, "exclude", []) or [])
+            except Exception:
+                exclude_patterns = []
+
+        files: list[Path]
+        try:
+            from chunkhound.utils.file_patterns import normalize_include_patterns, walk_directory_tree
+
+            normalized_patterns = (
+                normalize_include_patterns(patterns) if patterns else patterns
+            )
+            files, _ = walk_directory_tree(
+                start_path=root,
+                root_directory=root,
+                patterns=normalized_patterns,
+                exclude_patterns=exclude_patterns,
+                parent_gitignores={root: []},
+                ignore_engine=None,
+            )
+        except Exception:
+            # Conservative fallback if optimized traversal isn't available.
+            files = [p for p in root.rglob("*") if p.is_file()]
+
+        for file_path in files:
+            try:
                 file_key = normalize_file_path(file_path)
                 stat = file_path.stat()
                 current_state[file_key] = self._build_poll_state(stat)
