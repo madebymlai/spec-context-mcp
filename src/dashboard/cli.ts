@@ -94,7 +94,6 @@ async function main() {
 
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
-    process.stdin.resume();
 
   } catch (error: any) {
     console.error(`Failed to start dashboard: ${error.message}`);

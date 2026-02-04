@@ -14,9 +14,9 @@
     "chunkhound"
   ],
   "scripts": {
-    "build": "tsc && npm run build:dashboard && npm run copy-static",
+    "build": "tsc && npm run build:dashboard",
     "build:server": "tsc",
-    "build:dashboard": "vite build --config src/dashboard_frontend/vite.config.ts",
+    "build:dashboard": "vite build --config src/dashboard_frontend/vite.config.ts && npm run copy-static",
     "dev:dashboard": "vite --config src/dashboard_frontend/vite.config.ts",
     "copy-static": "node scripts/copy-static.cjs",
     "dev": "tsc --watch",
