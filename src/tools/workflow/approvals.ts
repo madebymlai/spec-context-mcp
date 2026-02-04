@@ -3,6 +3,7 @@ import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { ApprovalStorage } from '../../storage/approval-storage.js';
 import { join } from 'path';
 import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.js';
+import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 import { readFile } from 'fs/promises';
 import { validateTasksMarkdown, formatValidationErrors } from '../../core/workflow/task-validator.js';
 
@@ -25,6 +26,38 @@ function safeTranslatePath(path: string): string {
     );
   }
   return PathUtils.translatePath(path);
+}
+
+async function tryResolveDashboardProjectId(
+  dashboardUrl: string | undefined,
+  validatedProjectPath: string,
+  translatedProjectPath: string
+): Promise<string | null> {
+  if (!dashboardUrl) return null;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 750);
+
+  try {
+    const projectsResponse = await fetch(`${dashboardUrl}/api/projects/list`, { signal: controller.signal });
+    if (!projectsResponse.ok) return null;
+
+    const projects = await projectsResponse.json() as Array<{ projectId: string; projectPath?: string; projectName: string }>;
+    const projectBaseName = validatedProjectPath.split(/[/\\]/).pop() || '';
+
+    const project = projects.find((p) => {
+      if (!p.projectPath) return false;
+      return p.projectPath === translatedProjectPath ||
+        p.projectPath === validatedProjectPath ||
+        (projectBaseName && p.projectPath.endsWith(projectBaseName));
+    });
+
+    return project?.projectId || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export const approvalsTool: Tool = {
@@ -211,6 +244,7 @@ async function handleRequestApproval(
     const validatedProjectPath = await validateProjectPath(projectPath);
     // Translate path at tool entry point (ApprovalStorage expects pre-translated paths)
     const translatedPath = safeTranslatePath(validatedProjectPath);
+    const dashboardProjectId = await tryResolveDashboardProjectId(context.dashboardUrl, validatedProjectPath, translatedPath);
 
     const approvalStorage = new ApprovalStorage(translatedPath, validatedProjectPath);
     await approvalStorage.start();
@@ -223,6 +257,9 @@ async function handleRequestApproval(
 
     if (existingApproval) {
       await approvalStorage.stop();
+      const approvalUrl = context.dashboardUrl
+        ? buildApprovalDeeplink(context.dashboardUrl, existingApproval.id, dashboardProjectId || undefined)
+        : undefined;
       return {
         success: true,
         message: `Found existing pending approval. Use wait-for-approval to block until user responds.`,
@@ -234,13 +271,14 @@ async function handleRequestApproval(
           status: existingApproval.status,
           createdAt: existingApproval.createdAt,
           dashboardUrl: context.dashboardUrl,
+          approvalUrl,
           reusedExisting: true
         },
         nextSteps: [
           `NEXT: Call wait-for-approval approvalId:"${existingApproval.id}"`,
           'This will block until user approves/rejects/requests-revision',
           'Auto-cleanup happens on resolution',
-          context.dashboardUrl ? `Dashboard: ${context.dashboardUrl}` : 'Start dashboard: spec-context-dashboard'
+          approvalUrl ? `Review in dashboard: ${approvalUrl}` : 'Start dashboard: spec-context-dashboard'
         ],
         projectContext: {
           projectPath: validatedProjectPath,
@@ -305,6 +343,9 @@ async function handleRequestApproval(
     );
 
     await approvalStorage.stop();
+    const approvalUrl = context.dashboardUrl
+      ? buildApprovalDeeplink(context.dashboardUrl, approvalId, dashboardProjectId || undefined)
+      : undefined;
 
     return {
       success: true,
@@ -315,13 +356,14 @@ async function handleRequestApproval(
         filePath: args.filePath,
         type: args.type,
         status: 'pending',
-        dashboardUrl: context.dashboardUrl
+        dashboardUrl: context.dashboardUrl,
+        approvalUrl,
       },
       nextSteps: [
         `NEXT: Call wait-for-approval approvalId:"${approvalId}"`,
         'This will block until user approves/rejects/requests-revision',
         'Auto-cleanup happens on resolution',
-        context.dashboardUrl ? `Dashboard: ${context.dashboardUrl}` : 'Start dashboard: spec-context-dashboard'
+        approvalUrl ? `Review in dashboard: ${approvalUrl}` : 'Start dashboard: spec-context-dashboard'
       ],
       projectContext: {
         projectPath: validatedProjectPath,
@@ -378,6 +420,7 @@ async function handleGetApprovalStatus(
     const isCompleted = approval.status === 'approved' || approval.status === 'rejected';
     const canProceed = approval.status === 'approved';
     const mustWait = approval.status !== 'approved';
+    const approvalUrl = context.dashboardUrl ? buildApprovalDeeplink(context.dashboardUrl, args.approvalId) : undefined;
     const nextSteps: string[] = [];
 
     if (approval.status === 'pending') {
@@ -385,6 +428,9 @@ async function handleGetApprovalStatus(
       nextSteps.push('VERBAL APPROVAL NOT ACCEPTED - Use dashboard only');
       nextSteps.push('Approval must be done via dashboard');
       nextSteps.push('Continue polling with approvals action:"status"');
+      if (approvalUrl) {
+        nextSteps.push(`Review in dashboard: ${approvalUrl}`);
+      }
     } else if (approval.status === 'approved') {
       nextSteps.push('APPROVED - Can proceed');
       nextSteps.push('Run approvals action:"delete" before continuing');
@@ -443,7 +489,8 @@ async function handleGetApprovalStatus(
         canProceed,
         mustWait,
         blockNext: !canProceed,
-        dashboardUrl: context.dashboardUrl
+        dashboardUrl: context.dashboardUrl,
+        approvalUrl
       },
       nextSteps,
       projectContext: {
@@ -502,6 +549,7 @@ async function handleDeleteApproval(
     // Only block deletion of pending requests (still awaiting approval)
     // Allow deletion of: approved, needs-revision, rejected
     if (approval.status === 'pending') {
+      const approvalUrl = context.dashboardUrl ? buildApprovalDeeplink(context.dashboardUrl, args.approvalId) : undefined;
       return {
         success: false,
         message: `BLOCKED: Cannot delete - status is "${approval.status}". This approval is still awaiting review. VERBAL APPROVAL NOT ACCEPTED. Use dashboard only.`,
@@ -516,6 +564,7 @@ async function handleDeleteApproval(
           'STOP - Cannot delete pending approval',
           'Wait for approval or rejection',
           'Poll with approvals action:"status"',
+          ...(approvalUrl ? [`Review in dashboard: ${approvalUrl}`] : []),
           'Delete only after status changes to approved, rejected, or needs-revision'
         ]
       };

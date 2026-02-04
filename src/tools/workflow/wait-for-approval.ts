@@ -1,7 +1,7 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.js';
-import { resolveDashboardUrl } from '../../core/workflow/dashboard-url.js';
+import { resolveDashboardUrl, buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 
 /**
  * Safely translate a path, with defensive checks
@@ -128,6 +128,7 @@ export async function waitForApprovalHandler(
     const timeoutMs = Math.min(args.timeoutMs || 600000, 1800000);
     const autoDelete = args.autoDelete !== false;
     const waitUrl = `${dashboardUrl}/api/projects/${project.projectId}/approvals/${args.approvalId}/wait?timeout=${timeoutMs}&autoDelete=${autoDelete}`;
+    const approvalUrl = buildApprovalDeeplink(dashboardUrl, args.approvalId, project.projectId);
 
     // Call the wait endpoint (this will block)
     const controller = new AbortController();
@@ -169,12 +170,13 @@ export async function waitForApprovalHandler(
           data: {
             approvalId: args.approvalId,
             status: 'pending',
-            timeout: true
+            timeout: true,
+            approvalUrl,
           },
           nextSteps: [
             'Call wait-for-approval again to continue waiting',
             'Or check dashboard to see if user is available',
-            `Dashboard: ${dashboardUrl}`
+            `Review in dashboard: ${approvalUrl}`
           ]
         };
       }
@@ -230,7 +232,8 @@ export async function waitForApprovalHandler(
           comments: result.comments,
           respondedAt: result.respondedAt,
           autoDeleted: result.autoDeleted,
-          canProceed
+          canProceed,
+          approvalUrl,
         },
         nextSteps,
         projectContext: {
@@ -249,11 +252,12 @@ export async function waitForApprovalHandler(
           data: {
             approvalId: args.approvalId,
             status: 'pending',
-            timeout: true
+            timeout: true,
+            approvalUrl
           },
           nextSteps: [
             'Call wait-for-approval again to continue waiting',
-            `Dashboard: ${dashboardUrl}`
+            `Review in dashboard: ${approvalUrl}`
           ]
         };
       }

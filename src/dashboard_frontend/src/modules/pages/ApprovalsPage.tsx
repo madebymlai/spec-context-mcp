@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useApi, DocumentSnapshot, DiffResult } from '../api/api';
 import { ApprovalsAnnotator, ApprovalComment } from '../approvals/ApprovalsAnnotator';
 import { getRandomColor } from '../approvals/colors';
@@ -22,12 +23,13 @@ function formatDate(dateStr?: string, t?: (k: string, o?: any) => string) {
 }
 
 
-function ApprovalItem({ a }: { a: any }) {
+function ApprovalItem({ a, isHighlighted = false }: { a: any; isHighlighted?: boolean }) {
   const { approvalsAction, getApprovalContent, getApprovalSnapshots, getApprovalDiff, aiReview } = useApi();
   const { t } = useTranslation();
+  const itemRef = useRef<HTMLDivElement>(null);
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
-  const [open, setOpen] = useState<boolean>(false);
+  const [open, setOpen] = useState<boolean>(isHighlighted);
   const [viewMode, setViewMode] = useState<'preview' | 'annotate' | 'diff'>('annotate');
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split' | 'inline'>('split');
   const [comments, setComments] = useState<ApprovalComment[]>([]);
@@ -37,6 +39,17 @@ function ApprovalItem({ a }: { a: any }) {
   const [revisionWarningModalOpen, setRevisionWarningModalOpen] = useState<boolean>(false);
   const [aiReviewError, setAiReviewError] = useState<string | null>(null);
   const [aiReviewLoading, setAiReviewLoading] = useState<boolean>(false);
+
+  // Auto-open + scroll into view when deep-linked from URL (?id=...)
+  useEffect(() => {
+    if (!isHighlighted) return;
+    setOpen(true);
+    if (!itemRef.current) return;
+    const timeoutId = setTimeout(() => {
+      itemRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+    return () => clearTimeout(timeoutId);
+  }, [isHighlighted]);
 
   // Count only human comments + accepted AI suggestions (exclude pending AI)
   const humanCommentsCount = useMemo(() =>
@@ -262,7 +275,13 @@ function ApprovalItem({ a }: { a: any }) {
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800 shadow rounded-lg transition-colors overflow-hidden max-w-full">
+    <div
+      ref={itemRef}
+      className={cn(
+        'bg-white dark:bg-gray-800 shadow rounded-lg transition-all overflow-hidden max-w-full',
+        isHighlighted && 'ring-2 ring-amber-500 shadow-lg shadow-amber-500/20'
+      )}
+    >
       <div className="p-3 sm:p-4 md:p-6 lg:p-8 min-w-0 max-w-full overflow-x-hidden">
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0">
@@ -639,6 +658,8 @@ function Content() {
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const { t } = useTranslation();
   const { showNotification } = useNotifications();
+  const [searchParams] = useSearchParams();
+  const highlightedId = searchParams.get('id');
   const [autoApproveEnabled, setAutoApproveEnabled] = useState<boolean>(false);
   const [autoApproveLoading, setAutoApproveLoading] = useState<boolean>(true);
   const [autoApproveSaving, setAutoApproveSaving] = useState<boolean>(false);
@@ -822,7 +843,7 @@ function Content() {
       ) : (
         <div className="space-y-3 sm:space-y-4 max-w-full overflow-x-hidden">
           {filteredApprovals.map((a) => (
-            <ApprovalItem key={a.id} a={a} />
+            <ApprovalItem key={a.id} a={a} isHighlighted={highlightedId === a.id} />
           ))}
         </div>
       )}

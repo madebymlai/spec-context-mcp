@@ -4,6 +4,12 @@ const mocks = vi.hoisted(() => ({
   validateProjectPath: vi.fn(async (value: string) => value),
   translatePath: vi.fn((value: string) => value),
   resolveDashboardUrl: vi.fn(async () => 'http://localhost:3000'),
+  buildApprovalDeeplink: vi.fn((dashboardUrl: string, approvalId: string, projectId?: string) => {
+    const base = (dashboardUrl || '').replace(/\/+$/, '');
+    const params = new URLSearchParams({ id: approvalId });
+    if (projectId) params.set('projectId', projectId);
+    return `${base}/#/approvals?${params.toString()}`;
+  }),
 }));
 
 type FetchResponse = {
@@ -25,6 +31,7 @@ vi.mock('../../../core/workflow/path-utils.js', () => ({
 
 vi.mock('../../../core/workflow/dashboard-url.js', () => ({
   resolveDashboardUrl: mocks.resolveDashboardUrl,
+  buildApprovalDeeplink: mocks.buildApprovalDeeplink,
 }));
 
 import { waitForApprovalHandler } from '../wait-for-approval.js';
@@ -34,6 +41,7 @@ describe('waitForApprovalHandler', () => {
     mocks.validateProjectPath.mockClear();
     mocks.translatePath.mockClear();
     mocks.resolveDashboardUrl.mockClear();
+    mocks.buildApprovalDeeplink.mockClear();
   });
 
   afterEach(() => {

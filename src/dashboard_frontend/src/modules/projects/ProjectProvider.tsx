@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 export interface ProjectInstance {
   pid: number;
@@ -26,6 +27,8 @@ const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 const STORAGE_KEY = 'spec-context-current-project';
 
 export function ProjectProvider({ children }: { children: React.ReactNode }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlProjectId = searchParams.get('projectId');
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => {
     // Initialize from localStorage if available
@@ -40,6 +43,21 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   // Use ref to track current project without dependency issues
   const currentProjectIdRef = useRef(currentProjectId);
   const hasInitializedRef = useRef(false);
+  const lastUrlProjectIdRef = useRef<string | null>(null);
+
+  // If a deep link includes a `projectId` query param, switch once and then
+  // remove it from the URL so manual switching still works.
+  useEffect(() => {
+    if (!urlProjectId) return;
+    if (lastUrlProjectIdRef.current === urlProjectId) return;
+
+    lastUrlProjectIdRef.current = urlProjectId;
+    setCurrentProjectId(urlProjectId);
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('projectId');
+    setSearchParams(nextParams, { replace: true });
+  }, [urlProjectId, searchParams, setSearchParams]);
 
   // Sync ref and localStorage when state changes
   useEffect(() => {

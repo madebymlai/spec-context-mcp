@@ -502,6 +502,10 @@ function TaskList({ specName }: { specName: string }) {
   useEffect(() => {
     let active = true;
     setLoading(true);
+    setData(null); // Clear old data immediately to prevent stale tasks from showing
+    setCopiedTaskId(null);
+    setExpandedPrompts(new Set());
+    pendingStatusUpdatesRef.current.clear();
     getSpecTasksProgress(specName)
       .then((d) => active && setData(d))
       .finally(() => active && setLoading(false));
@@ -1408,11 +1412,11 @@ function Content() {
               align="right"
             />
           </div>
-        </div>
-        <TaskList specName={selected} />
-      </div>
-    );
-  }
+	        </div>
+	        <TaskList key={selected} specName={selected} />
+	      </div>
+	    );
+	  }
 
   return (
     <div className="grid gap-4">
@@ -1472,5 +1476,3 @@ function Content() {
 export function TasksPage() {
   return <Content />;
 }
-
-

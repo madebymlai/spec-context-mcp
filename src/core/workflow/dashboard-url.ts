@@ -31,3 +31,16 @@ export async function resolveDashboardUrl(
 
   return defaultUrl;
 }
+
+/**
+ * Build a deep link into the dashboard SPA (HashRouter).
+ * Example: http://localhost:5000/#/approvals?id=abc&projectId=xyz
+ */
+export function buildApprovalDeeplink(dashboardUrl: string, approvalId: string, projectId?: string): string {
+  const base = (dashboardUrl || '').replace(/\/+$/, '');
+  const params = new URLSearchParams({ id: approvalId });
+  if (projectId) {
+    params.set('projectId', projectId);
+  }
+  return `${base}/#/approvals?${params.toString()}`;
+}
