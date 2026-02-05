@@ -149,6 +149,14 @@ test('retry works', async () => {
 });
 \`\`\`
 
+**Good Tests:**
+
+| Quality       | Good                              | Bad                                              |
+|---------------|-----------------------------------|--------------------------------------------------|
+| **Minimal**   | One thing. "and" in name? Split.  | \`test('validates email and domain and whitespace')\` |
+| **Clear**     | Name describes behavior           | \`test('test1')\`                                    |
+| **Shows intent** | Demonstrates desired API       | Obscures what code should do                     |
+
 **2. Verify RED - Watch It Fail**
 
 **MANDATORY. Never skip.**
@@ -167,6 +175,32 @@ Test passes? You're testing existing behavior. Fix test.
 **3. GREEN - Minimal Code**
 
 Write simplest code to pass the test. Don't add features beyond the test.
+
+\`\`\`typescript
+// GOOD: Just enough to pass
+async function retryOperation<T>(fn: () => Promise<T>): Promise<T> {
+  for (let i = 0; i < 3; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i === 2) throw e;
+    }
+  }
+  throw new Error('unreachable');
+}
+
+// BAD: Over-engineered (YAGNI)
+async function retryOperation<T>(
+  fn: () => Promise<T>,
+  options?: {
+    maxRetries?: number;
+    backoff?: 'linear' | 'exponential';
+    onRetry?: (attempt: number) => void;
+  }
+): Promise<T> {
+  // Don't add features beyond the test
+}
+\`\`\`
 
 **4. Verify GREEN - Watch It Pass**
 
@@ -238,6 +272,48 @@ Before marking work complete:
 - [ ] Edge cases and errors covered
 
 Can't check all boxes? You skipped TDD. Start over.
+
+### Example: Bug Fix with TDD
+
+**Bug:** Empty email accepted
+
+**RED:**
+\`\`\`typescript
+test('rejects empty email', async () => {
+  const result = await submitForm({ email: '' });
+  expect(result.error).toBe('Email required');
+});
+\`\`\`
+
+**Verify RED:**
+\`\`\`bash
+$ npm test
+FAIL: expected 'Email required', got undefined
+\`\`\`
+
+**GREEN:**
+\`\`\`typescript
+function submitForm(data: FormData) {
+  if (!data.email?.trim()) {
+    return { error: 'Email required' };
+  }
+  // ...
+}
+\`\`\`
+
+**Verify GREEN:**
+\`\`\`bash
+$ npm test
+PASS
+\`\`\`
+
+**REFACTOR:** Extract validation for multiple fields if needed.
+
+### Debugging Integration
+
+Bug found? Write failing test reproducing it. Follow TDD cycle. Test proves fix and prevents regression.
+
+**Never fix bugs without a test.**
 
 `;
 }
@@ -450,6 +526,48 @@ If you pushed back and were wrong:
 \`\`\`
 
 State the correction factually and move on.
+
+### Common Mistakes
+
+| Mistake                       | Fix                                      |
+|-------------------------------|------------------------------------------|
+| Performative agreement        | State requirement or just act            |
+| Blind implementation          | Verify against codebase first            |
+| Batch without testing         | One at a time, test each                 |
+| Assuming reviewer is right    | Check if breaks things                   |
+| Avoiding pushback             | Technical correctness > comfort          |
+| Partial implementation        | Clarify all items first                  |
+| Can't verify, proceed anyway  | State limitation, ask for direction      |
+
+### Real Examples
+
+**Performative Agreement (Bad):**
+\`\`\`
+Reviewer: "Remove legacy code"
+❌ "You're absolutely right! Let me remove that..."
+\`\`\`
+
+**Technical Verification (Good):**
+\`\`\`
+Reviewer: "Remove legacy code"
+✅ "Checking... build target is 10.15+, this API needs 13+.
+   Need legacy for backward compat. Current impl has wrong
+   bundle ID - fix it or drop pre-13 support?"
+\`\`\`
+
+**YAGNI (Good):**
+\`\`\`
+Reviewer: "Implement proper metrics tracking with database, date filters, CSV export"
+✅ "Grepped codebase - nothing calls this endpoint. Remove it (YAGNI)?
+   Or is there usage I'm missing?"
+\`\`\`
+
+**Unclear Item (Good):**
+\`\`\`
+Feedback: "Fix items 1-6"
+You understand 1,2,3,6. Unclear on 4,5.
+✅ "Understand 1,2,3,6. Need clarification on 4 and 5 before implementing."
+\`\`\`
 
 `;
 }
