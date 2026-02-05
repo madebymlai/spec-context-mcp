@@ -120,20 +120,6 @@ Separate key principles from tech.md. Principles are cross-cutting - everyone ne
 
 ## New MCP Tools
 
-### get-dispatch-config
-
-Returns CLI mapping for orchestrator to dispatch roles.
-
-**Response:**
-```json
-{
-  "discipline": "full",
-  "implementer_cli": "claude",
-  "reviewer_cli": "codex",
-  "brainstorm_cli": "claude"
-}
-```
-
 ### get-brainstorm-guide
 
 Returns guide for pre-spec ideation. Includes:
@@ -213,7 +199,6 @@ Affected by discipline mode:
 │     → Asks: brainstorm or proceed?                                │
 │                                                                   │
 │  2. If brainstorm:                                                │
-│     → Calls get-dispatch-config for CLI                           │
 │     → Dispatches to BRAINSTORM_CLI with get-brainstorm-guide      │
 │     → Refines idea until clear                                    │
 │                                                                   │
@@ -221,7 +206,6 @@ Affected by discipline mode:
 │                                                                   │
 │  4. For each task:                                                │
 │     ┌─────────────────────────────────────────────────────────┐  │
-│     │  Calls get-dispatch-config for CLI                       │  │
 │     │  Dispatches to IMPLEMENTER_CLI with:                     │  │
 │     │    - Task _Prompt                                        │  │
 │     │    - get-implementer-guide content                       │  │
@@ -261,7 +245,6 @@ Affected by discipline mode:
 | New env vars | `SPEC_CONTEXT_IMPLEMENTER_CLI`, `SPEC_CONTEXT_REVIEWER_CLI`, `SPEC_CONTEXT_BRAINSTORM_CLI` |
 | New steering doc | `principles.md` + `principles-template.md` |
 | Update steering doc | `tech-template.md` (remove principles section) |
-| New MCP tool | `get-dispatch-config` |
 | New MCP tool | `get-brainstorm-guide` |
 | New MCP tool | `get-implementer-guide` |
 | New MCP tool | `get-reviewer-guide` |
