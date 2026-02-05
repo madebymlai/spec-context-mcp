@@ -68,7 +68,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 3. Update tech-template.md to reference principles.md
+- [x] 3. Update tech-template.md to reference principles.md
   - File: src/templates/tech-template.md
   - Add note referencing principles.md for coding standards
   - Purpose: Direct users to principles.md for coding rules

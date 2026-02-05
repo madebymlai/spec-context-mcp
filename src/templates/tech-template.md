@@ -2,6 +2,8 @@
 
 > **Note:** Use the `search_code` tool to identify current technology patterns in the codebase. Search for import statements, configuration files, and common patterns.
 
+> **Note:** For coding standards and principles (SOLID, DRY, KISS, etc.), see `principles.md`.
+
 ## Project Type
 [Describe what kind of project this is: web application, CLI tool, desktop application, mobile app, library, API service, embedded system, game, etc.]
 
