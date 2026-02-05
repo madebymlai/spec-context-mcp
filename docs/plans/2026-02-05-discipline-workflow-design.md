@@ -12,15 +12,13 @@ This design is based on the **Superpowers Skills** - a collection of battle-test
 - `superpowers/skills/requesting-code-review`
 - `superpowers/skills/subagent-driven-development`
 
-### Key Principles from Superpowers
+### Foundational Principles (Adapted for Spec-Context)
 
-**From Test-Driven Development:**
+**Test-Driven Development (TDD):**
 
-> "Write the test first. Watch it fail. Write minimal code to pass."
+> Write the test first. Watch it fail. Write minimal code to pass.
 >
 > **Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
->
-> **Violating the letter of the rules is violating the spirit of the rules.**
 
 > **The Iron Law:**
 > ```
@@ -28,11 +26,13 @@ This design is based on the **Superpowers Skills** - a collection of battle-test
 > ```
 > Write code before the test? Delete it. Start over.
 
-> "Tests-after answer 'What does this do?' Tests-first answer 'What should this do?'"
+> Tests-after answer "What does this do?" Tests-first answer "What should this do?"
 
-**From Verification Before Completion:**
+Applied in spec-context: When `SPEC_CONTEXT_DISCIPLINE=full`, the `get-implementer-guide` MCP tool returns TDD rules. Task generation skips separate test tasks since TDD is implicit.
 
-> "Claiming work is complete without verification is dishonesty, not efficiency."
+**Verification Before Completion:**
+
+> Claiming work is complete without verification is dishonesty, not efficiency.
 >
 > **Core principle:** Evidence before claims, always.
 
@@ -40,7 +40,6 @@ This design is based on the **Superpowers Skills** - a collection of battle-test
 > ```
 > NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
 > ```
-> If you haven't run the verification command in this message, you cannot claim it passes.
 
 > **The Gate Function:**
 > 1. IDENTIFY: What command proves this claim?
@@ -48,12 +47,12 @@ This design is based on the **Superpowers Skills** - a collection of battle-test
 > 3. READ: Full output, check exit code, count failures
 > 4. VERIFY: Does output confirm the claim?
 > 5. ONLY THEN: Make the claim
->
-> Skip any step = lying, not verifying
 
-**From Receiving Code Review:**
+Applied in spec-context: Verification rules are always included in `get-implementer-guide` regardless of discipline mode. Implementers must verify before reporting task complete.
 
-> "Code review requires technical evaluation, not emotional performance."
+**Receiving Code Review:**
+
+> Code review requires technical evaluation, not emotional performance.
 >
 > **Core principle:** Verify before implementing. Ask before assuming. Technical correctness over social comfort.
 
@@ -62,24 +61,28 @@ This design is based on the **Superpowers Skills** - a collection of battle-test
 > - "Great point!" / "Excellent feedback!"
 > - "Let me implement that now" (before verification)
 
-> **External feedback = suggestions to evaluate, not orders to follow.**
-> Verify. Question. Then implement.
+> External feedback = suggestions to evaluate, not orders to follow.
+> Verify against `principles.md` and `tech.md`. Question. Then implement.
 
-**From Subagent-Driven Development:**
+Applied in spec-context: Implementer receives reviewer feedback directly. Must verify suggestions against project's `principles.md` before implementing. Push back with technical reasoning if feedback conflicts with documented principles.
 
-> **Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration
+**Subagent-Driven Development:**
+
+> **Core principle:** Fresh CLI per task + two-stage review (spec then quality) = high quality, fast iteration
 
 > **Quality gates:**
-> - Self-review catches issues before handoff
 > - Two-stage review: spec compliance, then code quality
 > - Review loops ensure fixes actually work
 > - Spec compliance prevents over/under-building
+> - Check against `tech.md` for architecture, `principles.md` for coding standards
 
 > **Red Flags - Never:**
-> - Skip reviews (spec compliance OR code quality)
+> - Skip reviews (when `full` or `standard` mode)
 > - Accept "close enough" on spec compliance
-> - Skip review loops (reviewer found issues = implementer fixes = review again)
-> - Start code quality review before spec compliance is ✅
+> - Skip review loops (same issue twice = orchestrator takes over)
+> - Start code quality review before spec compliance passes
+
+Applied in spec-context: Orchestrator dispatches to configurable CLIs (`SPEC_CONTEXT_IMPLEMENTER_CLI`, `SPEC_CONTEXT_REVIEWER_CLI`). Reviewer uses `get-reviewer-guide` which references `principles.md` and `tech.md` for review criteria.
 
 ---
 
