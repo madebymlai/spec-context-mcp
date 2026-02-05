@@ -25,12 +25,16 @@ The following skills are adapted into the MCP tool prompts (`get-implementer-gui
 
 **Auto-imported steering docs per guide:**
 
-| Guide | Auto-imports |
-|-------|--------------|
+Each guide reads and **includes the full content** of relevant steering docs in its response:
+
+| Guide | Includes content of |
+|-------|---------------------|
 | `spec-workflow-guide` | `product.md`, `tech.md`, `structure.md`, `principles.md` |
 | `get-implementer-guide` | `tech.md`, `principles.md` |
 | `get-reviewer-guide` | `tech.md`, `principles.md` |
 | `get-brainstorm-guide` | `product.md`, `principles.md` |
+
+The agent receives the steering doc content directly - no need to read files separately.
 
 **MCP search tool usage per guide:**
 
