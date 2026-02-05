@@ -3,10 +3,10 @@ import { ToolContext, ToolResponse } from '../../workflow-types.js';
 
 export const steeringGuideTool: Tool = {
   name: 'steering-guide',
-  description: `Create steering docs, setup project architecture, define product vision, document tech stack, codebase structure. Use when user asks to create steering documents, setup project architecture docs, or says "create steering docs", "setup project docs", "document architecture".
+  description: `Create steering docs, setup project architecture, define product vision, document tech stack, codebase structure, coding principles. Use when user asks to create steering documents, setup project architecture docs, or says "create steering docs", "setup project docs", "document architecture".
 
 # Instructions
-Call ONLY when user explicitly requests steering document creation or asks about project architecture docs. Not part of standard spec workflow. Provides templates and guidance for product.md, tech.md, and structure.md creation. Its important that you follow this workflow exactly to avoid errors.`,
+Call ONLY when user explicitly requests steering document creation or asks about project architecture docs. Not part of standard spec workflow. Provides templates and guidance for product.md, tech.md, structure.md, and principles.md creation. Its important that you follow this workflow exactly to avoid errors.`,
   inputSchema: {
     type: 'object',
     properties: {},
@@ -25,7 +25,7 @@ export async function steeringGuideHandler(args: any, context: ToolContext): Pro
     nextSteps: [
       'Only proceed if user requested steering docs',
       'Create product.md first',
-      'Then tech.md and structure.md',
+      'Then tech.md, structure.md, and principles.md',
       'Reference in future specs',
       context.dashboardUrl ? `Dashboard: ${context.dashboardUrl}` : 'Start the dashboard with: spec-context-dashboard'
     ]
@@ -81,13 +81,26 @@ flowchart TD
     P3_Check -->|approved| P3_Clean[approvals<br/>action: delete]
     P3_Clean -->|failed| P3_Status
 
-    P3_Clean -->|success| Complete([Steering docs complete])
+    %% Phase 4: Principles
+    P3_Clean -->|success| P4_Template[Check user-templates first,<br/>then read template:<br/>principles-template.md]
+    P4_Template --> P4_Generate[Generate coding principles]
+    P4_Generate --> P4_Create[Create file:<br/>.spec-context/steering/<br/>principles.md]
+    P4_Create --> P4_Approve[approvals<br/>action: request<br/>filePath only]
+    P4_Approve --> P4_Status[approvals<br/>action: status<br/>poll status]
+    P4_Status --> P4_Check{Status?}
+    P4_Check -->|needs-revision| P4_Update[Update document using user comments for guidance]
+    P4_Update --> P4_Create
+    P4_Check -->|approved| P4_Clean[approvals<br/>action: delete]
+    P4_Clean -->|failed| P4_Status
+
+    P4_Clean -->|success| Complete([Steering docs complete])
 
     style Start fill:#e6f3ff
     style Complete fill:#e6f3ff
     style P1_Check fill:#ffe6e6
     style P2_Check fill:#ffe6e6
     style P3_Check fill:#ffe6e6
+    style P4_Check fill:#ffe6e6
 \`\`\`
 
 ## Steering Workflow Phases
@@ -161,7 +174,31 @@ flowchart TD
 8. If needs-revision: update document using comments, create NEW approval, do NOT proceed
 9. Once approved: use approvals with action:'delete' (must succeed) before proceeding
 10. If delete fails: STOP - return to polling
-11. After successful cleanup: "Steering docs complete. Ready for spec creation?"
+
+### Phase 4: Principles Document
+**Purpose**: Define coding standards and principles.
+
+**File Operations**:
+- Check for custom template: \`.spec-context/user-templates/principles-template.md\`
+- Read template: \`.spec-context/templates/principles-template.md\` (if no custom template)
+- Create document: \`.spec-context/steering/principles.md\`
+
+**Tools**:
+- approvals: Manage approval workflow (actions: request, status, delete)
+
+**Process**:
+1. Check for custom template at \`.spec-context/user-templates/principles-template.md\`
+2. If no custom template, read from \`.spec-context/templates/principles-template.md\`
+3. Document SOLID principles with "Ask yourself" questions
+4. Document architecture rules and design patterns
+5. Define quality gates and review checklist
+6. Create \`principles.md\` at \`.spec-context/steering/principles.md\`
+7. Request approval using approvals tool with action:'request'
+8. Poll status using approvals with action:'status' until approved/needs-revision
+9. If needs-revision: update document using comments, create NEW approval, do NOT proceed
+10. Once approved: use approvals with action:'delete' (must succeed) before completing
+11. If delete fails: STOP - return to polling
+12. After successful cleanup: "Steering docs complete. Ready for spec creation?"
 
 ## Workflow Rules
 
@@ -183,10 +220,12 @@ flowchart TD
 ├── templates/           # Auto-populated on server start
 │   ├── product-template.md
 │   ├── tech-template.md
-│   └── structure-template.md
+│   ├── structure-template.md
+│   └── principles-template.md
 └── steering/
     ├── product.md
     ├── tech.md
-    └── structure.md
+    ├── structure.md
+    └── principles.md
 \`\`\``;
 }

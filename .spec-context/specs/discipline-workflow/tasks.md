@@ -272,7 +272,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 9. Update steering-guide to include principles.md
+- [x] 9. Update steering-guide to include principles.md
   - File: src/tools/workflow/steering-guide.ts
   - Add Phase 4: Principles Document to workflow
   - Update workflow diagram
