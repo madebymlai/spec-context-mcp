@@ -363,7 +363,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 12. Update .env.example with new environment variables
+- [x] 12. Update .env.example with new environment variables
   - File: .env.example
   - Add SPEC_CONTEXT_DISCIPLINE with default value and comment
   - Add SPEC_CONTEXT_IMPLEMENTER, REVIEWER, BRAINSTORM with comments
