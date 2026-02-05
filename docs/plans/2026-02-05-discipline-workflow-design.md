@@ -18,10 +18,19 @@ The following skills are adapted into the MCP tool prompts (`get-implementer-gui
 | `superpowers/skills/brainstorming` | `get-brainstorm-guide` |
 
 **Implementation approach:** Copy and adapt each skill's content into the corresponding MCP tool prompt, integrating with:
-- References to `principles.md` and `tech.md` steering docs
+- Auto-import relevant steering docs (see table below)
 - Our MCP tool names and workflow
 - `SPEC_CONTEXT_DISCIPLINE` mode logic
 - LLM-agnostic language (no Claude-specific references)
+
+**Auto-imported steering docs per guide:**
+
+| Guide | Auto-imports |
+|-------|--------------|
+| `spec-workflow-guide` | `product.md`, `tech.md`, `structure.md`, `principles.md` |
+| `get-implementer-guide` | `tech.md`, `principles.md` |
+| `get-reviewer-guide` | `tech.md`, `principles.md` |
+| `get-brainstorm-guide` | `product.md`, `principles.md` |
 
 ### Foundational Principles (Adapted for Spec-Context)
 
