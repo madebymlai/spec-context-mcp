@@ -144,7 +144,7 @@ SPEC_CONTEXT_REVIEWER_CLI=codex
 
 The orchestrator invokes the CLI with the guide + task prompt. The CLI must accept a prompt and return output.
 
-**Future extension:** Architecture is open to API-based dispatch (e.g., OpenRouter) in addition to CLI. Since `OPENROUTER_API_KEY` is already configured for dashboard AI review, a future `SPEC_CONTEXT_*_MODEL` option could dispatch via OpenRouter API directly, enabling use of any supported model without CLI installation.
+**Future extension:** Architecture is open to API-based dispatch (e.g., OpenRouter). Since `OPENROUTER_API_KEY` is already configured for dashboard AI review, the same `*_CLI` vars could later accept model identifiers (e.g., `openrouter:anthropic/claude-3-opus`) that dispatch via API instead of CLI. Single config pattern, no separate env vars.
 
 ## Architecture
 
