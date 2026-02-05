@@ -105,7 +105,6 @@ Add to your Claude Code config (`.mcp.json` in project root):
 | `SPEC_CONTEXT_DISCIPLINE` | No | Discipline mode: `full` (TDD+reviews), `standard` (reviews), `minimal` (verification only). Default: `full` |
 | `SPEC_CONTEXT_IMPLEMENTER` | No | CLI command for implementer dispatch (e.g., `claude`, `codex`) |
 | `SPEC_CONTEXT_REVIEWER` | No | CLI command for reviewer dispatch |
-| `SPEC_CONTEXT_BRAINSTORM` | No | CLI command for brainstorm dispatch |
 
 ### Discipline Modes
 

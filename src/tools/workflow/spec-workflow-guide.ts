@@ -2,6 +2,7 @@ import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getSteeringDocs } from './steering-loader.js';
 import { getDisciplineMode } from '../../config/discipline.js';
+import { getDispatchCli } from '../../config/discipline.js';
 
 export const specWorkflowGuideTool: Tool = {
   name: 'spec-workflow-guide',
@@ -25,6 +26,10 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
   // Get discipline mode
   const disciplineMode = getDisciplineMode();
 
+  // Get dispatch CLIs
+  const implementerCli = getDispatchCli('implementer');
+  const reviewerCli = getDispatchCli('reviewer');
+
   // Read steering docs if they exist
   const steeringContent = getSteeringDocs(context.projectPath, ['product', 'tech', 'structure', 'principles']);
 
@@ -32,9 +37,15 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
     success: true,
     message: 'Complete spec workflow guide loaded - follow this workflow exactly',
     data: {
-      guide: getSpecWorkflowGuide(disciplineMode),
+      guide: getSpecWorkflowGuide(disciplineMode, implementerCli, reviewerCli),
       steering: steeringContent,
       disciplineMode,
+      dispatch: {
+        implementerCli,
+        reviewerCli,
+        implementerConfigured: !!implementerCli,
+        reviewerConfigured: !!reviewerCli,
+      },
       dashboardUrl: context.dashboardUrl,
       dashboardAvailable: !!context.dashboardUrl
     },
@@ -48,7 +59,7 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
   };
 }
 
-function getSpecWorkflowGuide(disciplineMode: 'full' | 'standard' | 'minimal'): string {
+function getSpecWorkflowGuide(disciplineMode: 'full' | 'standard' | 'minimal', implementerCli: string | null, reviewerCli: string | null): string {
   const currentYear = new Date().getFullYear();
   return `# Spec Development Workflow
 
@@ -109,16 +120,13 @@ flowchart TD
 
     %% Phase 4: Implementation (ONE task at a time)
     P3_Check -->|approved| P4_Ready[Spec complete.<br/>Ready to implement?]
-    P4_Ready -->|Yes| P4_LoadGuides[Load guides once:<br/>get-implementer-guide<br/>get-reviewer-guide]
-    P4_LoadGuides --> P4_Pick[Pick ONE next pending task<br/>NEVER multiple]
-    P4_Pick --> P4_Mark[Edit tasks.md:<br/>Change [ ] to [-]<br/>for this ONE task only]
-    P4_Mark --> P4_Code[Implement with TDD:<br/>RED → GREEN → REFACTOR]
-    P4_Code --> P4_Verify[Verify: run tests,<br/>check all pass]
-    P4_Verify --> P4_Complete[Edit tasks.md:<br/>Change [-] to [x]]
-    P4_Complete --> P4_Review{Reviews enabled?}
-    P4_Review -->|Yes| P4_DoReview[Review implementation<br/>using loaded guide]
+    P4_Ready -->|Yes| P4_Pick[Pick ONE next pending task<br/>NEVER multiple]
+    P4_Pick --> P4_Dispatch[${implementerCli ? `Dispatch to implementer:<br/>${implementerCli}` : `Mark [-] and implement<br/>${disciplineMode === 'full' ? 'with TDD' : 'with verification'}`}]
+    P4_Dispatch --> P4_Verify[Verify: task marked [x],<br/>tests pass]
+    P4_Verify --> P4_Review{Reviews enabled?}
+    P4_Review -->|Yes| P4_DoReview[${reviewerCli ? `Dispatch to reviewer:<br/>${reviewerCli}` : 'Review implementation<br/>using loaded guide'}]
     P4_DoReview --> P4_ReviewResult{Review result?}
-    P4_ReviewResult -->|Issues found| P4_Fix[Fix issues,<br/>re-verify]
+    P4_ReviewResult -->|Issues found| P4_Fix[${implementerCli ? 'Dispatch implementer<br/>to fix issues' : 'Fix issues,<br/>re-verify'}]
     P4_Fix --> P4_DoReview
     P4_ReviewResult -->|Approved| P4_More{More tasks?}
     P4_Review -->|No minimal mode| P4_More
@@ -216,7 +224,7 @@ flowchart TD
    - _Leverage: files/utilities to use
    - _Requirements: requirements that the task implements
    - Success: specific completion criteria
-   - Instructions: "Mark this ONE task as [-] in tasks.md before starting. Follow the loaded implementer guide rules (TDD in full mode, verification in all modes). When done, mark [x] in tasks.md. Then perform code review using the loaded reviewer guide (full/standard modes). Do NOT start the next task until review is approved."
+   - Instructions: "Mark this ONE task as [-] in tasks.md before starting. Follow the loaded implementer guide rules (${disciplineMode === 'full' ? 'TDD required' : 'verification required'}). When done, mark [x] in tasks.md.${disciplineMode !== 'minimal' ? ' Then perform code review using the loaded reviewer guide.' : ''} Do NOT start the next task until ${disciplineMode !== 'minimal' ? 'review is approved' : 'verification passes'}."
    - Start the prompt with "Implement the task for spec {spec-name}, first run spec-workflow-guide to get the workflow guide then implement the task:"
 6. Create \`tasks.md\` at \`.spec-context/specs/{spec-name}/tasks.md\`
 7. Request approval using approvals tool with action:'request'
@@ -227,8 +235,19 @@ flowchart TD
    - rejected: STOP, ask user for guidance
 
 ### Phase 4: Implementation
-**Purpose**: Execute tasks ONE AT A TIME with TDD and review.
-
+**Purpose**: Execute tasks ONE AT A TIME with ${disciplineMode === 'full' ? 'TDD, ' : ''}verification${disciplineMode !== 'minimal' ? ', and review' : ''}.
+${implementerCli ? `
+**Agent Dispatch: ENABLED**
+- Implementer CLI: \`${implementerCli}\`
+${reviewerCli ? `- Reviewer CLI: \`${reviewerCli}\`` : '- Reviewer CLI: not configured (you review directly)'}
+- You are the ORCHESTRATOR. You do NOT implement tasks yourself.
+- You DISPATCH each task to the implementer agent via bash.
+- You DISPATCH reviews to the reviewer agent via bash (if configured).
+` : `
+**Agent Dispatch: not configured**
+- No dispatch CLIs set. You implement and review tasks directly.
+- To enable dispatch, set env vars: SPEC_CONTEXT_IMPLEMENTER, SPEC_CONTEXT_REVIEWER
+`}
 **File Operations**:
 - Read specs: \`.spec-context/specs/{spec-name}/*.md\` (if returning to work)
 - Edit tasks.md to update status:
@@ -238,9 +257,9 @@ flowchart TD
 
 **Tools**:
 - spec-status: Check overall progress
-- get-implementer-guide: Load TDD rules + verification rules (call once before first task)
-- get-reviewer-guide: Load review checklist (call once before first review)
 - Direct editing: Mark tasks as in-progress [-] or complete [x] in tasks.md
+${implementerCli ? `- Bash: Dispatch tasks to implementer agent (\`${implementerCli}\`)` : `- get-implementer-guide: Load ${disciplineMode === 'full' ? 'TDD + ' : ''}verification rules (only if no implementer CLI configured)`}
+${reviewerCli ? `- Bash: Dispatch reviews to reviewer agent (\`${reviewerCli}\`)` : '- get-reviewer-guide: Load review checklist (only if no reviewer CLI configured)'}
 
 \`\`\`
 ╔══════════════════════════════════════════════════════════════╗
@@ -252,17 +271,52 @@ flowchart TD
 ║  - Each task = implement → verify → review → THEN next       ║
 ╚══════════════════════════════════════════════════════════════╝
 \`\`\`
+${implementerCli ? `
+**Process (with agent dispatch):**
 
-**Process**:
+**The dispatched agents call \`get-implementer-guide\` and \`get-reviewer-guide\` themselves — you do NOT call these tools.**
 
-**Before first task:** Call \`get-implementer-guide\` once to load TDD and verification rules. Call \`get-reviewer-guide\` once to load review checklist (full/standard modes).
+**Repeat for EACH task, sequentially:**
+
+1. **Pick ONE task**: Check spec-status, read tasks.md, identify the next pending \`[ ]\` task
+2. **Build the task prompt**: Read the _Prompt field. Combine with:
+   - The spec name and task ID
+   - File paths from _Leverage fields
+   - Requirements from _Requirements fields
+   - Instructions to mark [-] before starting and [x] when done
+3. **Dispatch to implementer agent via bash**:
+   \`\`\`bash
+   ${implementerCli} "Implement the task for spec {spec-name}, first run spec-workflow-guide to get the workflow guide then implement the task: {task prompt content}"
+   \`\`\`
+   - The implementer agent will: mark task [-], call get-implementer-guide, implement with ${disciplineMode === 'full' ? 'TDD' : 'verification'}, verify, mark [x]
+   - Wait for the agent to complete before proceeding
+4. **Verify task completion**: Check tasks.md — task should now be [x]. If still [-], the agent failed.
+5. **Dispatch review** (full/standard modes only):
+${reviewerCli ? `   \`\`\`bash
+   ${reviewerCli} "Review the implementation of task {taskId} for spec {spec-name}. Call get-reviewer-guide for review criteria. Review the git diff, check spec compliance, code quality, and principles."
+   \`\`\`
+   - Wait for review agent to complete
+   - If issues found: dispatch implementer again to fix, then re-review` : `   - No reviewer CLI configured — review the implementation yourself using loaded reviewer guide
+   - If issues found: dispatch implementer again to fix, then re-review`}
+   - If approved: proceed to next task
+6. **Repeat from step 1** for the next pending task
+
+**CRITICAL dispatch rules:**
+- NEVER implement tasks yourself — always dispatch to the implementer CLI
+- NEVER dispatch multiple tasks at once — wait for each to complete
+- NEVER skip the review step — dispatch reviewer (or review yourself) after each task
+- If the implementer agent fails or produces bad output, dispatch it again with clearer instructions
+` : `
+**Process (direct implementation — no dispatch CLIs configured):**
+
+**Before first task:** Since you are acting as implementer${disciplineMode !== 'minimal' ? ' and reviewer' : ''}, call \`get-implementer-guide\` once to load ${disciplineMode === 'full' ? 'TDD and ' : ''}verification rules.${disciplineMode !== 'minimal' ? ' Call `get-reviewer-guide` once to load review checklist.' : ''}
 
 **Then repeat for EACH task, sequentially:**
 
 1. **Pick ONE task**: Check spec-status, read tasks.md, identify the next pending \`[ ]\` task
 2. **Mark in-progress**: Edit tasks.md — change \`[ ]\` to \`[-]\` for THIS ONE task only
 3. **Read task guidance**: Read the _Prompt field for role, approach, restrictions, and success criteria
-4. **Implement with TDD** (full mode) or implement with verification (standard/minimal):
+4. **Implement${disciplineMode === 'full' ? ' with TDD' : ''}**:
    - Follow the _Prompt guidance exactly
    - Use files mentioned in _Leverage fields
    - ${disciplineMode === 'full' ? 'Follow strict Red-Green-Refactor TDD cycle' : 'Write tests alongside implementation'}
@@ -274,6 +328,7 @@ flowchart TD
    - If issues found: fix them, re-verify, re-review
    - If approved: proceed to next task
 8. **Repeat from step 1** for the next pending task
+`}
 
 ## Workflow Rules
 
@@ -290,9 +345,10 @@ flowchart TD
 - NEVER proceed on user saying "approved" - use wait-for-approval tool
 - Steering docs are optional - only create when explicitly requested
 - **CRITICAL: ONE task at a time during implementation — never batch, never parallelize**
-- **CRITICAL: Call \`get-implementer-guide\` once before starting implementation**
-- **CRITICAL: Call \`get-reviewer-guide\` once before first review (full/standard modes)**
-- **CRITICAL: Follow the loaded guide rules for EVERY task — TDD, verification, review**
+${implementerCli ? `- **CRITICAL: NEVER call \`get-implementer-guide\` yourself — the implementer agent calls it**
+- **CRITICAL: NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`**` : '- **CRITICAL: Call `get-implementer-guide` once before your first task (you are acting as implementer)**'}
+${reviewerCli ? `- **CRITICAL: NEVER call \`get-reviewer-guide\` yourself — the reviewer agent calls it**
+- **CRITICAL: NEVER review tasks yourself — always dispatch to \`${reviewerCli}\`**` : '- **CRITICAL: Call `get-reviewer-guide` once before your first review (you are acting as reviewer)**'}
 
 ## Implementation Review Workflow
 ${disciplineMode === 'minimal' ? `
@@ -301,17 +357,18 @@ Reviews are disabled in minimal mode. Focus on verification before completion.
 ` : `
 **MANDATORY after EACH task** (${disciplineMode === 'full' ? 'TDD + ' : ''}verification + review):
 
-Load \`get-implementer-guide\` and \`get-reviewer-guide\` once before starting. Then for EACH task:
-1. **Implementer**: Implement ONE task following loaded implementer guide (${disciplineMode === 'full' ? 'TDD' : 'verification'})
-2. **Implementer**: Mark task [x] complete
-3. **Reviewer**: Review the implementation following loaded reviewer guide
-4. **Handle feedback:**
-   - If issues found: implementer fixes, re-verify, reviewer re-reviews
+For EACH task:
+1. **Implement**: ${implementerCli ? `Dispatch to \`${implementerCli}\` via bash` : 'Implement directly'} — agent calls \`get-implementer-guide\`, follows ${disciplineMode === 'full' ? 'TDD' : 'verification'} rules, marks [x]
+2. **Review**: ${reviewerCli ? `Dispatch to \`${reviewerCli}\` via bash` : 'Review directly (call `get-reviewer-guide`)'} — check spec compliance, code quality, principles
+3. **Handle feedback:**
+   - If issues found: ${implementerCli ? 'dispatch implementer again to fix' : 'fix issues'}, re-verify, ${reviewerCli ? 'dispatch reviewer again' : 're-review'}
    - If same issue appears twice: orchestrator takes over (implementer doesn't understand)
    - If approved: START the next task (go back to step 1)
 
 **NEVER start the next task before the current task is reviewed and approved.**
 **NEVER have more than one task marked [-] in-progress at any time.**
+${implementerCli ? '**NEVER implement tasks yourself — always dispatch to the implementer CLI.**' : ''}
+${reviewerCli ? '**NEVER review tasks yourself — always dispatch to the reviewer CLI.**' : ''}
 `}
 ## File Structure
 \`\`\`

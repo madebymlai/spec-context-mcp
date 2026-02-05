@@ -10,7 +10,9 @@ import { getSteeringDocs, getMissingSteeringDocs } from './steering-loader.js';
 
 export const getReviewerGuideTool: Tool = {
   name: 'get-reviewer-guide',
-  description: `Get code review criteria based on discipline mode. Use when reviewing implementation work.
+  description: `Load code review checklist for a dispatched reviewer agent. FOR REVIEWER SUB-AGENTS ONLY.
+
+DO NOT call this tool unless you are a reviewer agent dispatched via SPEC_CONTEXT_REVIEWER to review a specific task, OR you are the orchestrator and no SPEC_CONTEXT_REVIEWER is configured. If a reviewer CLI is configured, dispatch the review to that agent instead.
 
 Returns:
 - Review checklist with severity levels

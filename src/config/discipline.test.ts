@@ -11,7 +11,6 @@ describe('discipline config', () => {
     delete process.env.SPEC_CONTEXT_DISCIPLINE;
     delete process.env.SPEC_CONTEXT_IMPLEMENTER;
     delete process.env.SPEC_CONTEXT_REVIEWER;
-    delete process.env.SPEC_CONTEXT_BRAINSTORM;
   });
 
   afterEach(() => {
@@ -71,10 +70,6 @@ describe('discipline config', () => {
       expect(getDispatchCli('reviewer')).toBeNull();
     });
 
-    it('returns null when brainstorm CLI not set', () => {
-      expect(getDispatchCli('brainstorm')).toBeNull();
-    });
-
     it('returns CLI value when implementer is set', () => {
       process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
       expect(getDispatchCli('implementer')).toBe('claude');
@@ -83,11 +78,6 @@ describe('discipline config', () => {
     it('returns CLI value when reviewer is set', () => {
       process.env.SPEC_CONTEXT_REVIEWER = 'codex';
       expect(getDispatchCli('reviewer')).toBe('codex');
-    });
-
-    it('returns CLI value when brainstorm is set', () => {
-      process.env.SPEC_CONTEXT_BRAINSTORM = 'gemini';
-      expect(getDispatchCli('brainstorm')).toBe('gemini');
     });
 
     it('returns null for empty string', () => {

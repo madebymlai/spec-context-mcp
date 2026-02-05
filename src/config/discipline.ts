@@ -4,7 +4,7 @@
  */
 
 export type DisciplineMode = 'full' | 'standard' | 'minimal';
-export type DispatchRole = 'implementer' | 'reviewer' | 'brainstorm';
+export type DispatchRole = 'implementer' | 'reviewer';
 
 const VALID_MODES: DisciplineMode[] = ['full', 'standard', 'minimal'];
 const DEFAULT_MODE: DisciplineMode = 'full';
@@ -12,7 +12,6 @@ const DEFAULT_MODE: DisciplineMode = 'full';
 const ENV_VARS: Record<DispatchRole, string> = {
   implementer: 'SPEC_CONTEXT_IMPLEMENTER',
   reviewer: 'SPEC_CONTEXT_REVIEWER',
-  brainstorm: 'SPEC_CONTEXT_BRAINSTORM',
 };
 
 /**
