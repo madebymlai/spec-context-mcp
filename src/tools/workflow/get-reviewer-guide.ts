@@ -77,24 +77,44 @@ export async function getReviewerGuideHandler(
 function buildReviewerGuide(): string {
   return `# Code Review Guide
 
+**Core principle:** Review early, review often. Catch issues before they cascade.
+
+## When to Review
+
+**Mandatory:**
+- After each task in implementation
+- After completing major feature
+- Before merge to main
+
+**Optional but valuable:**
+- When implementer is stuck (fresh perspective)
+- Before refactoring (baseline check)
+- After fixing complex bug
+
 ## Review Process
 
-1. **Understand Context**
-   - Read the task description and requirements
+1. **Get Context**
+   - Read the task description and _Prompt field
    - Review the spec (requirements.md, design.md)
    - Understand what was supposed to be implemented
 
-2. **Review Changes**
-   - Check git diff for all changes
-   - Verify changes match task scope
+2. **Get the Diff**
+   \`\`\`bash
+   git diff BASE_SHA..HEAD_SHA
+   \`\`\`
 
-3. **Apply Checklist**
+3. **Review Changes**
+   - Verify changes match task scope
+   - Check for scope creep
+   - Look for missing pieces
+
+4. **Apply Checklist**
    - Go through each category below
    - Assign severity to issues found
 
-4. **Provide Feedback**
+5. **Provide Feedback**
    - Be specific and actionable
-   - Reference code locations
+   - Reference code locations (file:line)
    - Suggest fixes when possible
 
 ## Issue Severity Levels
@@ -105,6 +125,14 @@ function buildReviewerGuide(): string {
 | **Important** | Violates spec, bad patterns, missing tests | Should fix before merge |
 | **Minor** | Style issues, naming, minor improvements | Note for future |
 
+## Acting on Review Results
+
+**Implementer should:**
+- Fix Critical issues immediately
+- Fix Important issues before proceeding
+- Note Minor issues for later
+- Push back if reviewer is wrong (with reasoning)
+
 ## Review Checklist
 
 ### Spec Compliance (Critical/Important)
@@ -113,6 +141,7 @@ function buildReviewerGuide(): string {
 - [ ] Follows design document architecture
 - [ ] No scope creep (extra features not requested)
 - [ ] Edge cases from requirements handled
+- [ ] Matches _Prompt success criteria
 
 ### Code Quality (Important)
 
@@ -121,6 +150,7 @@ function buildReviewerGuide(): string {
 - [ ] Error handling is appropriate
 - [ ] No hardcoded values that should be configurable
 - [ ] Names are clear and descriptive
+- [ ] No defensive garbage (unnecessary fallbacks)
 
 ### Principles Compliance (Important)
 
@@ -128,6 +158,7 @@ Review against the project's principles.md:
 - [ ] Follows SOLID principles
 - [ ] Adheres to project-specific rules
 - [ ] Matches established patterns
+- [ ] YAGNI - no unused features
 
 ### Testing (Critical in full mode, Important otherwise)
 
@@ -135,6 +166,7 @@ Review against the project's principles.md:
 - [ ] Tests cover edge cases and error paths
 - [ ] Tests are meaningful (not just coverage)
 - [ ] All tests pass
+- [ ] TDD evidence (if full mode): test commit before implementation
 
 ### Technical Stack (Important)
 
@@ -142,6 +174,7 @@ Review against the project's tech.md:
 - [ ] Uses approved technologies/patterns
 - [ ] Follows project conventions
 - [ ] Dependencies are appropriate
+- [ ] No unnecessary new dependencies
 
 ### Security (Critical)
 
@@ -167,10 +200,36 @@ Example (if helpful):
 
 ## Review Outcome
 
-After review, provide one of:
-- **Approved**: Ready to proceed
-- **Needs Changes**: List specific issues to address
-- **Blocked**: Critical issues prevent progress
+Provide assessment:
+
+\`\`\`
+Strengths: [What was done well]
+Issues:
+  Critical: [List]
+  Important: [List]
+  Minor: [List]
+Assessment: [Approved | Needs Changes | Blocked]
+\`\`\`
+
+## Red Flags in Review
+
+**Never:**
+- Skip review because "it's simple"
+- Ignore Critical issues
+- Approve with unfixed Important issues
+- Argue with valid technical feedback
+
+**If implementer pushes back:**
+- Consider their technical reasoning
+- Check if you have full context
+- Verify against actual codebase
+- Escalate if disagreement persists
+
+## Review Loop
+
+- If issues found: implementer receives feedback directly
+- If same issue appears twice: escalate (implementer doesn't understand)
+- If different issues: continue loop until resolved
 
 `;
 }
