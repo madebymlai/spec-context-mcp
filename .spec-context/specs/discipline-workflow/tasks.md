@@ -3,7 +3,7 @@
 > Tasks follow TDD - tests are written as part of each task, not as separate tasks.
 > Test files: colocate with source as `*.test.ts` (e.g., `src/config/discipline.test.ts`)
 
-- [-] 1. Add discipline configuration module
+- [x] 1. Add discipline configuration module
   - File: src/config/discipline.ts (create src/config/ directory)
   - Read SPEC_CONTEXT_DISCIPLINE from environment (default: 'full')
   - Read SPEC_CONTEXT_IMPLEMENTER, SPEC_CONTEXT_REVIEWER, SPEC_CONTEXT_BRAINSTORM
