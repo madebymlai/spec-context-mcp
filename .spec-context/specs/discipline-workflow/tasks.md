@@ -39,7 +39,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 2. Create principles-template.md
+- [x] 2. Create principles-template.md
   - File: src/templates/principles-template.md
   - Add SOLID principles section with "Ask yourself" questions
   - Add Architecture Rules section
