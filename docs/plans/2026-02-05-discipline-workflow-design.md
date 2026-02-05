@@ -127,10 +127,22 @@ Verification is always on (it's just honesty about completion status).
 
 If `SPEC_CONTEXT_*_CLI` vars are not set, defaults to the current CLI being used. Only set when you want a different CLI for a specific role.
 
+Any CLI that accepts a prompt as input can be used. Common options:
+
+| CLI | Command | Description |
+|-----|---------|-------------|
+| `claude` | Claude Code | Anthropic's CLI agent |
+| `codex` | OpenAI Codex | OpenAI's coding CLI |
+| `aider` | Aider | AI pair programming |
+| `gpt` | GPT CLI | OpenAI GPT interface |
+| `gemini` | Gemini CLI | Google's CLI agent |
+
 Example: Use Claude for implementation, Codex for review:
 ```bash
 SPEC_CONTEXT_REVIEWER_CLI=codex
 ```
+
+The orchestrator invokes the CLI with the guide + task prompt. The CLI must accept a prompt and return output.
 
 ## Architecture
 
