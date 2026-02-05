@@ -264,7 +264,7 @@ def _autorun_prereq_failure_exit(*, details: list[str], exit_code: int) -> None:
                 "- Configure embeddings with reranking support "
                 "(e.g. set `embedding.rerank_model`)."
             ),
-            "- Configure an LLM provider (e.g. `CHUNKHOUND_LLM_API_KEY`).",
+            "- Configure an LLM provider (e.g. `OPENROUTER_API_KEY`).",
         ),
     )
 

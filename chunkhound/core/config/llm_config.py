@@ -25,7 +25,7 @@ class LLMConfig(BaseSettings):
     4. Default values
 
     Environment Variables:
-        CHUNKHOUND_LLM_API_KEY=sk-...
+        OPENROUTER_API_KEY=sk-or-...
         CHUNKHOUND_LLM_UTILITY_MODEL=gpt-5-nano
         CHUNKHOUND_LLM_SYNTHESIS_MODEL=gpt-5
         CHUNKHOUND_LLM_BASE_URL=https://api.openai.com/v1
@@ -475,7 +475,7 @@ class LLMConfig(BaseSettings):
             self.provider not in ("ollama", "claude-code-cli", "codex-cli")
             and not self.api_key
         ):
-            missing.append("api_key (set CHUNKHOUND_LLM_API_KEY)")
+            missing.append("api_key (set OPENROUTER_API_KEY or OPENAI_API_KEY)")
 
         return missing
 
@@ -612,12 +612,12 @@ class LLMConfig(BaseSettings):
     def load_from_env(cls) -> dict[str, Any]:
         """Load LLM config from environment variables.
 
-        Checks CHUNKHOUND_LLM_* first, then falls back to OPENAI_API_KEY.
+        Checks OPENROUTER_API_KEY first, then falls back to OPENAI_API_KEY.
         """
         config = {}
 
         if api_key := (
-            os.getenv("CHUNKHOUND_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+            os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
         ):
             config["api_key"] = api_key
         if base_url := os.getenv("CHUNKHOUND_LLM_BASE_URL"):
