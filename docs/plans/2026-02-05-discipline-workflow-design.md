@@ -32,7 +32,7 @@ Each guide reads and **includes the full content** of relevant steering docs in 
 | `spec-workflow-guide` | `product.md`, `tech.md`, `structure.md`, `principles.md` |
 | `get-implementer-guide` | `tech.md`, `principles.md` |
 | `get-reviewer-guide` | `tech.md`, `principles.md` |
-| `get-brainstorm-guide` | `product.md`, `principles.md` |
+| `get-brainstorm-guide` | None (internal use - orchestrator already has steering context) |
 
 The agent receives the steering doc content directly - no need to read files separately.
 
@@ -42,7 +42,7 @@ The agent receives the steering doc content directly - no need to read files sep
 |-------|-------------------------------|
 | `get-implementer-guide` | Before writing ANY code: search for existing utilities, similar implementations, patterns to reuse. Don't reinvent - leverage what exists. Fallback to Glob/Grep if search unavailable. |
 | `get-reviewer-guide` | Search for similar code to check if implementation duplicates existing functionality. Verify patterns match established codebase conventions. |
-| `get-brainstorm-guide` | Explore related features and existing implementations to inform design options. Understand what's already built before proposing new approaches. |
+| `get-brainstorm-guide` | None (internal use - orchestrator handles search during brainstorming) |
 
 ### Foundational Principles (Adapted for Spec-Context)
 
