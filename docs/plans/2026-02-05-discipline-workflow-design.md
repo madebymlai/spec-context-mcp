@@ -178,7 +178,12 @@ Example: Use Claude for implementation, Codex for review:
 SPEC_CONTEXT_REVIEWER=codex
 ```
 
-The orchestrator invokes the CLI with the guide + task prompt. The CLI must accept a prompt and return output.
+The orchestrator invokes the CLI with the guide + task prompt:
+```bash
+claude "task prompt + guide content"
+codex "task prompt + guide content"
+gemini "task prompt + guide content"
+```
 
 **Future extension:** Architecture is open to API-based dispatch (e.g., OpenRouter). Since `OPENROUTER_API_KEY` is already configured for dashboard AI review, the same `*` vars could later accept model identifiers (e.g., `openrouter:anthropic/claude-3-opus`) that dispatch via API instead of CLI. Single config pattern, no separate env vars.
 
