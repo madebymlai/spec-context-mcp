@@ -34,11 +34,19 @@ The following skills are adapted into the MCP tool prompts (`get-implementer-gui
 
 **MCP tools referenced in guides:**
 
-| Guide | MCP tools to use |
-|-------|------------------|
-| `get-implementer-guide` | `search` (discover existing patterns before coding), `code_research` (architecture questions) |
-| `get-reviewer-guide` | `search` (verify no duplicates), `code_research` (check architecture compliance) |
-| `get-brainstorm-guide` | `search` (explore existing codebase), `code_research` (understand current architecture) |
+Guides include instructions for using the `search` MCP tool (similar to CLAUDE.md patterns):
+
+| Guide | Search usage |
+|-------|--------------|
+| `get-implementer-guide` | Discover existing patterns before coding, find similar implementations, avoid duplicates |
+| `get-reviewer-guide` | Verify no duplicate code, check existing patterns are followed |
+| `get-brainstorm-guide` | Explore existing codebase, understand current implementations |
+
+Guides should specify:
+- Use `search` type="semantic" for concept/pattern discovery
+- Use `search` type="regex" for exact function/class names
+- Fallback to Glob/Grep if search unavailable
+- Search BEFORE writing code to avoid reinventing
 
 ### Foundational Principles (Adapted for Spec-Context)
 
