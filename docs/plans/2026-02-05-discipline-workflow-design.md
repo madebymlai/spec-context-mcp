@@ -38,6 +38,8 @@ The agent receives the steering doc content directly - no need to read files sep
 
 **Missing docs = fail fast.** If a required steering doc doesn't exist, the guide returns an error telling the user to create it first (via `steering-guide`). No graceful fallback - the docs exist for a reason.
 
+**Prompt combination:** When dispatching, task `_Prompt` (what to build) comes first, guide content (how to work) is concatenated at end.
+
 **MCP search tool usage per guide:**
 
 | Guide | Role-specific search guidance |
