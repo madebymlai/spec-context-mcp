@@ -331,7 +331,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 11. Update README with new configuration
+- [x] 11. Update README with new configuration
   - File: README.md
   - Add SPEC_CONTEXT_DISCIPLINE to environment variables table
   - Add SPEC_CONTEXT_IMPLEMENTER, REVIEWER, BRAINSTORM to table
