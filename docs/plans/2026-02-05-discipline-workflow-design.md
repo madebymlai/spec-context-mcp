@@ -6,11 +6,16 @@ This design is based on the **Superpowers Skills** - a collection of battle-test
 
 ### Source Skills
 
-- `superpowers/skills/test-driven-development`
-- `superpowers/skills/verification-before-completion`
-- `superpowers/skills/receiving-code-review`
-- `superpowers/skills/requesting-code-review`
-- `superpowers/skills/subagent-driven-development`
+The following skills are adapted into the MCP tool prompts (`get-implementer-guide`, `get-reviewer-guide`, `get-brainstorm-guide`):
+
+| Skill | Adapted Into |
+|-------|--------------|
+| `superpowers/skills/test-driven-development` | `get-implementer-guide` (full mode) |
+| `superpowers/skills/verification-before-completion` | `get-implementer-guide` (all modes) |
+| `superpowers/skills/receiving-code-review` | `get-implementer-guide` (feedback handling) |
+| `superpowers/skills/requesting-code-review` | `get-reviewer-guide` |
+| `superpowers/skills/subagent-driven-development` | `spec-workflow-guide` (orchestration) |
+| `superpowers/skills/brainstorming` | `get-brainstorm-guide` |
 
 ### Foundational Principles (Adapted for Spec-Context)
 
