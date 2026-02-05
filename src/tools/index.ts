@@ -23,6 +23,18 @@ import {
     waitForApprovalTool,
     waitForApprovalHandler,
 } from './workflow/wait-for-approval.js';
+import {
+    getImplementerGuideTool,
+    getImplementerGuideHandler,
+} from './workflow/get-implementer-guide.js';
+import {
+    getReviewerGuideTool,
+    getReviewerGuideHandler,
+} from './workflow/get-reviewer-guide.js';
+import {
+    getBrainstormGuideTool,
+    getBrainstormGuideHandler,
+} from './workflow/get-brainstorm-guide.js';
 
 export interface Tool {
     name: string;
@@ -129,6 +141,9 @@ export function getTools(): Tool[] {
         specStatusTool as Tool,
         approvalsTool as Tool,
         waitForApprovalTool as Tool,
+        getImplementerGuideTool as Tool,
+        getReviewerGuideTool as Tool,
+        getBrainstormGuideTool as Tool,
     ];
 }
 
@@ -181,6 +196,15 @@ export async function handleToolCall(
 
         case 'wait-for-approval':
             return waitForApprovalHandler(args as any, wfCtx);
+
+        case 'get-implementer-guide':
+            return getImplementerGuideHandler(args, wfCtx);
+
+        case 'get-reviewer-guide':
+            return getReviewerGuideHandler(args, wfCtx);
+
+        case 'get-brainstorm-guide':
+            return getBrainstormGuideHandler(args, wfCtx);
 
         default:
             throw new Error(`Unknown tool: ${name}`);

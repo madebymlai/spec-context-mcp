@@ -2,3 +2,7 @@ export * from './spec-workflow-guide.js';
 export * from './steering-guide.js';
 export * from './spec-status.js';
 export * from './approvals.js';
+export * from './get-implementer-guide.js';
+export * from './get-reviewer-guide.js';
+export * from './get-brainstorm-guide.js';
+export * from './steering-loader.js';

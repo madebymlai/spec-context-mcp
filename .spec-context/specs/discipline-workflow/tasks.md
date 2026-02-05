@@ -303,7 +303,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 10. Register new tools in index files
+- [x] 10. Register new tools in index files
   - Files: src/tools/workflow/index.ts, src/tools/index.ts
   - Export get-implementer-guide, get-reviewer-guide, get-brainstorm-guide
   - Register tools in server tool list
