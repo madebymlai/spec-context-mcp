@@ -10,6 +10,7 @@ import {
 import type { SpecContextConfig } from './config.js';
 import type { ToolResponse, MCPToolResponse } from './workflow-types.js';
 import { getTools, handleToolCall } from './tools/index.js';
+import { processToolCall } from './tools/registry.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
 import { initChunkHoundBridge, resetChunkHoundBridge } from './bridge/chunkhound-bridge.js';
 import { resolveDashboardUrl } from './core/workflow/dashboard-url.js';
@@ -31,7 +32,7 @@ export class SpecContextServer {
             },
             {
                 capabilities: {
-                    tools: {},
+                    tools: { listChanged: true },
                     prompts: {},
                 },
             }
@@ -55,6 +56,13 @@ export class SpecContextServer {
                     name,
                     args as Record<string, unknown>
                 );
+
+                const modeChanged = processToolCall(name);
+                if (modeChanged) {
+                    this.server.sendToolListChanged().catch(err =>
+                        console.error('[spec-context] tool list changed notification failed:', err)
+                    );
+                }
 
                 return normalizeToolResult(result);
             } catch (error) {

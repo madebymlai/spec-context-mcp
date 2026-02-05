@@ -1,6 +1,7 @@
 import type { ToolContext as WorkflowToolContext, ToolResponse } from '../workflow-types.js';
 import { getChunkHoundBridge, SearchArgs, CodeResearchArgs } from '../bridge/chunkhound-bridge.js';
 import { resolveDashboardUrl } from '../core/workflow/dashboard-url.js';
+import { filterVisibleTools } from './registry.js';
 
 // Workflow tools
 import {
@@ -130,7 +131,8 @@ ERROR RECOVERY: If incomplete, try narrower query or use path parameter to scope
     },
 };
 
-export function getTools(): Tool[] {
+/** Returns all 10 registered tools (unfiltered). */
+export function getAllTools(): Tool[] {
     return [
         // ChunkHound context tools
         searchTool,
@@ -146,6 +148,14 @@ export function getTools(): Tool[] {
         getBrainstormGuideTool as Tool,
     ];
 }
+
+/** Returns only the tools visible in the current session mode. */
+export function getVisibleTools(): Tool[] {
+    return filterVisibleTools(getAllTools());
+}
+
+/** Default export — returns visible tools for the current session. */
+export const getTools = getVisibleTools;
 
 export async function handleToolCall(
     name: string,
