@@ -159,7 +159,7 @@ Verification is always on (it's just honesty about completion status).
 
 ### CLI Dispatch
 
-If `SPEC_CONTEXT_*` vars are not set, defaults to the current CLI being used. Only set when you want a different CLI for a specific role.
+If `SPEC_CONTEXT_*` vars are not set, orchestrator self-identifies and uses itself as default. The orchestrator passes its CLI identity when calling guides, which return it as the dispatch target. Only set env vars when you want a different CLI for a specific role.
 
 Any CLI that accepts a prompt as input can be used. Common options:
 
