@@ -21,6 +21,43 @@ Or run directly with npx:
 npx spec-context-mcp
 ```
 
+## Python Setup (Required for Semantic Search)
+
+ChunkHound requires Python 3.10+ for semantic code search. Run the setup command:
+
+```bash
+npx spec-context-mcp setup
+```
+
+This will:
+- Detect Python 3.10+ on your system
+- Create a virtual environment in the package directory
+- Install ChunkHound and dependencies
+- Verify the installation
+
+**Manual Setup** (if automatic setup fails):
+
+```bash
+# macOS
+brew install cmake ninja swig python@3.11
+
+# Ubuntu/Debian
+sudo apt install cmake ninja-build swig python3.11 python3.11-venv
+
+# Fedora
+sudo dnf install cmake ninja-build swig python3.11
+
+# Then install manually
+cd $(npm root -g)/spec-context-mcp
+python3 -m venv .venv
+.venv/bin/pip install -e .
+
+# Optionally set CHUNKHOUND_PYTHON in your environment
+export CHUNKHOUND_PYTHON=$(npm root -g)/spec-context-mcp/.venv/bin/python
+```
+
+Run `npx spec-context-mcp doctor` to verify your setup.
+
 ## Configuration
 
 Add to your Claude Code config (`.mcp.json` in project root):

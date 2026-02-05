@@ -23,7 +23,8 @@
     "start": "node dist/index.js",
     "dashboard": "node dist/dashboard/cli.js",
     "test": "vitest",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "postinstall": "node dist/postinstall.js 2>/dev/null || true"
   },
   "keywords": [
     "mcp",

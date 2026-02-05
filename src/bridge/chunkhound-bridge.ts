@@ -34,6 +34,76 @@ const SSE_POST_TIMEOUT_MS = 30000;
 
 const STARTUP_LOCK_TTL_MS = 2 * 60_000;
 const STARTUP_LOCK_POLL_MS = 250;
+const EARLY_FAILURE_WAIT_MS = 2000;
+
+interface PythonErrorInfo {
+    type: 'module_not_found' | 'import_error' | 'syntax_error' | 'generic';
+    module?: string;
+    message: string;
+    suggestion: string;
+}
+
+function parsePythonError(stderr: string): PythonErrorInfo | null {
+    // Check for ModuleNotFoundError
+    const moduleMatch = stderr.match(/ModuleNotFoundError: No module named ['"]([^'"]+)['"]/);
+    if (moduleMatch) {
+        const module = moduleMatch[1];
+        if (module === 'chunkhound' || module.startsWith('chunkhound.')) {
+            return {
+                type: 'module_not_found',
+                module: 'chunkhound',
+                message: `ModuleNotFoundError: No module named '${module}'`,
+                suggestion: 'Run: npx spec-context-mcp setup',
+            };
+        }
+        return {
+            type: 'module_not_found',
+            module,
+            message: `ModuleNotFoundError: No module named '${module}'`,
+            suggestion: `Install the missing module: pip install ${module}\nOr run: npx spec-context-mcp setup`,
+        };
+    }
+
+    // Check for ImportError
+    const importMatch = stderr.match(/ImportError: ([^\n]+)/);
+    if (importMatch) {
+        return {
+            type: 'import_error',
+            message: `ImportError: ${importMatch[1]}`,
+            suggestion: 'Run: npx spec-context-mcp setup',
+        };
+    }
+
+    // Check for SyntaxError (wrong Python version)
+    if (stderr.includes('SyntaxError')) {
+        return {
+            type: 'syntax_error',
+            message: 'Python syntax error (possibly wrong Python version)',
+            suggestion: 'Ensure Python 3.10+ is installed. Run: npx spec-context-mcp doctor',
+        };
+    }
+
+    // Check for generic Python errors
+    if (stderr.includes('Traceback') || stderr.includes('Error:')) {
+        const errorLines = stderr.split('\n').filter(line => line.includes('Error:'));
+        const errorMessage = errorLines.length > 0 ? errorLines[errorLines.length - 1] : 'Unknown Python error';
+        return {
+            type: 'generic',
+            message: errorMessage.trim(),
+            suggestion: 'Run: npx spec-context-mcp doctor',
+        };
+    }
+
+    return null;
+}
+
+function formatPythonError(errorInfo: PythonErrorInfo): string {
+    return `ChunkHound Python Error
+
+${errorInfo.message}
+
+${errorInfo.suggestion}`;
+}
 
 function isTimeoutError(error: unknown): boolean {
     if (!error || typeof error !== 'object') {
@@ -161,7 +231,6 @@ function releaseStartupLock(lock: StartupLock): void {
 
 export interface ChunkHoundConfig {
     pythonPath: string;
-    voyageaiApiKey?: string;
 }
 
 export interface SearchArgs {
@@ -469,8 +538,6 @@ export class ChunkHoundBridge extends EventEmitter {
     }
 
     private async _start(): Promise<void> {
-        // Ensure .chunkhound.json exists
-        await this.ensureConfig();
         await this.ensureHttpConnected();
         this.initialized = true;
         console.error('[ChunkHound Bridge] Connected via HTTP');
@@ -522,7 +589,16 @@ export class ChunkHoundBridge extends EventEmitter {
             }
         }
 
-        throw new Error('ChunkHound HTTP server failed to start in time');
+        throw new Error(`ChunkHound HTTP server failed to start in time
+
+The server did not respond on port ${this.port} within ${timeoutMs / 1000} seconds.
+
+Possible causes:
+  - Python dependencies not installed
+  - Port ${this.port} in use by another process
+  - ChunkHound crashed during startup
+
+Run: npx spec-context-mcp doctor`);
     }
 
     private async startHttpServerOnce(): Promise<void> {
@@ -579,16 +655,65 @@ export class ChunkHoundBridge extends EventEmitter {
             stdio: ['ignore', 'pipe', 'pipe'],
         });
 
+        // Capture stderr for early failure detection
+        let stderrBuffer = '';
+        let earlyExitCode: number | null = null;
+        let earlyExitHandled = false;
+
         // Log output but don't wait for it
         serverProcess.stdout?.on('data', (data) => {
             console.error('[ChunkHound SSE]', data.toString().trim());
         });
         serverProcess.stderr?.on('data', (data) => {
             const msg = data.toString().trim();
+            stderrBuffer += data.toString();
             console.error('[ChunkHound SSE]', msg);
             if (msg.includes('Background scan completed') || msg.includes('scan_completed_at')) {
                 this.scanComplete = true;
             }
+        });
+
+        // Check for early exit (immediate failure)
+        serverProcess.on('exit', (code) => {
+            if (!earlyExitHandled) {
+                earlyExitCode = code;
+            }
+        });
+
+        // Wait briefly to catch immediate failures
+        await new Promise<void>((resolve, reject) => {
+            const checkTimer = setTimeout(() => {
+                earlyExitHandled = true;
+                if (earlyExitCode !== null && earlyExitCode !== 0) {
+                    // Process died immediately - parse error and provide helpful message
+                    const errorInfo = parsePythonError(stderrBuffer);
+                    if (errorInfo) {
+                        reject(new Error(formatPythonError(errorInfo)));
+                    } else {
+                        reject(new Error(`ChunkHound failed to start (exit code ${earlyExitCode})
+
+${stderrBuffer.trim() || 'No error output captured'}
+
+Run: npx spec-context-mcp doctor`));
+                    }
+                } else {
+                    resolve();
+                }
+            }, EARLY_FAILURE_WAIT_MS);
+
+            serverProcess.on('error', (err) => {
+                clearTimeout(checkTimer);
+                earlyExitHandled = true;
+                if (err.message.includes('ENOENT')) {
+                    reject(new Error(`Python not found: ${pythonPath}
+
+Run: npx spec-context-mcp setup`));
+                } else {
+                    reject(new Error(`Failed to start ChunkHound: ${err.message}
+
+Run: npx spec-context-mcp doctor`));
+                }
+            });
         });
 
         // Unref so Node can exit even if server is running
@@ -645,115 +770,6 @@ export class ChunkHoundBridge extends EventEmitter {
         } catch {
             // Ignore errors, assume not complete
         }
-    }
-
-    /**
-     * Ensure .chunkhound.json config exists in project root
-     */
-    private async ensureConfig(): Promise<void> {
-        const configPath = path.join(this.projectPath, '.chunkhound.json');
-
-        if (fs.existsSync(configPath)) {
-            console.error('[ChunkHound Bridge] Config already exists at', configPath);
-            return;
-        }
-
-        const getEnv = (key: string): string | undefined => {
-            const value = process.env[key];
-            if (value === undefined) return undefined;
-            const trimmed = value.trim();
-            return trimmed.length ? trimmed : undefined;
-        };
-        const parseOptionalInt = (value: unknown): number | undefined => {
-            if (value === undefined || value === null || value === '') return undefined;
-            const parsed = Number(value);
-            if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
-            return Math.floor(parsed);
-        };
-
-        const specContextRoot = path.resolve(__dirname, '..', '..');
-        const specContextConfig = path.join(specContextRoot, '.chunkhound.json');
-        let fallbackEmbedding: Record<string, any> = {};
-        if (fs.existsSync(specContextConfig)) {
-            try {
-                const configData = JSON.parse(fs.readFileSync(specContextConfig, 'utf-8'));
-                if (configData?.embedding && typeof configData.embedding === 'object') {
-                    fallbackEmbedding = configData.embedding;
-                }
-            } catch {
-                // Ignore parse errors
-            }
-        }
-
-        const envProvider = getEnv('EMBEDDING_PROVIDER') || getEnv('CHUNKHOUND_EMBEDDING__PROVIDER');
-        const envModel = getEnv('EMBEDDING_MODEL') || getEnv('CHUNKHOUND_EMBEDDING__MODEL');
-        const envApiKey = getEnv('EMBEDDING_API_KEY') || getEnv('CHUNKHOUND_EMBEDDING__API_KEY');
-        const envBaseUrl = getEnv('EMBEDDING_BASE_URL') || getEnv('CHUNKHOUND_EMBEDDING__BASE_URL');
-        const envRerankModel = getEnv('EMBEDDING_RERANK_MODEL') || getEnv('CHUNKHOUND_EMBEDDING__RERANK_MODEL');
-        const envRerankUrl = getEnv('EMBEDDING_RERANK_URL') || getEnv('CHUNKHOUND_EMBEDDING__RERANK_URL');
-        const envRerankFormat = getEnv('EMBEDDING_RERANK_FORMAT') || getEnv('CHUNKHOUND_EMBEDDING__RERANK_FORMAT');
-        const envRerankBatchSize = getEnv('EMBEDDING_RERANK_BATCH_SIZE') || getEnv('CHUNKHOUND_EMBEDDING__RERANK_BATCH_SIZE');
-        const envDimension = getEnv('EMBEDDING_DIMENSION') || getEnv('CHUNKHOUND_EMBEDDING__DIMENSION');
-
-        const voyageKey = this.config.voyageaiApiKey || getEnv('VOYAGEAI_API_KEY');
-        const openaiKey = getEnv('OPENAI_API_KEY');
-
-        const provider = envProvider || fallbackEmbedding.provider || (voyageKey ? 'voyageai' : 'openai');
-        let apiKey = envApiKey;
-        if (!apiKey) {
-            if (provider === 'voyageai') {
-                apiKey = voyageKey;
-            } else if (provider === 'openai') {
-                apiKey = openaiKey;
-            }
-        }
-        if (!apiKey && fallbackEmbedding.api_key) {
-            apiKey = fallbackEmbedding.api_key;
-        }
-
-        const model = envModel || fallbackEmbedding.model;
-        const baseUrl = envBaseUrl || fallbackEmbedding.base_url;
-        const rerankModel = envRerankModel || fallbackEmbedding.rerank_model;
-        const rerankUrl = envRerankUrl || fallbackEmbedding.rerank_url;
-        const rerankFormat = envRerankFormat || fallbackEmbedding.rerank_format;
-        const rerankBatchSize = parseOptionalInt(envRerankBatchSize ?? fallbackEmbedding.rerank_batch_size);
-        const embeddingDimensions = parseOptionalInt(envDimension);
-
-        const embeddingConfig: Record<string, any> = {
-            provider,
-        };
-        if (apiKey) embeddingConfig.api_key = apiKey;
-        if (model) embeddingConfig.model = model;
-        if (baseUrl) embeddingConfig.base_url = baseUrl;
-        if (rerankModel) embeddingConfig.rerank_model = rerankModel;
-        if (rerankUrl) embeddingConfig.rerank_url = rerankUrl;
-        if (rerankFormat) embeddingConfig.rerank_format = rerankFormat;
-        if (rerankBatchSize) embeddingConfig.rerank_batch_size = rerankBatchSize;
-        if (embeddingDimensions) embeddingConfig.dimensions = embeddingDimensions;
-
-        const config = {
-            embedding: embeddingConfig,
-            llm: {
-                provider: 'claude-code-cli',
-            },
-            database: {
-                provider: 'duckdb',
-            },
-        };
-
-        if (envDimension && !embeddingDimensions) {
-            console.error('[ChunkHound Bridge] WARNING: EMBEDDING_DIMENSION is invalid and will be ignored.');
-        } else if (embeddingDimensions) {
-            console.error('[ChunkHound Bridge] NOTE: EMBEDDING_DIMENSION is currently ignored by ChunkHound (model defines dimensions).');
-        }
-
-        if (!config.embedding.api_key) {
-            console.error('[ChunkHound Bridge] WARNING: No embedding API key set. Semantic search may not work.');
-            console.error('[ChunkHound Bridge] Set EMBEDDING_API_KEY (or VOYAGEAI_API_KEY / OPENAI_API_KEY).');
-        }
-
-        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-        console.error('[ChunkHound Bridge] Created .chunkhound.json at', configPath);
     }
 
     /**
@@ -1166,7 +1182,6 @@ export function getChunkHoundBridge(projectPath?: string): ChunkHoundBridge {
 
     const config: ChunkHoundConfig = {
         pythonPath: process.env.CHUNKHOUND_PYTHON || defaultPython,
-        voyageaiApiKey: process.env.VOYAGEAI_API_KEY,
     };
 
     const bridge = new ChunkHoundBridge(config, resolvedPath);

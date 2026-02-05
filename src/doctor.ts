@@ -1,7 +1,8 @@
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
+import { platform } from 'os';
 import { resolveDashboardUrl } from './core/workflow/dashboard-url.js';
 import { DEFAULT_DASHBOARD_URL } from './core/workflow/constants.js';
 
@@ -18,6 +19,72 @@ interface CheckResult {
   status: 'ok' | 'warn' | 'fail';
   details: string;
   hint?: string;
+  fix?: string[];
+}
+
+function getPlatformInfo(): { os: string; installCmd: { python: string; buildTools: string; venv: string } } {
+  const os = platform();
+
+  if (os === 'darwin') {
+    return {
+      os: 'macOS',
+      installCmd: {
+        python: 'brew install python@3.11',
+        buildTools: 'brew install cmake ninja swig',
+        venv: 'Python on macOS includes venv by default',
+      },
+    };
+  } else if (os === 'linux') {
+    // Try to detect distro
+    let distro = 'debian';
+    try {
+      if (existsSync('/etc/fedora-release') || existsSync('/etc/redhat-release')) {
+        distro = 'fedora';
+      } else if (existsSync('/etc/arch-release')) {
+        distro = 'arch';
+      }
+    } catch {
+      // Default to debian-style
+    }
+
+    if (distro === 'fedora') {
+      return {
+        os: 'Fedora/RHEL',
+        installCmd: {
+          python: 'sudo dnf install python3.11',
+          buildTools: 'sudo dnf install cmake ninja-build swig',
+          venv: 'sudo dnf install python3.11',
+        },
+      };
+    } else if (distro === 'arch') {
+      return {
+        os: 'Arch Linux',
+        installCmd: {
+          python: 'sudo pacman -S python',
+          buildTools: 'sudo pacman -S cmake ninja swig',
+          venv: 'sudo pacman -S python',
+        },
+      };
+    } else {
+      return {
+        os: 'Debian/Ubuntu',
+        installCmd: {
+          python: 'sudo apt install python3.11',
+          buildTools: 'sudo apt install cmake ninja-build swig',
+          venv: 'sudo apt install python3.11-venv',
+        },
+      };
+    }
+  }
+
+  return {
+    os: 'Unknown',
+    installCmd: {
+      python: 'Install Python 3.10+ from https://python.org',
+      buildTools: 'Install cmake, ninja, and swig',
+      venv: 'Install Python venv module',
+    },
+  };
 }
 
 function runCommand(
@@ -94,6 +161,7 @@ function formatStatus(status: 'ok' | 'warn' | 'fail'): string {
 
 export async function runDoctor(): Promise<number> {
   const results: CheckResult[] = [];
+  const platformInfo = getPlatformInfo();
 
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
@@ -115,6 +183,10 @@ export async function runDoctor(): Promise<number> {
       status: 'fail',
       details: `Unable to run ${pythonPath}.`,
       hint: 'Install Python 3.10+ and/or set CHUNKHOUND_PYTHON.',
+      fix: [
+        `${platformInfo.installCmd.python}`,
+        'npx spec-context-mcp setup',
+      ],
     });
   } else {
     const versionText = pythonVersionResult.stdout || pythonVersionResult.stderr;
@@ -125,6 +197,9 @@ export async function runDoctor(): Promise<number> {
         status: 'warn',
         details: `Unable to parse Python version from "${versionText.trim()}".`,
         hint: 'Ensure Python 3.10+ is installed for ChunkHound.',
+        fix: [
+          `${platformInfo.installCmd.python}`,
+        ],
       });
     } else if (parsed.major < 3 || (parsed.major === 3 && parsed.minor < 10)) {
       results.push({
@@ -132,6 +207,10 @@ export async function runDoctor(): Promise<number> {
         status: 'fail',
         details: `Python ${parsed.major}.${parsed.minor} detected (requires >= 3.10).`,
         hint: 'Install Python 3.10+ and/or set CHUNKHOUND_PYTHON.',
+        fix: [
+          `${platformInfo.installCmd.python}`,
+          'npx spec-context-mcp setup',
+        ],
       });
     } else {
       results.push({
@@ -166,7 +245,10 @@ export async function runDoctor(): Promise<number> {
         name: 'ChunkHound Import',
         status: 'fail',
         details: 'Failed to import chunkhound in Python.',
-        hint: 'Ensure Python dependencies are installed (see pyproject.toml).',
+        hint: 'Run the setup command to install Python dependencies.',
+        fix: [
+          'npx spec-context-mcp setup',
+        ],
       });
     }
 
@@ -208,6 +290,10 @@ export async function runDoctor(): Promise<number> {
         details: `Unable to run RapidYAML check with ${pythonPath}.`,
         hint:
           'Install rapidyaml>=0.10.0 from the git tag v0.10.0 (PyPI currently ships an older build).',
+        fix: [
+          'npx spec-context-mcp setup',
+          `${platformInfo.installCmd.buildTools}`,
+        ],
       });
     } else {
       try {
@@ -228,6 +314,10 @@ export async function runDoctor(): Promise<number> {
             details: `ryml import failed: ${parsed.error || 'unknown error'}`,
             hint:
               'Install: pip install \"rapidyaml @ git+https://github.com/biojppm/rapidyaml.git@v0.10.0\"',
+            fix: [
+              `${platformInfo.installCmd.buildTools}`,
+              'npx spec-context-mcp setup',
+            ],
           });
         } else if (parsed.missing && parsed.missing.length > 0) {
           results.push({
@@ -236,6 +326,9 @@ export async function runDoctor(): Promise<number> {
             details: `ryml is installed but missing API: ${parsed.missing.join(', ')}`,
             hint:
               'This usually means an old rapidyaml build is installed. Install from git tag v0.10.0.',
+            fix: [
+              'npx spec-context-mcp setup',
+            ],
           });
         } else if (parsed.ver && parsed.required) {
           const [a, b, c] = parsed.ver;
@@ -248,6 +341,9 @@ export async function runDoctor(): Promise<number> {
               details: `rapidyaml ${parsed.module || parsed.dist || 'unknown'} detected (requires >= 0.10.0).`,
               hint:
                 'Install: pip install \"rapidyaml @ git+https://github.com/biojppm/rapidyaml.git@v0.10.0\"',
+              fix: [
+                'npx spec-context-mcp setup',
+              ],
             });
           } else {
             results.push({
@@ -263,6 +359,9 @@ export async function runDoctor(): Promise<number> {
             details: 'Unable to determine rapidyaml version.',
             hint:
               'Install rapidyaml>=0.10.0 from the git tag v0.10.0 (PyPI currently ships an older build).',
+            fix: [
+              'npx spec-context-mcp setup',
+            ],
           });
         }
       } catch {
@@ -272,6 +371,9 @@ export async function runDoctor(): Promise<number> {
           details: 'Unable to parse RapidYAML check output.',
           hint:
             'Install rapidyaml>=0.10.0 from the git tag v0.10.0 (PyPI currently ships an older build).',
+          fix: [
+            'npx spec-context-mcp setup',
+          ],
         });
       }
     }
@@ -280,47 +382,26 @@ export async function runDoctor(): Promise<number> {
       name: 'ChunkHound Import',
       status: 'warn',
       details: 'Skipped (Python not available).',
+      fix: [
+        `${platformInfo.installCmd.python}`,
+        'npx spec-context-mcp setup',
+      ],
     });
   }
 
-  const envProvider = (process.env.EMBEDDING_PROVIDER || process.env.CHUNKHOUND_EMBEDDING__PROVIDER || '').trim();
+  const effectiveProvider = (process.env.EMBEDDING_PROVIDER || process.env.CHUNKHOUND_EMBEDDING__PROVIDER || 'voyageai').trim();
   const embeddingApiKey =
     process.env.EMBEDDING_API_KEY ||
     process.env.CHUNKHOUND_EMBEDDING__API_KEY ||
     process.env.VOYAGEAI_API_KEY ||
-    process.env.OPENAI_API_KEY ||
     '';
 
-  let chunkhoundFileEmbeddingApiKey = '';
-  let chunkhoundFileEmbeddingProvider = '';
-  try {
-    const configPath = resolve(projectRoot, '.chunkhound.json');
-    if (existsSync(configPath)) {
-      const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as {
-        embedding?: { provider?: unknown; api_key?: unknown } | null;
-      };
-      const maybeKey = parsed?.embedding?.api_key;
-      if (typeof maybeKey === 'string') {
-        chunkhoundFileEmbeddingApiKey = maybeKey.trim();
-      }
-      const maybeProvider = parsed?.embedding?.provider;
-      if (typeof maybeProvider === 'string') {
-        chunkhoundFileEmbeddingProvider = maybeProvider.trim();
-      }
-    }
-  } catch {
-    // Ignore parse errors; this is a best-effort convenience check.
-  }
-
-  const effectiveProvider = envProvider || chunkhoundFileEmbeddingProvider || 'voyageai';
-  const effectiveEmbeddingApiKey = embeddingApiKey || chunkhoundFileEmbeddingApiKey;
-
-  if (!effectiveEmbeddingApiKey) {
+  if (!embeddingApiKey) {
     results.push({
       name: 'Embedding API Key',
       status: 'warn',
       details: `No embedding API key set (provider=${effectiveProvider}).`,
-      hint: 'Set EMBEDDING_API_KEY or provider-specific key to enable semantic search.',
+      hint: 'Set EMBEDDING_API_KEY or provider-specific key in .env to enable semantic search.',
     });
   } else {
     results.push({
@@ -384,6 +465,14 @@ export async function runDoctor(): Promise<number> {
     console.error(line);
     if (result.hint) {
       console.error(`       Hint: ${result.hint}`);
+    }
+    if (result.fix && result.fix.length > 0 && result.status !== 'ok') {
+      console.error('');
+      console.error('       To fix:');
+      for (const cmd of result.fix) {
+        console.error(`         ${cmd}`);
+      }
+      console.error('');
     }
   }
 

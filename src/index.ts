@@ -13,11 +13,12 @@ spec-context-mcp - Unified MCP server for semantic code search
 
 Usage: spec-context-mcp [options]
        spec-context-mcp doctor
-
+       spec-context-mcp setup
 
 Options:
   --help, -h    Show this help message
   --doctor      Run preflight checks (alias: doctor)
+  setup         Set up Python environment for ChunkHound
 
 Environment Variables:
   EMBEDDING_PROVIDER  Embedding provider (default: voyageai)
@@ -25,7 +26,7 @@ Environment Variables:
   EMBEDDING_MODEL     Embedding model name (provider-specific)
   EMBEDDING_BASE_URL  Base URL for embedding API (optional)
   VOYAGEAI_API_KEY    Alias for EMBEDDING_API_KEY when provider=voyageai
-  OPENAI_API_KEY      Alias for EMBEDDING_API_KEY when provider=openai
+  OPENAI_API_KEY      API key for OpenAI LLM reasoning (not used for embeddings)
   CHUNKHOUND_PYTHON   Python executable for ChunkHound (default: python3)
   DASHBOARD_URL       Dashboard URL shown in prompts (default: http://localhost:3000)
   OPENROUTER_API_KEY  Required only for dashboard AI review
@@ -56,6 +57,12 @@ For Claude Desktop, add to your config:
     if (args.includes('doctor') || args.includes('--doctor')) {
         const { runDoctor } = await import('./doctor.js');
         const exitCode = await runDoctor();
+        process.exit(exitCode);
+    }
+
+    if (args.includes('setup')) {
+        const { runSetup } = await import('./setup.js');
+        const exitCode = await runSetup();
         process.exit(exitCode);
     }
 
