@@ -32,6 +32,14 @@ The following skills are adapted into the MCP tool prompts (`get-implementer-gui
 | `get-reviewer-guide` | `tech.md`, `principles.md` |
 | `get-brainstorm-guide` | `product.md`, `principles.md` |
 
+**MCP tools referenced in guides:**
+
+| Guide | MCP tools to use |
+|-------|------------------|
+| `get-implementer-guide` | `search` (discover existing patterns before coding), `code_research` (architecture questions) |
+| `get-reviewer-guide` | `search` (verify no duplicates), `code_research` (check architecture compliance) |
+| `get-brainstorm-guide` | `search` (explore existing codebase), `code_research` (understand current architecture) |
+
 ### Foundational Principles (Adapted for Spec-Context)
 
 **Test-Driven Development (TDD):**
