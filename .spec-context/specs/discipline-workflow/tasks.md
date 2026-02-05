@@ -239,7 +239,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 8. Update spec-workflow-guide with brainstorm option and discipline
+- [x] 8. Update spec-workflow-guide with brainstorm option and discipline
   - File: src/tools/workflow/spec-workflow-guide.ts
   - Add brainstorm option to workflow start
   - Include discipline mode in response

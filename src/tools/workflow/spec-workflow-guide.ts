@@ -1,6 +1,7 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getSteeringDocs } from './steering-loader.js';
+import { getDisciplineMode } from '../../config/discipline.js';
 
 export const specWorkflowGuideTool: Tool = {
   name: 'spec-workflow-guide',
@@ -21,6 +22,9 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
     `Monitor progress on dashboard: ${context.dashboardUrl}` :
     'Please start the dashboard with: spec-context-dashboard';
 
+  // Get discipline mode
+  const disciplineMode = getDisciplineMode();
+
   // Read steering docs if they exist
   const steeringContent = getSteeringDocs(context.projectPath, ['product', 'tech', 'structure', 'principles']);
 
@@ -28,22 +32,23 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
     success: true,
     message: 'Complete spec workflow guide loaded - follow this workflow exactly',
     data: {
-      guide: getSpecWorkflowGuide(),
+      guide: getSpecWorkflowGuide(disciplineMode),
       steering: steeringContent,
+      disciplineMode,
       dashboardUrl: context.dashboardUrl,
       dashboardAvailable: !!context.dashboardUrl
     },
     nextSteps: [
+      'Recap your understanding of the request',
+      'Ask: "Clear enough for spec, or brainstorm first?"',
       'Follow sequence: Requirements → Design → Tasks → Implementation',
-      'Load templates with get-template-context first',
       'Request approval after each document',
-      'Use MCP tools only',
       dashboardMessage
     ]
   };
 }
 
-function getSpecWorkflowGuide(): string {
+function getSpecWorkflowGuide(disciplineMode: 'full' | 'standard' | 'minimal'): string {
   const currentYear = new Date().getFullYear();
   return `# Spec Development Workflow
 
@@ -51,6 +56,16 @@ function getSpecWorkflowGuide(): string {
 
 You guide users through spec-driven development using MCP tools. Transform rough ideas into detailed specifications through Requirements → Design → Tasks → Implementation phases. Use web search when available for current best practices (current year: ${currentYear}). Its important that you follow this workflow exactly to avoid errors.
 Feature names use kebab-case (e.g., user-authentication). Create ONE spec at a time.
+
+**Discipline Mode:** ${disciplineMode}
+${disciplineMode === 'full' ? '- TDD required, code reviews enabled' : disciplineMode === 'standard' ? '- Code reviews enabled (no TDD requirement)' : '- Verification only (no reviews)'}
+
+## Before Starting
+
+**Recap your understanding** of what the user wants to build, then ask:
+> "Clear enough for spec, or brainstorm first?"
+
+If the idea needs refinement, use \`get-brainstorm-guide\` to explore before formal spec creation.
 
 ## Workflow Diagram
 \`\`\`mermaid
@@ -130,7 +145,7 @@ flowchart TD
 - wait-for-approval: Block until user responds, auto-cleans up
 
 **Process**:
-1. Check if \`.spec-context/steering/\` exists (if yes, read product.md, tech.md, structure.md)
+1. Check if \`.spec-context/steering/\` exists (if yes, read product.md, tech.md, structure.md, principles.md)
 2. Check for custom template at \`.spec-context/user-templates/requirements-template.md\`
 3. If no custom template, read from \`.spec-context/templates/requirements-template.md\`
 4. Research market/user expectations (if web search available, current year: ${currentYear})
@@ -244,6 +259,19 @@ flowchart TD
 - NEVER proceed on user saying "approved" - use wait-for-approval tool
 - Steering docs are optional - only create when explicitly requested
 
+## Implementation Review Workflow
+${disciplineMode === 'minimal' ? `
+Reviews are disabled in minimal mode. Focus on verification before completion.
+` : `
+After each task implementation (${disciplineMode === 'full' ? 'TDD + ' : ''}verification):
+
+1. **Implementer completes task** using \`get-implementer-guide\`
+2. **Reviewer reviews** using \`get-reviewer-guide\`
+3. **Handle feedback:**
+   - If issues found: implementer addresses them
+   - If same issue appears twice: orchestrator takes over (implementer doesn't understand)
+   - If approved: proceed to next task
+`}
 ## File Structure
 \`\`\`
 .spec-context/
@@ -253,7 +281,8 @@ flowchart TD
 │   ├── tasks-template.md
 │   ├── product-template.md
 │   ├── tech-template.md
-│   └── structure-template.md
+│   ├── structure-template.md
+│   └── principles-template.md
 ├── specs/
 │   └── {spec-name}/
 │       ├── requirements.md
@@ -262,6 +291,7 @@ flowchart TD
 └── steering/
     ├── product.md
     ├── tech.md
-    └── structure.md
+    ├── structure.md
+    └── principles.md
 \`\`\``;
 }
