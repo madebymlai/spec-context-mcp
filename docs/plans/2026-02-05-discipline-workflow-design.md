@@ -1,5 +1,88 @@
 # Discipline Workflow Enhancement
 
+## Attribution
+
+This design is based on the **Superpowers Skills** - a collection of battle-tested prompt engineering patterns for LLM agents. These skills represent some of the most effective techniques for ensuring quality and discipline in AI-assisted development.
+
+### Source Skills
+
+- `superpowers/skills/test-driven-development`
+- `superpowers/skills/verification-before-completion`
+- `superpowers/skills/receiving-code-review`
+- `superpowers/skills/requesting-code-review`
+- `superpowers/skills/subagent-driven-development`
+
+### Key Principles from Superpowers
+
+**From Test-Driven Development:**
+
+> "Write the test first. Watch it fail. Write minimal code to pass."
+>
+> **Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
+>
+> **Violating the letter of the rules is violating the spirit of the rules.**
+
+> **The Iron Law:**
+> ```
+> NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
+> ```
+> Write code before the test? Delete it. Start over.
+
+> "Tests-after answer 'What does this do?' Tests-first answer 'What should this do?'"
+
+**From Verification Before Completion:**
+
+> "Claiming work is complete without verification is dishonesty, not efficiency."
+>
+> **Core principle:** Evidence before claims, always.
+
+> **The Iron Law:**
+> ```
+> NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
+> ```
+> If you haven't run the verification command in this message, you cannot claim it passes.
+
+> **The Gate Function:**
+> 1. IDENTIFY: What command proves this claim?
+> 2. RUN: Execute the FULL command (fresh, complete)
+> 3. READ: Full output, check exit code, count failures
+> 4. VERIFY: Does output confirm the claim?
+> 5. ONLY THEN: Make the claim
+>
+> Skip any step = lying, not verifying
+
+**From Receiving Code Review:**
+
+> "Code review requires technical evaluation, not emotional performance."
+>
+> **Core principle:** Verify before implementing. Ask before assuming. Technical correctness over social comfort.
+
+> **Forbidden Responses:**
+> - "You're absolutely right!"
+> - "Great point!" / "Excellent feedback!"
+> - "Let me implement that now" (before verification)
+
+> **External feedback = suggestions to evaluate, not orders to follow.**
+> Verify. Question. Then implement.
+
+**From Subagent-Driven Development:**
+
+> **Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration
+
+> **Quality gates:**
+> - Self-review catches issues before handoff
+> - Two-stage review: spec compliance, then code quality
+> - Review loops ensure fixes actually work
+> - Spec compliance prevents over/under-building
+
+> **Red Flags - Never:**
+> - Skip reviews (spec compliance OR code quality)
+> - Accept "close enough" on spec compliance
+> - Skip review loops (reviewer found issues = implementer fixes = review again)
+> - Start code quality review before spec compliance is ✅
+
+---
+
 ## Overview
 
 Enhance spec-context-mcp with development discipline enforcement (TDD, code review, verification) and multi-LLM CLI dispatch support. Disciplines are configurable at server level and guides are LLM-agnostic.
