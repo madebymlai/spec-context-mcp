@@ -610,10 +610,15 @@ class LLMConfig(BaseSettings):
 
     @classmethod
     def load_from_env(cls) -> dict[str, Any]:
-        """Load LLM config from environment variables."""
+        """Load LLM config from environment variables.
+
+        Checks CHUNKHOUND_LLM_* first, then falls back to OPENAI_API_KEY.
+        """
         config = {}
 
-        if api_key := os.getenv("CHUNKHOUND_LLM_API_KEY"):
+        if api_key := (
+            os.getenv("CHUNKHOUND_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+        ):
             config["api_key"] = api_key
         if base_url := os.getenv("CHUNKHOUND_LLM_BASE_URL"):
             config["base_url"] = base_url

@@ -311,26 +311,45 @@ class EmbeddingConfig(BaseSettings):
 
     @classmethod
     def load_from_env(cls) -> dict[str, Any]:
-        """Load embedding config from environment variables."""
+        """Load embedding config from environment variables.
+
+        Checks both CHUNKHOUND_EMBEDDING__* (prefixed) and EMBEDDING_*
+        (non-prefixed) env vars, with prefixed taking precedence.
+        Also checks VOYAGEAI_API_KEY as an alias for the embedding API key.
+        """
         config = {}
 
-        if api_key := os.getenv("CHUNKHOUND_EMBEDDING__API_KEY"):
-            config["api_key"] = api_key
-        if base_url := os.getenv("CHUNKHOUND_EMBEDDING__BASE_URL"):
-            config["base_url"] = base_url
-        if provider := os.getenv("CHUNKHOUND_EMBEDDING__PROVIDER"):
+        def _env(*keys: str) -> str | None:
+            """Return the first non-empty env var value."""
+            for key in keys:
+                if val := os.getenv(key):
+                    return val
+            return None
+
+        if provider := _env("CHUNKHOUND_EMBEDDING__PROVIDER", "EMBEDDING_PROVIDER"):
             config["provider"] = provider
-        if model := os.getenv("CHUNKHOUND_EMBEDDING__MODEL"):
+        if model := _env("CHUNKHOUND_EMBEDDING__MODEL", "EMBEDDING_MODEL"):
             config["model"] = model
+        if base_url := _env("CHUNKHOUND_EMBEDDING__BASE_URL", "EMBEDDING_BASE_URL"):
+            config["base_url"] = base_url
+
+        # API key: prefixed, then generic, then VoyageAI alias.
+        # OPENAI_API_KEY is intentionally NOT checked here — it's for LLM.
+        if api_key := _env(
+            "CHUNKHOUND_EMBEDDING__API_KEY",
+            "EMBEDDING_API_KEY",
+            "VOYAGEAI_API_KEY",
+        ):
+            config["api_key"] = api_key
 
         # Reranking configuration
-        if rerank_model := os.getenv("CHUNKHOUND_EMBEDDING__RERANK_MODEL"):
+        if rerank_model := _env("CHUNKHOUND_EMBEDDING__RERANK_MODEL", "EMBEDDING_RERANK_MODEL"):
             config["rerank_model"] = rerank_model
-        if rerank_url := os.getenv("CHUNKHOUND_EMBEDDING__RERANK_URL"):
+        if rerank_url := _env("CHUNKHOUND_EMBEDDING__RERANK_URL", "EMBEDDING_RERANK_URL"):
             config["rerank_url"] = rerank_url
-        if rerank_format := os.getenv("CHUNKHOUND_EMBEDDING__RERANK_FORMAT"):
+        if rerank_format := _env("CHUNKHOUND_EMBEDDING__RERANK_FORMAT", "EMBEDDING_RERANK_FORMAT"):
             config["rerank_format"] = rerank_format
-        if rerank_batch_size := os.getenv("CHUNKHOUND_EMBEDDING__RERANK_BATCH_SIZE"):
+        if rerank_batch_size := _env("CHUNKHOUND_EMBEDDING__RERANK_BATCH_SIZE", "EMBEDDING_RERANK_BATCH_SIZE"):
             try:
                 config["rerank_batch_size"] = int(rerank_batch_size)
             except ValueError:
