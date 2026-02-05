@@ -69,11 +69,11 @@ describe('discipline config', () => {
     });
 
     it('resolves codex implementer', () => {
-      expect(resolveAgentCli('codex', 'implementer')).toBe('codex exec --full-auto -q');
+      expect(resolveAgentCli('codex', 'implementer')).toBe('codex exec --full-auto');
     });
 
     it('resolves codex reviewer', () => {
-      expect(resolveAgentCli('codex', 'reviewer')).toBe('codex exec -q --approval-mode read-only');
+      expect(resolveAgentCli('codex', 'reviewer')).toBe('codex exec --sandbox read-only');
     });
 
     it('resolves gemini implementer', () => {
@@ -86,7 +86,7 @@ describe('discipline config', () => {
 
     it('is case-insensitive', () => {
       expect(resolveAgentCli('Claude', 'implementer')).toBe('claude -p --dangerously-skip-permissions');
-      expect(resolveAgentCli('CODEX', 'reviewer')).toBe('codex exec -q --approval-mode read-only');
+      expect(resolveAgentCli('CODEX', 'reviewer')).toBe('codex exec --sandbox read-only');
     });
 
     it('passes through unknown values as-is', () => {
@@ -114,7 +114,7 @@ describe('discipline config', () => {
 
     it('resolves known agent for reviewer', () => {
       process.env.SPEC_CONTEXT_REVIEWER = 'codex';
-      expect(getDispatchCli('reviewer')).toBe('codex exec -q --approval-mode read-only');
+      expect(getDispatchCli('reviewer')).toBe('codex exec --sandbox read-only');
     });
 
     it('passes through custom commands', () => {

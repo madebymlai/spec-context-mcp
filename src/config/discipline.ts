@@ -25,8 +25,8 @@ const AGENT_FLAGS: Record<string, Record<DispatchRole, string>> = {
     reviewer: 'claude -p',
   },
   codex: {
-    implementer: 'codex exec --full-auto -q',
-    reviewer: 'codex exec -q --approval-mode read-only',
+    implementer: 'codex exec --full-auto',
+    reviewer: 'codex exec --sandbox read-only',
   },
   gemini: {
     implementer: 'gemini --yolo',
