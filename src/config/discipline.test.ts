@@ -1,13 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getDisciplineMode, getDispatchCli } from './discipline.js';
+import { getDisciplineMode, getDispatchCli, resolveAgentCli, KNOWN_AGENTS } from './discipline.js';
 
 describe('discipline config', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
-    // Reset process.env before each test
     process.env = { ...originalEnv };
-    // Clear any discipline-related env vars
     delete process.env.SPEC_CONTEXT_DISCIPLINE;
     delete process.env.SPEC_CONTEXT_IMPLEMENTER;
     delete process.env.SPEC_CONTEXT_REVIEWER;
@@ -61,6 +59,45 @@ describe('discipline config', () => {
     });
   });
 
+  describe('resolveAgentCli', () => {
+    it('resolves claude implementer', () => {
+      expect(resolveAgentCli('claude', 'implementer')).toBe('claude -p --dangerously-skip-permissions');
+    });
+
+    it('resolves claude reviewer', () => {
+      expect(resolveAgentCli('claude', 'reviewer')).toBe('claude -p');
+    });
+
+    it('resolves codex implementer', () => {
+      expect(resolveAgentCli('codex', 'implementer')).toBe('codex exec --full-auto -q');
+    });
+
+    it('resolves codex reviewer', () => {
+      expect(resolveAgentCli('codex', 'reviewer')).toBe('codex exec -q --approval-mode read-only');
+    });
+
+    it('resolves gemini implementer', () => {
+      expect(resolveAgentCli('gemini', 'implementer')).toBe('gemini --yolo');
+    });
+
+    it('resolves gemini reviewer', () => {
+      expect(resolveAgentCli('gemini', 'reviewer')).toBe('gemini --plan');
+    });
+
+    it('is case-insensitive', () => {
+      expect(resolveAgentCli('Claude', 'implementer')).toBe('claude -p --dangerously-skip-permissions');
+      expect(resolveAgentCli('CODEX', 'reviewer')).toBe('codex exec -q --approval-mode read-only');
+    });
+
+    it('passes through unknown values as-is', () => {
+      expect(resolveAgentCli('my-custom-agent --flag', 'implementer')).toBe('my-custom-agent --flag');
+    });
+
+    it('trims whitespace', () => {
+      expect(resolveAgentCli('  claude  ', 'reviewer')).toBe('claude -p');
+    });
+  });
+
   describe('getDispatchCli', () => {
     it('returns null when implementer CLI not set', () => {
       expect(getDispatchCli('implementer')).toBeNull();
@@ -70,14 +107,19 @@ describe('discipline config', () => {
       expect(getDispatchCli('reviewer')).toBeNull();
     });
 
-    it('returns CLI value when implementer is set', () => {
+    it('resolves known agent for implementer', () => {
       process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-      expect(getDispatchCli('implementer')).toBe('claude');
+      expect(getDispatchCli('implementer')).toBe('claude -p --dangerously-skip-permissions');
     });
 
-    it('returns CLI value when reviewer is set', () => {
+    it('resolves known agent for reviewer', () => {
       process.env.SPEC_CONTEXT_REVIEWER = 'codex';
-      expect(getDispatchCli('reviewer')).toBe('codex');
+      expect(getDispatchCli('reviewer')).toBe('codex exec -q --approval-mode read-only');
+    });
+
+    it('passes through custom commands', () => {
+      process.env.SPEC_CONTEXT_IMPLEMENTER = 'my-agent --headless';
+      expect(getDispatchCli('implementer')).toBe('my-agent --headless');
     });
 
     it('returns null for empty string', () => {
@@ -88,6 +130,14 @@ describe('discipline config', () => {
     it('returns null for whitespace-only string', () => {
       process.env.SPEC_CONTEXT_IMPLEMENTER = '   ';
       expect(getDispatchCli('implementer')).toBeNull();
+    });
+  });
+
+  describe('KNOWN_AGENTS', () => {
+    it('exports known agent names', () => {
+      expect(KNOWN_AGENTS).toContain('claude');
+      expect(KNOWN_AGENTS).toContain('codex');
+      expect(KNOWN_AGENTS).toContain('gemini');
     });
   });
 });

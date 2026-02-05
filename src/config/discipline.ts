@@ -15,6 +15,26 @@ const ENV_VARS: Record<DispatchRole, string> = {
 };
 
 /**
+ * Non-interactive CLI flags per agent per role.
+ * Maps short agent names to their headless invocation.
+ * If the env var value isn't a known agent, it's used as-is (custom command).
+ */
+const AGENT_FLAGS: Record<string, Record<DispatchRole, string>> = {
+  claude: {
+    implementer: 'claude -p --dangerously-skip-permissions',
+    reviewer: 'claude -p',
+  },
+  codex: {
+    implementer: 'codex exec --full-auto -q',
+    reviewer: 'codex exec -q --approval-mode read-only',
+  },
+  gemini: {
+    implementer: 'gemini --yolo',
+    reviewer: 'gemini --plan',
+  },
+};
+
+/**
  * Get the current discipline mode from environment.
  * Defaults to 'full' if not set or invalid.
  */
@@ -37,6 +57,16 @@ export function getDisciplineMode(): DisciplineMode {
 }
 
 /**
+ * Resolve an env var value to a full CLI command for the given role.
+ * Known agent names (claude, codex, gemini) get mapped to proper flags.
+ * Anything else is returned as-is (custom command).
+ */
+export function resolveAgentCli(value: string, role: DispatchRole): string {
+  const key = value.trim().toLowerCase();
+  return AGENT_FLAGS[key]?.[role] ?? value.trim();
+}
+
+/**
  * Get the CLI command for a dispatch role.
  * Returns null if not configured.
  */
@@ -44,10 +74,12 @@ export function getDispatchCli(role: DispatchRole): string | null {
   const envVar = ENV_VARS[role];
   const value = process.env[envVar];
 
-  // Return null for empty or unset values
   if (!value || value.trim() === '') {
     return null;
   }
 
-  return value;
+  return resolveAgentCli(value, role);
 }
+
+/** Supported agent names for documentation/validation */
+export const KNOWN_AGENTS = Object.keys(AGENT_FLAGS);
