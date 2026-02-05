@@ -55,7 +55,7 @@ class SimpleEventHandler(FileSystemEventHandler):
         self._engine = None
         self._include_patterns: list[str] | None = None
         self._pattern_cache: dict[str, Any] = {}
-        self._ignore_names: set[str] = {".gitignore", ".chunkhound.json"}
+        self._ignore_names: set[str] = {".gitignore"}
         try:
             if config and getattr(config, "indexing", None):
                 chf = getattr(config.indexing, "chignore_file", None)

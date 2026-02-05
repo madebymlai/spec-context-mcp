@@ -712,7 +712,7 @@ async def run_setup_wizard(target_path: Path, args=None) -> Config | None:
     Run the interactive setup wizard to create initial configuration.
 
     Args:
-        target_path: Directory where .chunkhound.json will be created
+        target_path: Project directory to configure
 
     Returns:
         Config object if setup completed successfully, None if cancelled
@@ -726,7 +726,7 @@ async def run_setup_wizard(target_path: Path, args=None) -> Config | None:
     provider_choice = await _select_provider()
     if provider_choice == "skip":
         formatter.info(
-            "Skipping provider setup. You can configure later in .chunkhound.json"
+            "Skipping provider setup. You can configure later via environment variables."
         )
         return None
 
@@ -741,7 +741,7 @@ async def run_setup_wizard(target_path: Path, args=None) -> Config | None:
 
     if not embedding_config:
         formatter.warning(
-            "Setup cancelled. You can configure later using .chunkhound.json"
+            "Setup cancelled. You can configure later via environment variables."
         )
         return None
 
@@ -750,13 +750,11 @@ async def run_setup_wizard(target_path: Path, args=None) -> Config | None:
         embedding_config, target_path, formatter
     )
     if status == "saved":
-        formatter.success(f"Configuration saved to {config_path}")
-
         # Run agent setup
         await _run_agent_setup(target_path, formatter)
 
         print("\nReady to start indexing your codebase!")
-        # Return a new config object that will pick up the saved file
+        # Return a new config object that will pick up env vars
         return Config(args=args) if args else Config()
     elif status == "cancelled":
         formatter.info("Configuration not saved")
@@ -1977,18 +1975,13 @@ async def _validate_provider_config(
 async def _save_configuration(
     config_data: dict[str, Any], target_path: Path, formatter: RichOutputFormatter
 ) -> tuple[Path | None, str]:
-    """Save configuration to .chunkhound.json
+    """Display configuration as environment variables for the user to set.
 
     Returns:
         Tuple of (config_path, status) where status is "saved", "cancelled", or "error"
     """
     try:
-        config_path = target_path / ".chunkhound.json"
-
-        # Create configuration structure
-        config = {"embedding": config_data}
-
-        # Show summary before saving
+        # Show summary
         content = [
             ("Provider", config_data["provider"]),
             ("Model", config_data.get("model", "default")),
@@ -1997,26 +1990,31 @@ async def _save_configuration(
         if "base_url" in config_data:
             content.insert(2, ("Endpoint", config_data["base_url"]))
         if "rerank_model" in config_data:
-            # Insert reranking info after model but before database
-            insert_pos = len(content) - 1  # Before database
+            insert_pos = len(content) - 1
             content.insert(insert_pos, ("Reranking", config_data["rerank_model"]))
 
         formatter.box_section("Configuration Summary", content)
 
-        # Confirm save
-        should_save = await rich_confirm(
-            f"\nSave configuration to {config_path}?", default=True
-        )
+        # Build env var lines
+        env_lines: list[str] = []
+        env_lines.append(f"EMBEDDING_PROVIDER={config_data['provider']}")
+        if config_data.get("model"):
+            env_lines.append(f"EMBEDDING_MODEL={config_data['model']}")
+        if config_data.get("api_key"):
+            env_lines.append(f"EMBEDDING_API_KEY={config_data['api_key']}")
+        if config_data.get("base_url"):
+            env_lines.append(f"EMBEDDING_BASE_URL={config_data['base_url']}")
+        if config_data.get("rerank_model"):
+            env_lines.append(f"EMBEDDING_RERANK_MODEL={config_data['rerank_model']}")
 
-        if not should_save:
-            return None, "cancelled"
+        print("\nAdd these environment variables to your MCP server's .env file")
+        print("or export them in your shell:\n")
+        for line in env_lines:
+            print(f"  {line}")
+        print()
 
-        # Write configuration file
-        with open(config_path, "w") as f:
-            json.dump(config, f, indent=2)
-
-        return config_path, "saved"
+        return target_path, "saved"
 
     except Exception as e:
-        formatter.error(f"Failed to save configuration: {e}")
+        formatter.error(f"Failed to generate configuration: {e}")
         return None, "error"

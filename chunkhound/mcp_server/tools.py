@@ -448,7 +448,7 @@ async def search_impl(
         if not embedding_manager or not embedding_manager.list_providers():
             raise ValueError(
                 "Semantic search requires embedding provider. "
-                "Configure via .chunkhound.json or CHUNKHOUND_EMBEDDING__API_KEY. "
+                "Configure via EMBEDDING_API_KEY environment variable. "
                 "Use type='regex' for pattern-based search without embeddings."
             )
 

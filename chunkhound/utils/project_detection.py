@@ -10,8 +10,8 @@ def find_project_root(start_path: Path | None = None) -> Path:
 
     Project root is determined ONLY by:
     1. A positional CLI argument (passed as start_path)
-    2. The presence of .chunkhound.json in the current directory
-    3. Everything else is considered an error and terminates the process
+    2. The presence of .chunkhound/db (indexed database) in the directory
+    3. The presence of .git (git repository root)
 
     Args:
         start_path: Starting directory from CLI positional argument (optional)
@@ -47,15 +47,11 @@ def find_project_root(start_path: Path | None = None) -> Path:
 
     # Walk up to filesystem root (but stop at home directory for safety)
     while current != current.parent and current != home:
-        # Priority 1: Explicit .chunkhound.json marker
-        if (current / ".chunkhound.json").exists():
-            return current
-
-        # Priority 2: Existing database directory
+        # Priority 1: Existing database directory
         if (current / ".chunkhound" / "db").exists():
             return current
 
-        # Priority 3: Git repository root
+        # Priority 2: Git repository root
         if (current / ".git").exists():
             return current
 
@@ -66,14 +62,12 @@ def find_project_root(start_path: Path | None = None) -> Path:
     print(f"Searched upward from: {Path.cwd()}", file=sys.stderr)
     print("", file=sys.stderr)
     print("Expected to find one of:", file=sys.stderr)
-    print("  - .chunkhound.json (explicit project marker)", file=sys.stderr)
     print("  - .chunkhound/db (indexed database)", file=sys.stderr)
     print("  - .git (git repository root)", file=sys.stderr)
     print("", file=sys.stderr)
     print("Solutions:", file=sys.stderr)
-    print("  1. Create .chunkhound.json in your project root", file=sys.stderr)
-    print("  2. Run 'chunkhound index .' from project root first", file=sys.stderr)
-    print("  3. Pass explicit path: chunkhound <command> /path/to/project", file=sys.stderr)
+    print("  1. Run 'chunkhound index .' from project root first", file=sys.stderr)
+    print("  2. Pass explicit path: chunkhound <command> /path/to/project", file=sys.stderr)
     sys.exit(1)
 
 

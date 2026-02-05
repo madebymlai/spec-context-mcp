@@ -97,7 +97,7 @@ class IndexingConfig(BaseModel):
     )
 
     # NOTE: For backwards-compatibility, users may set indexing.exclude to
-    # the sentinel string ".gitignore" in .chunkhound.json.
+    # the sentinel string ".gitignore" in a config file.
     # We store the sentinel separately and keep `exclude` as a list to preserve
     # existing type semantics across the codebase.
     @staticmethod
@@ -109,10 +109,8 @@ class IndexingConfig(BaseModel):
             "**/__pycache__/**",
             "**/venv/**",
             "**/.venv/**",
-            # ChunkHound config and working directory
+            # ChunkHound working directory
             "**/.chunkhound/**",
-            "**/.chunkhound.json",
-            ".chunkhound.json",
             "**/.mypy_cache/**",
             # Build artifacts and distributions
             "**/dist/**",

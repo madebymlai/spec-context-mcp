@@ -55,7 +55,7 @@ def validate_provider_args(
             To fix this, you can:
             1) Set via --provider flag
             2) Set CHUNKHOUND_EMBEDDING__PROVIDER environment variable
-            3) Add provider to .chunkhound.json config file
+            3) Set EMBEDDING_PROVIDER environment variable
             4) Use --no-embeddings to skip embeddings entirely.
             
             For more information, see: https://ofriw.github.io/chunkhound/configuration/

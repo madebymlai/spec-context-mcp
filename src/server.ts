@@ -11,7 +11,7 @@ import type { SpecContextConfig } from './config.js';
 import type { ToolResponse, MCPToolResponse } from './workflow-types.js';
 import { getTools, handleToolCall } from './tools/index.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
-import { initChunkHoundBridge } from './bridge/chunkhound-bridge.js';
+import { initChunkHoundBridge, resetChunkHoundBridge } from './bridge/chunkhound-bridge.js';
 import { resolveDashboardUrl } from './core/workflow/dashboard-url.js';
 import { DEFAULT_DASHBOARD_URL } from './core/workflow/constants.js';
 import { toMCPResponse } from './workflow-types.js';
@@ -94,10 +94,25 @@ export class SpecContextServer {
 
         console.error(`[${this.config.name}] Server running on stdio`);
 
+        // Exit when the parent process disconnects (stdin closes).
+        // StdioServerTransport doesn't listen for 'end', so without this
+        // the Node process stays alive as an orphan after the client exits.
+        process.stdin.on('end', () => this.shutdown());
+
+        // Clean exit on signals
+        process.on('SIGINT', () => this.shutdown());
+        process.on('SIGTERM', () => this.shutdown());
+
         // Fire-and-forget: warm up ChunkHound and dashboard registration without
         // blocking MCP startup (clients like Codex enforce short startup timeouts).
         void initChunkHoundBridge(process.cwd());
         void this.registerWithDashboard();
+    }
+
+    private shutdown(): void {
+        console.error(`[${this.config.name}] Shutting down...`);
+        resetChunkHoundBridge();
+        this.server.close().finally(() => process.exit(0));
     }
 
     private async registerWithDashboard(): Promise<void> {

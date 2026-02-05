@@ -1080,7 +1080,7 @@ Run: npx spec-context-mcp doctor`));
      * Search code using ChunkHound
      */
     async search(args: SearchArgs): Promise<unknown> {
-        await this.waitForHealthReady(HEALTH_READY_TIMEOUT_MS);
+        // callTool handles initialization, reconnection, and retry logic.
         const result = await this.callTool('search', args as unknown as Record<string, unknown>);
 
         await this.refreshScanStatus();

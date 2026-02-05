@@ -133,7 +133,7 @@ async def async_main() -> None:
             if embedding_error and args.command in [None, "index"]:
                 # Use print() for stdout output to match test expectations
                 print("To fix this, you can:")
-                print("  1. Create a .chunkhound.json config file with embeddings")
+                print("  1. Set EMBEDDING_PROVIDER and EMBEDDING_API_KEY environment variables")
                 print("  2. Use --no-embeddings to skip embeddings")
 
             sys.exit(1)

@@ -101,8 +101,8 @@ async def search_command(args: argparse.Namespace, config: Config) -> None:
                 raise Exception(
                     "No embedding providers available. "
                     "Configure an embedding provider via:\n"
-                    "1. Create .chunkhound.json with embedding configuration, OR\n"
-                    "2. Set CHUNKHOUND_EMBEDDING__API_KEY environment variable"
+                    "1. Set EMBEDDING_API_KEY environment variable, OR\n"
+                    "2. Set EMBEDDING_PROVIDER and related environment variables"
                 )
 
             # Get provider/model

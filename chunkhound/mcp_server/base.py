@@ -328,7 +328,7 @@ class MCPServerBase(ABC):
         if not self.embedding_manager or not self.embedding_manager.list_providers():
             raise RuntimeError(
                 "No embedding providers available. Configure an embedding provider "
-                "in .chunkhound.json or set CHUNKHOUND_EMBEDDING__API_KEY environment variable."
+                "via EMBEDDING_API_KEY environment variable."
             )
         return self.embedding_manager
 

@@ -2,10 +2,9 @@
 
 This module provides a unified configuration system with clear precedence:
 1. CLI arguments (highest priority)
-2. Local .chunkhound.json in target directory (if present)
-3. Config file (via --config path)
-4. Environment variables
-5. Default values (lowest priority)
+2. Environment variables (via .env or shell)
+3. Config file (via --config path or CHUNKHOUND_CONFIG_FILE)
+4. Default values (lowest priority)
 """
 
 import os
@@ -45,8 +44,8 @@ class Config(BaseModel):
 
         Automatically applies correct precedence order:
         1. CLI arguments (highest priority)
-        2. Environment variables
-        3. Config file (via --config path, env var, or local .chunkhound.json)
+        2. Environment variables (via .env or shell)
+        3. Config file (via --config path or CHUNKHOUND_CONFIG_FILE)
         4. Default values (lowest priority)
 
         Args:
@@ -126,36 +125,11 @@ class Config(BaseModel):
                     "Please check the file format and try again."
                 )
 
-        # 3. Check for local .chunkhound.json in target directory
-        if target_dir and target_dir.exists():
-            local_config_path = target_dir / ".chunkhound.json"
-            if local_config_path.exists() and local_config_path != config_file:
-                import json
-
-                try:
-                    with open(local_config_path) as f:
-                        local_config = json.load(f)
-                        self._deep_merge(config_data, local_config)
-                        # Mark exclude list as user-supplied when present in local file
-                        try:
-                            idx = config_data.get("indexing") or {}
-                            exc = idx.get("exclude") if isinstance(idx, dict) else None
-                            if isinstance(exc, list):
-                                idx["exclude_user_supplied"] = True
-                                config_data["indexing"] = idx
-                        except Exception:
-                            pass
-                except json.JSONDecodeError as e:
-                    raise ValueError(
-                        f"Invalid JSON in config file {local_config_path}: {e}. "
-                        "Please check the file format and try again."
-                    )
-
-        # 4. Load environment variables (override config files)
+        # 3. Load environment variables (override config files)
         env_vars = self._load_env_vars()
         self._deep_merge(config_data, env_vars)
 
-        # 5. Apply CLI arguments (highest precedence)
+        # 4. Apply CLI arguments (highest precedence)
         if args:
             cli_overrides = self._extract_cli_overrides(args)
             # If CLI provided an explicit exclude list, mark it as user-supplied
@@ -168,7 +142,7 @@ class Config(BaseModel):
                 pass
             self._deep_merge(config_data, cli_overrides)
 
-        # 6. Apply any direct kwargs (for testing)
+        # 5. Apply any direct kwargs (for testing)
         if kwargs:
             # If direct kwargs include an explicit exclude list, mark it as user-supplied
             try:

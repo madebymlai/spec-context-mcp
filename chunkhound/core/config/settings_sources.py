@@ -432,11 +432,9 @@ def find_config_files(
             "chunkhound.yaml",
             "chunkhound.yml",
             "chunkhound.toml",
-            "chunkhound.json",
             ".chunkhound.yaml",
             ".chunkhound.yml",
             ".chunkhound.toml",
-            ".chunkhound.json",
         ]
 
     found_files = []

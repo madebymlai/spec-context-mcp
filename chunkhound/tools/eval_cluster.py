@@ -171,7 +171,7 @@ async def _cluster_and_evaluate(
     if not config.embedding:
         raise RuntimeError(
             "Embedding provider not configured. "
-            "Configure an embedding provider via .chunkhound.json or environment "
+            "Configure an embedding provider via environment "
             "variables before running clustering evaluation."
         )
 
@@ -186,7 +186,7 @@ async def _cluster_and_evaluate(
     if not config.llm:
         raise RuntimeError(
             "LLM provider not configured. "
-            "Configure an LLM provider via .chunkhound.json or environment "
+            "Configure an LLM provider via environment "
             "variables before running clustering evaluation."
         )
 

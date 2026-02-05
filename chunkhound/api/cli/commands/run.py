@@ -48,12 +48,6 @@ async def run_command(args: argparse.Namespace, config: Config) -> None:
     # Initialize Rich output formatter
     formatter = RichOutputFormatter(verbose=args.verbose)
 
-    # Check if local config was found (for logging purposes)
-    project_dir = Path(args.path) if hasattr(args, "path") else Path.cwd()
-    local_config_path = project_dir / ".chunkhound.json"
-    if local_config_path.exists():
-        formatter.info(f"Found local config: {local_config_path}")
-
     # Use database path from config
     db_path = Path(config.database.path)
 
@@ -171,7 +165,7 @@ async def run_command(args: argparse.Namespace, config: Config) -> None:
             if skipped_timeouts and os.environ.get("CHUNKHOUND_MCP_MODE") == "1":
                 formatter.info(
                     f"{len(skipped_timeouts)} files timed out. "
-                    "Prompts are disabled in MCP mode. To exclude them, add to .chunkhound.json under indexing.exclude."
+                    "Prompts are disabled in MCP mode. To exclude them, add to indexing.exclude in your config."
                 )
                 return
 
@@ -206,49 +200,11 @@ async def run_command(args: argparse.Namespace, config: Config) -> None:
                 formatter.info(
                     f"{len(rel_paths)} timed-out files can be excluded from future runs."
                 )
-                reply = (
-                    input("Add these to indexing.exclude in .chunkhound.json? [y/N]: ")
-                    .strip()
-                    .lower()
+                formatter.info(
+                    "To exclude them, add these paths to your indexing.exclude config:"
                 )
-                if reply in ("y", "yes"):
-                    local_config_path = base_dir / ".chunkhound.json"
-                    # Load or initialize config data
-                    data = {}
-                    if local_config_path.exists():
-                        import json
-
-                        try:
-                            data = json.loads(local_config_path.read_text())
-                        except Exception:
-                            data = {}
-
-                    # Ensure structure exists
-                    indexing = data.get("indexing") or {}
-                    exclude_list = list(indexing.get("exclude") or [])
-
-                    # Merge unique entries
-                    existing = set(exclude_list)
-                    added = 0
-                    for rel in rel_paths:
-                        if rel not in existing:
-                            exclude_list.append(rel)
-                            existing.add(rel)
-                            added += 1
-
-                    if added > 0:
-                        indexing["exclude"] = exclude_list
-                        data["indexing"] = indexing
-                        import json
-
-                        local_config_path.write_text(
-                            json.dumps(data, indent=2, sort_keys=False) + "\n"
-                        )
-                        formatter.success(
-                            f"Added {added} file(s) to indexing.exclude in {local_config_path}"
-                        )
-                    else:
-                        formatter.info("All timed-out files already excluded.")
+                for rel in rel_paths:
+                    print(f"  - {rel}")
         except Exception as e:
             formatter.warning(f"Failed to offer exclusion prompt: {e}")
 
@@ -320,7 +276,7 @@ def _validate_run_arguments(
                 formatter.error("No embedding provider configured.")
                 formatter.info("To fix this, you can:")
                 formatter.info(
-                    "  1. Create .chunkhound.json config file with embeddings"
+                    "  1. Set EMBEDDING_PROVIDER and EMBEDDING_API_KEY environment variables"
                 )
                 formatter.info("  2. Use --no-embeddings to skip embeddings")
                 return False

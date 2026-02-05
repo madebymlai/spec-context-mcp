@@ -36,8 +36,8 @@ async def calibrate_command(args: argparse.Namespace, config: Config) -> None:
             formatter.error("No embedding configuration found")
             formatter.info(
                 "Configure an embedding provider via:\n"
-                "1. Create .chunkhound.json with embedding configuration, OR\n"
-                "2. Set CHUNKHOUND_EMBEDDING__API_KEY and other environment variables\n"
+                "1. Set EMBEDDING_API_KEY environment variable, OR\n"
+                "2. Set EMBEDDING_PROVIDER and related environment variables, OR\n"
                 "3. Use --provider and --model command-line arguments"
             )
             sys.exit(1)
@@ -193,5 +193,5 @@ def _display_text_results(
             result.recommended_reranking_batch_size
         )
 
-    formatter.info("\nAdd to your .chunkhound.json:")
+    formatter.info("\nRecommended environment variables:")
     formatter.info(json.dumps(config_snippet, indent=2))
