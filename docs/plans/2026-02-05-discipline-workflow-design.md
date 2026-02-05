@@ -32,21 +32,13 @@ The following skills are adapted into the MCP tool prompts (`get-implementer-gui
 | `get-reviewer-guide` | `tech.md`, `principles.md` |
 | `get-brainstorm-guide` | `product.md`, `principles.md` |
 
-**MCP tools referenced in guides:**
+**MCP search tool usage per guide:**
 
-Guides include instructions for using the `search` MCP tool (similar to CLAUDE.md patterns):
-
-| Guide | Search usage |
-|-------|--------------|
-| `get-implementer-guide` | Discover existing patterns before coding, find similar implementations, avoid duplicates |
-| `get-reviewer-guide` | Verify no duplicate code, check existing patterns are followed |
-| `get-brainstorm-guide` | Explore existing codebase, understand current implementations |
-
-Guides should specify:
-- Use `search` type="semantic" for concept/pattern discovery
-- Use `search` type="regex" for exact function/class names
-- Fallback to Glob/Grep if search unavailable
-- Search BEFORE writing code to avoid reinventing
+| Guide | Role-specific search guidance |
+|-------|-------------------------------|
+| `get-implementer-guide` | Before writing ANY code: search for existing utilities, similar implementations, patterns to reuse. Don't reinvent - leverage what exists. Fallback to Glob/Grep if search unavailable. |
+| `get-reviewer-guide` | Search for similar code to check if implementation duplicates existing functionality. Verify patterns match established codebase conventions. |
+| `get-brainstorm-guide` | Explore related features and existing implementations to inform design options. Understand what's already built before proposing new approaches. |
 
 ### Foundational Principles (Adapted for Spec-Context)
 
