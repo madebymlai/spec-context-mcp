@@ -204,7 +204,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 7. Create get-brainstorm-guide tool
+- [x] 7. Create get-brainstorm-guide tool
   - File: src/tools/workflow/get-brainstorm-guide.ts
   - Define tool with inputSchema (no required args)
   - Handler returns brainstorming methodology
