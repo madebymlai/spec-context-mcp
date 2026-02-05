@@ -82,7 +82,7 @@ Applied in spec-context: Implementer receives reviewer feedback directly. Must v
 > - Skip review loops (same issue twice = orchestrator takes over)
 > - Start code quality review before spec compliance passes
 
-Applied in spec-context: Orchestrator dispatches to configurable CLIs (`SPEC_CONTEXT_IMPLEMENTER_CLI`, `SPEC_CONTEXT_REVIEWER_CLI`). Reviewer uses `get-reviewer-guide` which references `principles.md` and `tech.md` for review criteria.
+Applied in spec-context: Orchestrator dispatches to configurable CLIs (`SPEC_CONTEXT_IMPLEMENTER`, `SPEC_CONTEXT_REVIEWER`). Reviewer uses `get-reviewer-guide` which references `principles.md` and `tech.md` for review criteria.
 
 ---
 
@@ -108,9 +108,9 @@ The superpowers skills (test-driven-development, receiving-code-review, requesti
 SPEC_CONTEXT_DISCIPLINE=full|standard|minimal
 
 # CLI dispatch overrides (default: auto-detect current CLI)
-SPEC_CONTEXT_IMPLEMENTER_CLI=claude|codex|gpt|...
-SPEC_CONTEXT_REVIEWER_CLI=claude|codex|gpt|...
-SPEC_CONTEXT_BRAINSTORM_CLI=claude|codex|gpt|...
+SPEC_CONTEXT_IMPLEMENTER=claude|codex|gpt|...
+SPEC_CONTEXT_REVIEWER=claude|codex|gpt|...
+SPEC_CONTEXT_BRAINSTORM=claude|codex|gpt|...
 ```
 
 ### Discipline Modes
@@ -125,7 +125,7 @@ Verification is always on (it's just honesty about completion status).
 
 ### CLI Dispatch
 
-If `SPEC_CONTEXT_*_CLI` vars are not set, defaults to the current CLI being used. Only set when you want a different CLI for a specific role.
+If `SPEC_CONTEXT_*` vars are not set, defaults to the current CLI being used. Only set when you want a different CLI for a specific role.
 
 Any CLI that accepts a prompt as input can be used. Common options:
 
@@ -139,12 +139,12 @@ Any CLI that accepts a prompt as input can be used. Common options:
 
 Example: Use Claude for implementation, Codex for review:
 ```bash
-SPEC_CONTEXT_REVIEWER_CLI=codex
+SPEC_CONTEXT_REVIEWER=codex
 ```
 
 The orchestrator invokes the CLI with the guide + task prompt. The CLI must accept a prompt and return output.
 
-**Future extension:** Architecture is open to API-based dispatch (e.g., OpenRouter). Since `OPENROUTER_API_KEY` is already configured for dashboard AI review, the same `*_CLI` vars could later accept model identifiers (e.g., `openrouter:anthropic/claude-3-opus`) that dispatch via API instead of CLI. Single config pattern, no separate env vars.
+**Future extension:** Architecture is open to API-based dispatch (e.g., OpenRouter). Since `OPENROUTER_API_KEY` is already configured for dashboard AI review, the same `*` vars could later accept model identifiers (e.g., `openrouter:anthropic/claude-3-opus`) that dispatch via API instead of CLI. Single config pattern, no separate env vars.
 
 ## Architecture
 
@@ -299,14 +299,14 @@ Affected by discipline mode:
 │     → Asks: brainstorm or proceed?                                │
 │                                                                   │
 │  2. If brainstorm:                                                │
-│     → Dispatches to BRAINSTORM_CLI with get-brainstorm-guide      │
+│     → Dispatches to BRAINSTORM with get-brainstorm-guide      │
 │     → Refines idea until clear                                    │
 │                                                                   │
 │  3. Spec workflow: Requirements → Design → Tasks                  │
 │                                                                   │
 │  4. For each task:                                                │
 │     ┌─────────────────────────────────────────────────────────┐  │
-│     │  Dispatches to IMPLEMENTER_CLI with:                     │  │
+│     │  Dispatches to IMPLEMENTER with:                     │  │
 │     │    - Task _Prompt                                        │  │
 │     │    - get-implementer-guide content                       │  │
 │     │    - tech.md + principles.md                             │  │
@@ -319,7 +319,7 @@ Affected by discipline mode:
 │                              ↓                                    │
 │     ┌─────────────────────────────────────────────────────────┐  │
 │     │  If full or standard mode:                               │  │
-│     │  Dispatches to REVIEWER_CLI with:                        │  │
+│     │  Dispatches to REVIEWER with:                        │  │
 │     │    - Implementation diff                                 │  │
 │     │    - get-reviewer-guide content                          │  │
 │     │    - tech.md + principles.md                             │  │
@@ -342,7 +342,7 @@ Affected by discipline mode:
 | Change | Description |
 |--------|-------------|
 | New env var | `SPEC_CONTEXT_DISCIPLINE=full\|standard\|minimal` |
-| New env vars | `SPEC_CONTEXT_IMPLEMENTER_CLI`, `SPEC_CONTEXT_REVIEWER_CLI`, `SPEC_CONTEXT_BRAINSTORM_CLI` |
+| New env vars | `SPEC_CONTEXT_IMPLEMENTER`, `SPEC_CONTEXT_REVIEWER`, `SPEC_CONTEXT_BRAINSTORM` |
 | New steering doc | `principles.md` + `principles-template.md` |
 | Update steering doc | `tech-template.md` (remove principles section) |
 | New MCP tool | `get-brainstorm-guide` |
