@@ -126,7 +126,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 5. Create get-implementer-guide tool
+- [x] 5. Create get-implementer-guide tool
   - File: src/tools/workflow/get-implementer-guide.ts
   - Define tool with inputSchema (no required args)
   - Handler returns guide based on discipline mode
