@@ -119,11 +119,11 @@ function buildReviewerGuide(): string {
 
 ## Issue Severity Levels
 
-| Severity | Description | Action Required |
-|----------|-------------|-----------------|
-| **Critical** | Breaks functionality, security issue, data loss risk | Must fix before proceeding |
-| **Important** | Violates spec, bad patterns, missing tests | Should fix before merge |
-| **Minor** | Style issues, naming, minor improvements | Note for future |
+| Severity      | Description                                        | Action Required           |
+|---------------|----------------------------------------------------|---------------------------|
+| **Critical**  | Breaks functionality, security issue, data loss risk | Must fix before proceeding |
+| **Important** | Violates spec, bad patterns, missing tests         | Should fix before merge   |
+| **Minor**     | Style issues, naming, minor improvements           | Note for future           |
 
 ## Acting on Review Results
 

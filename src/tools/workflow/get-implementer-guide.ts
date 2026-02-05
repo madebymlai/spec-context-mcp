@@ -186,18 +186,18 @@ Keep tests green. Don't add behavior.
 
 ### Common Rationalizations
 
-| Excuse | Reality |
-|--------|---------|
-| "Too simple to test" | Simple code breaks. Test takes 30 seconds. |
-| "I'll test after" | Tests passing immediately prove nothing. |
-| "Tests after achieve same goals" | Tests-after = "what does this do?" Tests-first = "what should this do?" |
-| "Already manually tested" | Ad-hoc ≠ systematic. No record, can't re-run. |
-| "Deleting X hours is wasteful" | Sunk cost fallacy. Keeping unverified code is technical debt. |
-| "Keep as reference" | You'll adapt it. That's testing after. Delete means delete. |
-| "Need to explore first" | Fine. Throw away exploration, start with TDD. |
-| "Test hard = design unclear" | Listen to test. Hard to test = hard to use. |
-| "TDD will slow me down" | TDD faster than debugging. |
-| "Existing code has no tests" | You're improving it. Add tests for what you touch. |
+| Excuse                          | Reality                                                                  |
+|---------------------------------|--------------------------------------------------------------------------|
+| "Too simple to test"            | Simple code breaks. Test takes 30 seconds.                               |
+| "I'll test after"               | Tests passing immediately prove nothing.                                 |
+| "Tests after achieve same goals"| Tests-after = "what does this do?" Tests-first = "what should this do?" |
+| "Already manually tested"       | Ad-hoc ≠ systematic. No record, can't re-run.                            |
+| "Deleting X hours is wasteful"  | Sunk cost fallacy. Keeping unverified code is technical debt.            |
+| "Keep as reference"             | You'll adapt it. That's testing after. Delete means delete.              |
+| "Need to explore first"         | Fine. Throw away exploration, start with TDD.                            |
+| "Test hard = design unclear"    | Listen to test. Hard to test = hard to use.                              |
+| "TDD will slow me down"         | TDD faster than debugging.                                               |
+| "Existing code has no tests"    | You're improving it. Add tests for what you touch.                       |
 
 ### Red Flags - STOP and Start Over
 
@@ -217,12 +217,12 @@ Keep tests green. Don't add behavior.
 
 ### When Stuck
 
-| Problem | Solution |
-|---------|----------|
-| Don't know how to test | Write wished-for API. Write assertion first. |
-| Test too complicated | Design too complicated. Simplify interface. |
-| Must mock everything | Code too coupled. Use dependency injection. |
-| Test setup huge | Extract helpers. Still complex? Simplify design. |
+| Problem                | Solution                                         |
+|------------------------|--------------------------------------------------|
+| Don't know how to test | Write wished-for API. Write assertion first.     |
+| Test too complicated   | Design too complicated. Simplify interface.      |
+| Must mock everything   | Code too coupled. Use dependency injection.      |
+| Test setup huge        | Extract helpers. Still complex? Simplify design. |
 
 ### TDD Verification Checklist
 
@@ -277,14 +277,14 @@ Skip any step = lying, not verifying
 
 ### Common Verification Requirements
 
-| Claim | Requires | Not Sufficient |
-|-------|----------|----------------|
-| Tests pass | Test command output: 0 failures | Previous run, "should pass" |
-| Linter clean | Linter output: 0 errors | Partial check, extrapolation |
-| Build succeeds | Build command: exit 0 | Linter passing, logs look good |
-| Bug fixed | Test original symptom: passes | Code changed, assumed fixed |
-| Regression test works | Red-green cycle verified | Test passes once |
-| Requirements met | Line-by-line checklist | Tests passing |
+| Claim                 | Requires                        | Not Sufficient                  |
+|-----------------------|---------------------------------|---------------------------------|
+| Tests pass            | Test command output: 0 failures | Previous run, "should pass"     |
+| Linter clean          | Linter output: 0 errors         | Partial check, extrapolation    |
+| Build succeeds        | Build command: exit 0           | Linter passing, logs look good  |
+| Bug fixed             | Test original symptom: passes   | Code changed, assumed fixed     |
+| Regression test works | Red-green cycle verified        | Test passes once                |
+| Requirements met      | Line-by-line checklist          | Tests passing                   |
 
 ### Verification Patterns
 
@@ -317,14 +317,14 @@ Skip any step = lying, not verifying
 
 ### Rationalization Prevention
 
-| Excuse | Reality |
-|--------|---------|
-| "Should work now" | RUN the verification |
-| "I'm confident" | Confidence ≠ evidence |
-| "Just this once" | No exceptions |
-| "Linter passed" | Linter ≠ compiler |
-| "Partial check is enough" | Partial proves nothing |
-| "Different words so rule doesn't apply" | Spirit over letter |
+| Excuse                                   | Reality                 |
+|------------------------------------------|-------------------------|
+| "Should work now"                        | RUN the verification    |
+| "I'm confident"                          | Confidence ≠ evidence   |
+| "Just this once"                         | No exceptions           |
+| "Linter passed"                          | Linter ≠ compiler       |
+| "Partial check is enough"                | Partial proves nothing  |
+| "Different words so rule doesn't apply"  | Spirit over letter      |
 
 **No shortcuts for verification. Run the command. Read the output. THEN claim the result.**
 

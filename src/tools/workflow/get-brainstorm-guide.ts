@@ -48,99 +48,107 @@ export async function getBrainstormGuideHandler(
 function buildBrainstormGuide(): string {
   return `# Brainstorming Guide
 
-## Purpose
+Turn rough ideas into fully formed designs through natural collaborative dialogue.
 
-Turn rough ideas into fully formed designs through collaborative dialogue.
-Use this before starting formal spec creation when the idea needs refinement.
+**Core approach:** Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design in small sections (200-300 words), checking after each section whether it looks right so far.
 
 ## The Process
 
 ### Phase 1: Understanding the Idea
 
-1. **Check Context First**
-   - Review current project state
-   - Look at relevant files and recent changes
-   - Understand what already exists
+**Check context first:**
+- Review current project state (files, docs, recent commits)
+- Understand what already exists
+- Look for related functionality or patterns
 
-2. **Ask Questions One at a Time**
-   - One question per message
-   - If a topic needs more exploration, break into multiple questions
-   - Focus on: purpose, constraints, success criteria
+**Ask questions one at a time:**
+- One question per message - don't overwhelm
+- If a topic needs more exploration, break into multiple questions
+- Focus on: purpose, constraints, success criteria
 
-3. **Prefer Multiple Choice**
-   - Easier to answer than open-ended
-   - Example: "Which approach? A) Simple now, extend later B) Flexible from start C) Minimal viable"
-   - Open-ended is fine when choices aren't clear
+**Prefer multiple choice when possible:**
+- Easier to answer than open-ended
+- Example: "Which approach? A) Simple now, extend later B) Flexible from start C) Minimal viable"
+- Open-ended is fine when choices aren't clear
 
 ### Phase 2: Exploring Approaches
 
-1. **Propose 2-3 Options**
-   - Each with clear trade-offs
-   - Lead with your recommendation and why
+**Propose 2-3 options with trade-offs:**
+- Present options conversationally with your recommendation
+- Lead with your recommended option and explain why
 
-2. **Format for Options**
-   \`\`\`
-   **Option A (Recommended):** [Brief description]
-   - Pros: [Benefits]
-   - Cons: [Drawbacks]
-   - Best when: [Use case]
+**Format:**
+\`\`\`
+**Option A (Recommended):** [Brief description]
+- Pros: [Benefits]
+- Cons: [Drawbacks]
+- Best when: [Use case]
 
-   **Option B:** [Brief description]
-   - Pros: [Benefits]
-   - Cons: [Drawbacks]
-   - Best when: [Use case]
-   \`\`\`
+**Option B:** [Brief description]
+- Pros: [Benefits]
+- Cons: [Drawbacks]
+- Best when: [Use case]
+\`\`\`
 
-3. **Let User Decide**
-   - Don't push your recommendation too hard
-   - Be ready to explore hybrid approaches
+**Let user decide:**
+- Don't push your recommendation too hard
+- Be ready to explore hybrid approaches
 
 ### Phase 3: Presenting the Design
 
-1. **Break Into Sections**
-   - 200-300 words per section
-   - Cover: architecture, components, data flow, error handling
+**Break into sections:**
+- 200-300 words per section
+- Cover: architecture, components, data flow, error handling, testing
 
-2. **Validate Incrementally**
-   - After each section: "Does this look right so far?"
-   - Be ready to go back and clarify
+**Validate incrementally:**
+- After each section: "Does this look right so far?"
+- Be ready to go back and clarify if something doesn't make sense
 
-3. **YAGNI Ruthlessly**
-   - Remove unnecessary features
-   - Start simple, add complexity only when needed
+**YAGNI ruthlessly:**
+- Remove unnecessary features from all designs
+- Start simple, add complexity only when needed
+- Question every "nice to have"
 
-### Phase 4: Transition to Spec
+## After the Design
 
-When design is clear:
-- Summarize the agreed approach
+**Documentation:**
+- Write the validated design to a design document (e.g., \`docs/plans/YYYY-MM-DD-<topic>-design.md\`)
+- Commit the design document to git
+- Include: problem statement, chosen approach, key decisions, trade-offs accepted
+
+**Transition to implementation:**
 - Ask: "Ready to create the formal spec?"
-- If yes, proceed to spec-workflow-guide
+- If continuing to spec: proceed to spec-workflow-guide
+- Summarize the agreed approach before transitioning
 
 ## Key Principles
 
-| Principle | What It Means |
-|-----------|---------------|
-| **One question at a time** | Don't overwhelm with multiple questions |
-| **Multiple choice preferred** | Easier to answer than open-ended |
-| **YAGNI ruthlessly** | Remove unnecessary features |
-| **Explore alternatives** | Always 2-3 approaches before settling |
-| **Incremental validation** | Present in sections, validate each |
-| **Be flexible** | Go back when something doesn't fit |
+| Principle                       | What It Means                                        |
+|---------------------------------|------------------------------------------------------|
+| **One question at a time**      | Don't overwhelm with multiple questions              |
+| **Multiple choice preferred**   | Easier to answer than open-ended when possible       |
+| **YAGNI ruthlessly**            | Remove unnecessary features from all designs         |
+| **Explore alternatives**        | Always propose 2-3 approaches before settling        |
+| **Incremental validation**      | Present design in sections, validate each            |
+| **Be flexible**                 | Go back and clarify when something doesn't make sense |
 
 ## Signs to Proceed to Formal Spec
 
+Ready to proceed when:
 - Core requirements are clear
-- Approach has been selected
-- Major trade-offs are understood
+- Approach has been selected from options
+- Major trade-offs are understood and accepted
 - Scope is well-defined
 - User is confident in direction
 
 ## Signs to Keep Brainstorming
 
-- User seems uncertain
-- Requirements keep changing
+Keep exploring when:
+- User seems uncertain about direction
+- Requirements keep changing during discussion
 - Trade-offs aren't understood
-- Scope is unclear
-- Multiple conflicting goals
+- Scope is unclear or expanding
+- Multiple conflicting goals exist
+- "I don't know" appears frequently
 `;
 }

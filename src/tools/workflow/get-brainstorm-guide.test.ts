@@ -28,14 +28,14 @@ describe('get-brainstorm-guide', () => {
     const result = await getBrainstormGuideHandler({}, createContext());
 
     expect(result.data?.guide).toContain('One question at a time');
-    expect(result.data?.guide).toContain('Ask Questions');
+    expect(result.data?.guide).toContain('Ask questions one at a time');
   });
 
   it('includes multiple choice preference', async () => {
     const result = await getBrainstormGuideHandler({}, createContext());
 
     expect(result.data?.guide).toContain('Multiple choice');
-    expect(result.data?.guide).toContain('Prefer Multiple Choice');
+    expect(result.data?.guide).toContain('Prefer multiple choice');
   });
 
   it('includes 2-3 options guidance', async () => {
