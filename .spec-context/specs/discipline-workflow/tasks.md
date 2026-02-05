@@ -164,7 +164,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 6. Create get-reviewer-guide tool
+- [x] 6. Create get-reviewer-guide tool
   - File: src/tools/workflow/get-reviewer-guide.ts
   - Define tool with inputSchema (no required args)
   - Handler returns review checklist and criteria
