@@ -144,6 +144,8 @@ SPEC_CONTEXT_REVIEWER_CLI=codex
 
 The orchestrator invokes the CLI with the guide + task prompt. The CLI must accept a prompt and return output.
 
+**Future extension:** Architecture is open to API-based dispatch (e.g., OpenRouter) in addition to CLI. Since `OPENROUTER_API_KEY` is already configured for dashboard AI review, a future `SPEC_CONTEXT_*_MODEL` option could dispatch via OpenRouter API directly, enabling use of any supported model without CLI installation.
+
 ## Architecture
 
 ### Roles and Responsibilities
