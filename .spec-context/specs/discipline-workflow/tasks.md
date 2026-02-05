@@ -92,7 +92,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 4. Extract steering loader to shared module with selective loading
+- [x] 4. Extract steering loader to shared module with selective loading
   - File: src/tools/workflow/steering-loader.ts (new), src/tools/workflow/spec-workflow-guide.ts
   - Extract to new steering-loader.ts with getSteeringDocs(projectPath, docs[]) signature
   - Support 'product', 'tech', 'structure', 'principles' doc types
