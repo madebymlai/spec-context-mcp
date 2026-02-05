@@ -276,6 +276,40 @@ Affected by discipline mode:
     └── principles.md             # New: coding rules, SOLID, patterns
 ```
 
+## Review Loop Flow
+
+When reviewer finds issues, the fix-review loop works as follows:
+
+```
+Implementer completes task
+         ↓
+Reviewer reviews
+         ↓
+    ┌────┴────┐
+    │ Issues? │
+    └────┬────┘
+    No   │  Yes
+    ↓    ↓
+  Done   Implementer fixes (gets feedback directly)
+              ↓
+         Reviewer re-reviews (fix diff + spot-check previous)
+              ↓
+         ┌────┴────────┐
+         │ Same issue  │
+         │ appears?    │
+         └────┬────────┘
+         No   │  Yes
+         ↓    ↓
+       Loop   Orchestrator takes over and fixes
+```
+
+**Key decisions:**
+- Implementer sees reviewer feedback directly (no summarization)
+- Reviewer sees fix diff + spot-checks previous issues were fixed
+- No magic number for max loops - progress-based instead
+- If same issue appears twice, orchestrator takes over (implementer doesn't understand)
+- Different issues can keep looping until resolved
+
 ## Guide Content Summary
 
 ### get-brainstorm-guide
