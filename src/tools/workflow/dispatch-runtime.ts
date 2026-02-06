@@ -210,8 +210,235 @@ function statusForReviewer(result: ReviewerResult): StateSnapshot['status'] {
   return 'failed';
 }
 
-function estimateTokensFromChars(value: string): number {
-  return Math.ceil(value.length / 4);
+function estimateTokensFromChars(value: string, charsPerToken = 4): number {
+  return Math.ceil(value.length / Math.max(1, charsPerToken));
+}
+
+const DEFAULT_MAX_INPUT_TOKENS_IMPLEMENTER = 4800;
+const DEFAULT_MAX_INPUT_TOKENS_REVIEWER = 4000;
+const DEFAULT_TOKEN_CHARS_PER_TOKEN = 4;
+const MAX_DELTA_VALUE_CHARS = 240;
+const STAGE_B_HEAD_LINES = 18;
+const STAGE_B_TAIL_LINES = 8;
+const STAGE_B_OBJECTIVE_CHARS = 900;
+const STAGE_C_OBJECTIVE_CHARS = 420;
+
+type DispatchCompactionStage = 'none' | 'stage_a_prune' | 'stage_b_prompt' | 'stage_c_fallback';
+
+interface DispatchCompactionPolicy {
+  auto: boolean;
+  prune: boolean;
+  maxInputTokensImplementer: number;
+  maxInputTokensReviewer: number;
+  tokenCharsPerToken: number;
+}
+
+interface DispatchCompactionTrace {
+  stage: DispatchCompactionStage | 'initial';
+  promptTokens: number;
+}
+
+interface CompiledDispatchPrompt {
+  prompt: string;
+  stablePrefixHash: string;
+  fullPromptHash: string;
+  deltaPacket: Record<string, unknown>;
+  maxOutputTokens: number;
+  guideMode: 'full' | 'compact';
+  guideCacheKey: string;
+  promptTokens: number;
+}
+
+function boolFromEnv(raw: string | undefined, defaultValue: boolean): boolean {
+  if (!raw) {
+    return defaultValue;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  return defaultValue;
+}
+
+function intFromEnv(raw: string | undefined, defaultValue: number): number {
+  if (!raw) {
+    return defaultValue;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    return defaultValue;
+  }
+  return Math.floor(value);
+}
+
+function clipText(value: string, maxChars: number): string {
+  if (maxChars <= 0) {
+    return '';
+  }
+  if (value.length <= maxChars) {
+    return value;
+  }
+  if (maxChars <= 3) {
+    return value.slice(0, maxChars);
+  }
+  return `${value.slice(0, maxChars - 3)}...`;
+}
+
+function normalizeLine(line: string): string {
+  return line.replace(/\s+/g, ' ').trim();
+}
+
+function normalizePromptText(value: string): string {
+  return value.replace(/\r\n/g, '\n').trim();
+}
+
+function uniqueNonEmptyLines(lines: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const line of lines) {
+    const normalized = normalizeLine(line);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function containsCriticalConstraint(line: string): boolean {
+  return /(must|required|do not|never|task[_ -]?id|branch|contract|BEGIN_DISPATCH_RESULT|END_DISPATCH_RESULT|json)/i.test(line);
+}
+
+function compactTaskPromptStageB(input: {
+  taskPrompt: string;
+  taskId: string;
+  maxOutputTokens: number;
+  compactionContext?: string[];
+}): string {
+  const normalizedPrompt = normalizePromptText(input.taskPrompt);
+  if (!normalizedPrompt) {
+    return input.taskPrompt;
+  }
+
+  const lines = normalizedPrompt.split('\n').map(line => line.trim());
+  const nonEmpty = lines.filter(Boolean);
+  const head = nonEmpty.slice(0, STAGE_B_HEAD_LINES);
+  const tail = nonEmpty.slice(Math.max(0, nonEmpty.length - STAGE_B_TAIL_LINES));
+  const critical = uniqueNonEmptyLines(nonEmpty.filter(containsCriticalConstraint)).slice(0, 16);
+  const objective = clipText(nonEmpty.join(' '), STAGE_B_OBJECTIVE_CHARS);
+  const contextLines = uniqueNonEmptyLines(input.compactionContext ?? []).slice(0, 8);
+
+  const sections: string[] = [
+    'Task prompt compacted due to input token budget pressure.',
+    `Task ID: ${input.taskId}`,
+    `Max output tokens: ${input.maxOutputTokens}`,
+    `Objective: ${objective}`,
+  ];
+
+  if (critical.length > 0) {
+    sections.push(`Critical constraints:\n- ${critical.join('\n- ')}`);
+  }
+  if (head.length > 0) {
+    sections.push(`Leading context:\n${head.join('\n')}`);
+  }
+  if (tail.length > 0) {
+    sections.push(`Recent context:\n${tail.join('\n')}`);
+  }
+  if (contextLines.length > 0) {
+    sections.push(`Compaction context:\n- ${contextLines.join('\n- ')}`);
+  }
+
+  return sections.join('\n\n');
+}
+
+function compactTaskPromptStageC(input: {
+  taskPrompt: string;
+  taskId: string;
+  maxOutputTokens: number;
+  compactionContext?: string[];
+  compactionPromptOverride?: string;
+}): string {
+  const normalizedPrompt = normalizePromptText(input.taskPrompt);
+  const objective = clipText(normalizeLine(normalizedPrompt), STAGE_C_OBJECTIVE_CHARS);
+  const critical = uniqueNonEmptyLines(
+    normalizedPrompt
+      .split('\n')
+      .map(line => line.trim())
+      .filter(containsCriticalConstraint)
+  ).slice(0, 8);
+  const contextLines = uniqueNonEmptyLines(input.compactionContext ?? []).slice(0, 4);
+
+  const sections: string[] = [];
+  if (input.compactionPromptOverride?.trim()) {
+    sections.push(input.compactionPromptOverride.trim());
+  } else {
+    sections.push('Task prompt emergency compaction applied to stay within token budget.');
+  }
+  sections.push(`Task ID: ${input.taskId}`);
+  sections.push(`Goal: ${objective}`);
+  sections.push(`Output budget: ${input.maxOutputTokens} tokens`);
+
+  if (critical.length > 0) {
+    sections.push(`Non-negotiable constraints: ${critical.join(' | ')}`);
+  }
+  if (contextLines.length > 0) {
+    sections.push(`Compaction context: ${contextLines.join(' | ')}`);
+  }
+
+  return sections.join('\n');
+}
+
+function pruneDeltaPacket(deltaPacket: Record<string, unknown>): Record<string, unknown> {
+  const allowedKeys = [
+    'task_id',
+    'previous_implementer_summary',
+    'previous_reviewer_assessment',
+    'previous_reviewer_issue_count',
+    'guide_mode',
+    'guide_cache_key',
+  ];
+  const compacted: Record<string, unknown> = {};
+
+  for (const key of allowedKeys) {
+    if (!(key in deltaPacket)) {
+      continue;
+    }
+    const value = deltaPacket[key];
+    if (value === null || value === undefined || value === '') {
+      continue;
+    }
+    if (typeof value === 'string') {
+      compacted[key] = clipText(normalizeLine(value), MAX_DELTA_VALUE_CHARS);
+      continue;
+    }
+    compacted[key] = value;
+  }
+
+  compacted.compaction_applied = true;
+  return compacted;
+}
+
+function resolveDispatchCompactionPolicy(): DispatchCompactionPolicy {
+  return {
+    auto: boolFromEnv(process.env.SPEC_CONTEXT_DISPATCH_COMPACTION_AUTO, true),
+    prune: boolFromEnv(process.env.SPEC_CONTEXT_DISPATCH_COMPACTION_PRUNE, true),
+    maxInputTokensImplementer: intFromEnv(
+      process.env.SPEC_CONTEXT_DISPATCH_MAX_INPUT_TOKENS_IMPLEMENTER,
+      DEFAULT_MAX_INPUT_TOKENS_IMPLEMENTER
+    ),
+    maxInputTokensReviewer: intFromEnv(
+      process.env.SPEC_CONTEXT_DISPATCH_MAX_INPUT_TOKENS_REVIEWER,
+      DEFAULT_MAX_INPUT_TOKENS_REVIEWER
+    ),
+    tokenCharsPerToken: intFromEnv(
+      process.env.SPEC_CONTEXT_DISPATCH_TOKEN_CHARS_PER_TOKEN,
+      DEFAULT_TOKEN_CHARS_PER_TOKEN
+    ),
+  };
 }
 
 interface DispatchTelemetrySnapshot {
@@ -220,6 +447,13 @@ interface DispatchTelemetrySnapshot {
   avg_output_tokens: number;
   schema_invalid_retries: number;
   approval_loops: number;
+  compaction_count: number;
+  compaction_auto_count: number;
+  compaction_prompt_tokens_before: number;
+  compaction_prompt_tokens_after: number;
+  compaction_ratio: number;
+  compaction_stage_distribution: Record<DispatchCompactionStage, number>;
+  overflow_terminal_count: number;
 }
 
 class DispatchPromptCompiler {
@@ -268,7 +502,8 @@ ${DISPATCH_RESULT_END}`,
     deltaPacket: Record<string, unknown>;
     guideMode: 'full' | 'compact';
     guideCacheKey: string;
-  }) {
+    tokenCharsPerToken?: number;
+  }): CompiledDispatchPrompt {
     const templateId = input.role === 'implementer' ? 'dispatch_implementer' : 'dispatch_reviewer';
     const guideToolName = input.role === 'implementer' ? 'get-implementer-guide' : 'get-reviewer-guide';
     const guideInstruction = input.guideMode === 'full'
@@ -301,6 +536,10 @@ ${input.taskPrompt}`;
       maxOutputTokens: input.maxOutputTokens,
       guideMode: input.guideMode,
       guideCacheKey: input.guideCacheKey,
+      promptTokens: estimateTokensFromChars(
+        compiled.text,
+        input.tokenCharsPerToken ?? DEFAULT_TOKEN_CHARS_PER_TOKEN
+      ),
     };
   }
 }
@@ -313,12 +552,25 @@ class DispatchRuntimeManager {
   private readonly eventBus = new InMemoryEventBusAdapter<RuntimeEventEnvelope>();
   private readonly promptCompiler = new DispatchPromptCompiler();
   private readonly guidePromptCounts = new Map<string, number>();
+  private readonly compactionPolicy = resolveDispatchCompactionPolicy();
   private telemetry: DispatchTelemetrySnapshot = {
     dispatch_count: 0,
     total_output_tokens: 0,
     avg_output_tokens: 0,
     schema_invalid_retries: 0,
     approval_loops: 0,
+    compaction_count: 0,
+    compaction_auto_count: 0,
+    compaction_prompt_tokens_before: 0,
+    compaction_prompt_tokens_after: 0,
+    compaction_ratio: 1,
+    compaction_stage_distribution: {
+      none: 0,
+      stage_a_prune: 0,
+      stage_b_prompt: 0,
+      stage_c_fallback: 0,
+    },
+    overflow_terminal_count: 0,
   };
 
   constructor() {
@@ -389,7 +641,7 @@ class DispatchRuntimeManager {
   }> {
     await this.assertRunBinding(args.runId, args.taskId);
     const parsed = extractStructuredJson(args.outputContent);
-    const outputTokens = estimateTokensFromChars(args.outputContent);
+    const outputTokens = estimateTokensFromChars(args.outputContent, this.compactionPolicy.tokenCharsPerToken);
     if (typeof args.maxOutputTokens === 'number' && outputTokens > args.maxOutputTokens) {
       throw new Error(`output_token_budget_exceeded: estimated=${outputTokens}, max=${args.maxOutputTokens}`);
     }
@@ -469,6 +721,9 @@ class DispatchRuntimeManager {
     taskId: string;
     taskPrompt: string;
     maxOutputTokens: number;
+    compactionContext?: string[];
+    compactionPromptOverride?: string;
+    compactionAuto?: boolean;
   }): Promise<{
     prompt: string;
     stablePrefixHash: string;
@@ -477,12 +732,18 @@ class DispatchRuntimeManager {
     maxOutputTokens: number;
     guideMode: 'full' | 'compact';
     guideCacheKey: string;
+    promptTokensBefore: number;
+    promptTokensAfter: number;
+    promptTokenBudget: number;
+    compactionApplied: boolean;
+    compactionStage: DispatchCompactionStage;
+    compactionTrace: DispatchCompactionTrace[];
   }> {
     const snapshot = await this.assertRunBinding(args.runId, args.taskId);
-    const facts = new Map((snapshot?.facts ?? []).map(fact => [fact.k, fact.v]));
+    const facts = new Map((snapshot.facts ?? []).map(fact => [fact.k, fact.v]));
     const guideMode = this.nextGuideMode(args.runId, args.role);
     const guideCacheKey = `${args.role}:${args.runId}`;
-    const deltaPacket = {
+    let deltaPacket: Record<string, unknown> = {
       task_id: args.taskId,
       previous_implementer_summary: facts.get('implementer_summary') ?? null,
       previous_reviewer_assessment: facts.get('reviewer_assessment') ?? null,
@@ -490,21 +751,175 @@ class DispatchRuntimeManager {
       guide_mode: guideMode,
       guide_cache_key: guideCacheKey,
     };
+    let taskPrompt = args.taskPrompt;
 
-    return this.promptCompiler.compile({
+    const promptBudget = this.resolvePromptInputBudget(args.role, args.maxOutputTokens);
+    const autoCompaction = args.compactionAuto ?? this.compactionPolicy.auto;
+    const compactionTrace: DispatchCompactionTrace[] = [];
+
+    let compiled = this.promptCompiler.compile({
       runId: args.runId,
       role: args.role,
-      taskPrompt: args.taskPrompt,
+      taskPrompt,
       taskId: args.taskId,
       maxOutputTokens: args.maxOutputTokens,
       deltaPacket,
       guideMode,
       guideCacheKey,
+      tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
     });
+    const promptTokensBefore = compiled.promptTokens;
+    compactionTrace.push({ stage: 'initial', promptTokens: compiled.promptTokens });
+
+    let compactionStage: DispatchCompactionStage = 'none';
+
+    if (compiled.promptTokens > promptBudget) {
+      if (!autoCompaction) {
+        this.bumpOverflowTerminalTelemetry();
+        throw new Error(
+          `dispatch_prompt_overflow_terminal: estimated=${compiled.promptTokens}, budget=${promptBudget}, role=${args.role}`
+        );
+      }
+
+      if (this.compactionPolicy.prune) {
+        deltaPacket = pruneDeltaPacket(deltaPacket);
+        const stageACompiled = this.promptCompiler.compile({
+          runId: args.runId,
+          role: args.role,
+          taskPrompt,
+          taskId: args.taskId,
+          maxOutputTokens: args.maxOutputTokens,
+          deltaPacket,
+          guideMode,
+          guideCacheKey,
+          tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
+        });
+        if (stageACompiled.promptTokens <= compiled.promptTokens) {
+          compiled = stageACompiled;
+          compactionStage = 'stage_a_prune';
+        }
+        compactionTrace.push({ stage: 'stage_a_prune', promptTokens: compiled.promptTokens });
+      }
+
+      if (compiled.promptTokens > promptBudget) {
+        taskPrompt = compactTaskPromptStageB({
+          taskPrompt,
+          taskId: args.taskId,
+          maxOutputTokens: args.maxOutputTokens,
+          compactionContext: args.compactionContext,
+        });
+        const stageBCompiled = this.promptCompiler.compile({
+          runId: args.runId,
+          role: args.role,
+          taskPrompt,
+          taskId: args.taskId,
+          maxOutputTokens: args.maxOutputTokens,
+          deltaPacket,
+          guideMode,
+          guideCacheKey,
+          tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
+        });
+        if (stageBCompiled.promptTokens <= compiled.promptTokens) {
+          compiled = stageBCompiled;
+          compactionStage = 'stage_b_prompt';
+        }
+        compactionTrace.push({ stage: 'stage_b_prompt', promptTokens: compiled.promptTokens });
+      }
+
+      if (compiled.promptTokens > promptBudget) {
+        taskPrompt = compactTaskPromptStageC({
+          taskPrompt,
+          taskId: args.taskId,
+          maxOutputTokens: args.maxOutputTokens,
+          compactionContext: args.compactionContext,
+          compactionPromptOverride: args.compactionPromptOverride,
+        });
+        const stageCCompiled = this.promptCompiler.compile({
+          runId: args.runId,
+          role: args.role,
+          taskPrompt,
+          taskId: args.taskId,
+          maxOutputTokens: args.maxOutputTokens,
+          deltaPacket,
+          guideMode,
+          guideCacheKey,
+          tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
+        });
+        if (stageCCompiled.promptTokens <= compiled.promptTokens) {
+          compiled = stageCCompiled;
+          compactionStage = 'stage_c_fallback';
+        }
+        compactionTrace.push({ stage: 'stage_c_fallback', promptTokens: compiled.promptTokens });
+      }
+    }
+
+    if (compiled.promptTokens > promptBudget) {
+      this.bumpOverflowTerminalTelemetry();
+      throw new Error(
+        `dispatch_prompt_overflow_terminal: estimated=${compiled.promptTokens}, budget=${promptBudget}, role=${args.role}, stage=${compactionStage}`
+      );
+    }
+
+    if (compactionStage !== 'none') {
+      this.bumpCompactionTelemetry({
+        beforeTokens: promptTokensBefore,
+        afterTokens: compiled.promptTokens,
+        stage: compactionStage,
+        autoCompaction,
+      });
+
+      const compactionEvent = await this.publishEvent({
+        partition_key: args.runId,
+        run_id: args.runId,
+        step_id: args.taskId,
+        agent_id: 'orchestrator',
+        type: 'STATE_DELTA',
+        payload: {
+          role: args.role,
+          task_id: args.taskId,
+          dispatch_compaction_stage: compactionStage,
+          prompt_tokens_before: promptTokensBefore,
+          prompt_tokens_after: compiled.promptTokens,
+          prompt_token_budget: promptBudget,
+        },
+      });
+      await this.updateSnapshot(
+        args.runId,
+        compactionEvent,
+        [
+          { k: `dispatch_compacted:${args.role}`, v: 'true', confidence: 1 },
+          { k: `dispatch_compaction_stage:${args.role}`, v: compactionStage, confidence: 1 },
+          { k: `dispatch_prompt_tokens_before:${args.role}`, v: String(promptTokensBefore), confidence: 1 },
+          { k: `dispatch_prompt_tokens_after:${args.role}`, v: String(compiled.promptTokens), confidence: 1 },
+          { k: `dispatch_prompt_token_budget:${args.role}`, v: String(promptBudget), confidence: 1 },
+        ],
+        args.taskId,
+        snapshot.status
+      );
+    }
+
+    return {
+      prompt: compiled.prompt,
+      stablePrefixHash: compiled.stablePrefixHash,
+      fullPromptHash: compiled.fullPromptHash,
+      deltaPacket: compiled.deltaPacket,
+      maxOutputTokens: compiled.maxOutputTokens,
+      guideMode: compiled.guideMode,
+      guideCacheKey: compiled.guideCacheKey,
+      promptTokensBefore,
+      promptTokensAfter: compiled.promptTokens,
+      promptTokenBudget: promptBudget,
+      compactionApplied: compactionStage !== 'none',
+      compactionStage,
+      compactionTrace,
+    };
   }
 
   getTelemetrySnapshot(): DispatchTelemetrySnapshot {
-    return { ...this.telemetry };
+    return {
+      ...this.telemetry,
+      compaction_stage_distribution: { ...this.telemetry.compaction_stage_distribution },
+    };
   }
 
   async recordSchemaInvalidRetry(args: {
@@ -605,6 +1020,36 @@ class DispatchRuntimeManager {
     }
   }
 
+  private resolvePromptInputBudget(role: DispatchRole, maxOutputTokens: number): number {
+    const roleCap = role === 'implementer'
+      ? this.compactionPolicy.maxInputTokensImplementer
+      : this.compactionPolicy.maxInputTokensReviewer;
+    const reserveOutput = Math.min(roleCap - 1, Math.max(1, Math.floor(maxOutputTokens)));
+    return Math.max(1, roleCap - reserveOutput);
+  }
+
+  private bumpCompactionTelemetry(args: {
+    beforeTokens: number;
+    afterTokens: number;
+    stage: DispatchCompactionStage;
+    autoCompaction: boolean;
+  }): void {
+    this.telemetry.compaction_count += 1;
+    if (args.autoCompaction) {
+      this.telemetry.compaction_auto_count += 1;
+    }
+    this.telemetry.compaction_prompt_tokens_before += args.beforeTokens;
+    this.telemetry.compaction_prompt_tokens_after += args.afterTokens;
+    this.telemetry.compaction_stage_distribution[args.stage] += 1;
+    this.telemetry.compaction_ratio = this.telemetry.compaction_prompt_tokens_before > 0
+      ? this.telemetry.compaction_prompt_tokens_after / this.telemetry.compaction_prompt_tokens_before
+      : 1;
+  }
+
+  private bumpOverflowTerminalTelemetry(): void {
+    this.telemetry.overflow_terminal_count += 1;
+  }
+
   private nextGuideMode(runId: string, role: DispatchRole): 'full' | 'compact' {
     const key = `${runId}:${role}`;
     const count = this.guidePromptCounts.get(key) ?? 0;
@@ -669,12 +1114,17 @@ class DispatchRuntimeManager {
 
 const dispatchRuntimeManager = new DispatchRuntimeManager();
 
-function errorCodeFromMessage(message: string): 'run_not_initialized' | 'run_task_mismatch' | null {
+function errorCodeFromMessage(
+  message: string
+): 'run_not_initialized' | 'run_task_mismatch' | 'dispatch_prompt_overflow_terminal' | null {
   if (message.startsWith('run_not_initialized:')) {
     return 'run_not_initialized';
   }
   if (message.startsWith('run_task_mismatch:')) {
     return 'run_task_mismatch';
+  }
+  if (message.startsWith('dispatch_prompt_overflow_terminal:')) {
+    return 'dispatch_prompt_overflow_terminal';
   }
   return null;
 }
@@ -726,6 +1176,19 @@ updates runtime events/snapshots, enforces output token budgets, and returns det
       maxOutputTokens: {
         type: 'number',
         description: 'Maximum output token budget for compile_prompt/ingest_output',
+      },
+      compactionContext: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Optional compaction context lines used when compile_prompt needs aggressive prompt reduction',
+      },
+      compactionPromptOverride: {
+        type: 'string',
+        description: 'Optional emergency compaction instruction override for compile_prompt stage C',
+      },
+      compactionAuto: {
+        type: 'boolean',
+        description: 'Optional override for SPEC_CONTEXT_DISPATCH_COMPACTION_AUTO during compile_prompt',
       },
     },
     required: ['action'],
@@ -805,13 +1268,46 @@ export async function dispatchRuntimeHandler(
   if (!['implementer', 'reviewer'].includes(role) || !taskId) {
     return {
       success: false,
-      message: 'ingest_output requires role (implementer|reviewer) and taskId',
+      message: `${action} requires role (implementer|reviewer) and taskId`,
     };
   }
 
   if (action === 'compile_prompt') {
     const taskPrompt = String(args.taskPrompt || '').trim();
     const maxOutputTokens = Number(args.maxOutputTokens ?? 1200);
+    const compactionContext = Array.isArray(args.compactionContext)
+      ? args.compactionContext
+        .filter(item => typeof item === 'string')
+        .map(item => item.trim())
+        .filter(Boolean)
+      : undefined;
+    const compactionPromptOverride = typeof args.compactionPromptOverride === 'string'
+      ? args.compactionPromptOverride.trim()
+      : undefined;
+    let compactionAuto: boolean | undefined;
+    if (args.compactionAuto !== undefined) {
+      if (typeof args.compactionAuto === 'boolean') {
+        compactionAuto = args.compactionAuto;
+      } else if (typeof args.compactionAuto === 'string') {
+        const normalized = args.compactionAuto.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+          compactionAuto = true;
+        } else if (['0', 'false', 'no', 'off'].includes(normalized)) {
+          compactionAuto = false;
+        } else {
+          return {
+            success: false,
+            message: 'compile_prompt compactionAuto must be boolean-like',
+          };
+        }
+      } else {
+        return {
+          success: false,
+          message: 'compile_prompt compactionAuto must be boolean-like',
+        };
+      }
+    }
+
     if (!taskPrompt) {
       return {
         success: false,
@@ -832,6 +1328,9 @@ export async function dispatchRuntimeHandler(
         taskId,
         taskPrompt,
         maxOutputTokens,
+        compactionContext,
+        compactionPromptOverride,
+        compactionAuto,
       });
       return {
         success: true,

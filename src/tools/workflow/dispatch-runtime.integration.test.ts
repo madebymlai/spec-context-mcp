@@ -284,4 +284,50 @@ END_DISPATCH_RESULT`,
       await rm(projectPath, { recursive: true, force: true });
     }
   });
+
+  it('applies compile-time compaction and records telemetry for oversized prompts', async () => {
+    const projectPath = await createTempProject();
+    try {
+      const runId = `int-compaction-${randomUUID()}`;
+      const taskId = '5.1';
+      await callDispatch(projectPath, {
+        action: 'init_run',
+        runId,
+        specName: 'feature-compaction',
+        taskId,
+      });
+
+      const oversizedPrompt = `Implement task ${taskId}\n${'MUST preserve branch-critical constraints and strict JSON output.\n'.repeat(1200)}`;
+      const compiled = await callDispatch(projectPath, {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: oversizedPrompt,
+        maxOutputTokens: 700,
+        compactionAuto: true,
+      });
+
+      expect(compiled.success).toBe(true);
+      expect(compiled.data?.compactionApplied).toBe(true);
+      expect(Number(compiled.data?.promptTokensAfter)).toBeLessThanOrEqual(Number(compiled.data?.promptTokenBudget));
+
+      const snapshot = await callDispatch(projectPath, {
+        action: 'get_snapshot',
+        runId,
+      });
+      expect(findFact(snapshot, 'dispatch_compacted:implementer')).toBe('true');
+
+      const telemetry = await callDispatch(projectPath, {
+        action: 'get_telemetry',
+        runId,
+      });
+      expect(Number(telemetry.data?.compaction_count ?? 0)).toBeGreaterThan(0);
+      expect(Number(telemetry.data?.compaction_prompt_tokens_before ?? 0)).toBeGreaterThanOrEqual(
+        Number(telemetry.data?.compaction_prompt_tokens_after ?? 0)
+      );
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
 });

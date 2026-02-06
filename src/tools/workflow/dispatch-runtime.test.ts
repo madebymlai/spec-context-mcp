@@ -293,6 +293,94 @@ END_DISPATCH_RESULT`,
     expect(second.data?.deltaPacket?.guide_mode).toBe('compact');
   });
 
+  it('compacts overflowed prompts when auto compaction is enabled', async () => {
+    const runId = 'test-run-compaction-auto';
+    const taskId = '8.1';
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId,
+        specName: 'feature-compaction',
+        taskId,
+      },
+      context
+    );
+
+    const oversizedPrompt = `Implement task ${taskId}\n${'MUST preserve branch-critical constraints and strict JSON output.\n'.repeat(1200)}`;
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: oversizedPrompt,
+        maxOutputTokens: 800,
+        compactionAuto: true,
+        compactionContext: ['Preserve task_id', 'Preserve output contract markers'],
+      },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.compactionApplied).toBe(true);
+    expect(result.data?.compactionStage).not.toBe('none');
+    expect(Number(result.data?.promptTokensAfter)).toBeLessThanOrEqual(Number(result.data?.promptTokenBudget));
+    expect(String(result.data?.prompt)).toContain(`Task ID: ${taskId}`);
+    expect(String(result.data?.prompt)).toContain('BEGIN_DISPATCH_RESULT');
+
+    const trace = result.data?.compactionTrace as Array<{ promptTokens: number }> | undefined;
+    expect(Array.isArray(trace)).toBe(true);
+    expect((trace?.length ?? 0)).toBeGreaterThan(1);
+    for (let i = 1; i < (trace?.length ?? 0); i += 1) {
+      expect((trace as Array<{ promptTokens: number }>)[i].promptTokens).toBeLessThanOrEqual(
+        (trace as Array<{ promptTokens: number }>)[i - 1].promptTokens
+      );
+    }
+
+    const snapshot = await dispatchRuntimeHandler(
+      {
+        action: 'get_snapshot',
+        runId,
+      },
+      context
+    );
+    const facts = (snapshot.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
+    expect(facts.find(fact => fact.k === 'dispatch_compacted:implementer')?.v).toBe('true');
+    expect(facts.find(fact => fact.k === 'dispatch_compaction_stage:implementer')?.v).toBeTruthy();
+  });
+
+  it('returns terminal overflow error when auto compaction is disabled', async () => {
+    const runId = 'test-run-compaction-terminal';
+    const taskId = '8.2';
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId,
+        specName: 'feature-compaction',
+        taskId,
+      },
+      context
+    );
+
+    const oversizedPrompt = `Implement task ${taskId}\n${'MUST preserve branch-critical constraints and strict JSON output.\n'.repeat(1200)}`;
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: oversizedPrompt,
+        maxOutputTokens: 800,
+        compactionAuto: false,
+      },
+      context
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('dispatch_prompt_overflow_terminal');
+    expect(result.data?.errorCode).toBe('dispatch_prompt_overflow_terminal');
+  });
+
   it('returns snapshot for existing run', async () => {
     await dispatchRuntimeHandler(
       {
