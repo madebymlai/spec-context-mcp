@@ -4,294 +4,273 @@
 **Scope:** CLI orchestrator + CLI subagent dispatch (spec-context-mcp)
 **Architecture:** MCP server compiles prompts → dispatches CLI subprocesses (claude, codex, opencode, gemini) → parses structured output
 **Evidence grading:** [strong] = peer-reviewed + reproduced benchmarks; [medium] = paper + self-reported; [weak] = blog/docs claims
-**Techniques found:** 15 validated for CLI orchestrator architecture
+
+## 5 Independent Dimensions of Savings
+
+| # | Dimension | What it reduces | Additive? |
+|---|-----------|----------------|-----------|
+| 1 | Shrink accumulated context | Orchestrator context that grows between dispatches | Independent |
+| 2 | Shrink dispatch prompts | Prompt payload assembled per dispatch | Independent |
+| 3 | Shrink subagent output | Tokens the subagent emits back | Independent |
+| 4 | Route to cheaper agents | Cost per token (same tokens, lower price) | Independent |
+| 5 | Avoid calls entirely | Eliminate dispatches and tool calls | Independent |
+
+These compound multiplicatively. Within each dimension, techniques have diminishing returns.
 
 ---
 
-## P0 — Implement Immediately
+## Dimension 1: Shrink Accumulated Context
+
+**The problem:** The orchestrator's context grows across dispatch cycles as tool results, subprocess output, and state accumulate. This is the single largest token consumer.
+
+### Start here: Observation Masking (Sliding Window) — P0
+
+**What:** Mask/truncate old environment observations (tool outputs, file contents, subprocess stdout) while preserving the agent's full action and reasoning history. JetBrains Research showed this halves per-instance cost while matching LLM-summarization solve rates on SWE-bench Verified.
+
+**Evidence:** ~50% cost reduction per instance. Quality-neutral across 5 model configurations. NeurIPS 2025 DL4Code Workshop. Grade: **[strong]**
+
+**Implementation reference:** [JetBrains-Research/the-complexity-trap](https://github.com/JetBrains-Research/the-complexity-trap). Paper: [arxiv.org/abs/2508.21433](https://arxiv.org/abs/2508.21433)
+
+**Maps to our system:** Refine `HistoryReducer` in `src/core/llm/history-reducer.ts` to apply observation-only masking — keep all agent action/reasoning turns but aggressively truncate old `pairRole === 'result'` messages. The `preserveRecentRawTurns` knob already exists. For CLI dispatch, mask verbose subprocess stdout before the structured `BEGIN_DISPATCH_RESULT` block is extracted.
+
+### Then evaluate: Tool-Result Offloading to Filesystem — P0
+
+**What:** When a tool result exceeds a size threshold (e.g., 20K chars), write it to a temporary file and replace in context with a file-path reference plus a short preview (~10 lines). Prevents a single large result from consuming the entire context window.
+
+**Evidence:** Prevents catastrophic context blowout. Tool results often comprise 60-80% of context. Grade: **[medium]** — production implementations exist (LangChain Deep Agents, Google ADK).
+
+**Implementation reference:** [Google ADK context compaction](https://google.github.io/adk-docs/context/compaction/). [google/adk-python](https://github.com/google/adk-python). [LangChain deep agents blog](https://blog.langchain.com/context-management-for-deepagents/)
+
+**Maps to our system:** Before injecting a tool result into orchestrator context, check its size. If above threshold, write to `.spec/tmp/` and substitute reference + preview. Complements observation masking — offloading handles the size problem at ingestion time; masking handles it across dispatch cycles.
+
+**Relationship to observation masking:** These are complementary, not competing. Offloading gates large results at the point of entry. Masking handles the long tail of accumulated normal-sized results. Implement both — offloading first (prevents blowouts), masking second (steady-state compression).
+
+### Later if needed: ACON Compression Guidelines — P1
+
+**What:** A framework that optimizes natural-language "compression guidelines" by analyzing failure cases where compressed context led to errors. Can distill the strategy into smaller models preserving 95% accuracy. Subsumes observation masking with a more sophisticated, learned selection strategy.
+
+**Evidence:** 26-54% peak token reduction. 95% accuracy in distilled compressors. October 2025. Grade: **[medium]** — no public code yet.
+
+**Implementation reference:** Paper: [arxiv.org/abs/2510.00615](https://arxiv.org/abs/2510.00615).
+
+**Maps to our system:** The `StateProjector` and `StateSnapshotFact` types align with ACON's factual state abstraction. The `ingest_output` action could use learned compression guidelines. Only worth pursuing if observation masking + offloading prove insufficient — ACON adds complexity for marginal gains on top of the simpler techniques.
+
+**Relationship to observation masking:** ACON subsumes observation masking. If you implement ACON fully, observation masking becomes redundant. Start with masking (simple, proven, free); graduate to ACON only if the orchestrator handles long-horizon tasks (15+ dispatch cycles) where masking alone loses important context.
+
+### Later if needed: Context Compaction (Pre-Dispatch) — P1
+
+**What:** Summarize orchestrator context into compact form before dispatching to subagent. Key insight: aggressive early compaction preserves more working memory than late compaction. Prevents subagents from losing orchestrator-injected rules during their own internal compaction.
+
+**Evidence:** 25-50% typical flow reduction. Known issues when CLI agents compact internally: "agent loses rules after compaction" (OpenCode #3099). Grade: **[medium]**
+
+**Implementation reference:** [sst/opencode](https://github.com/sst/opencode).
+
+**Maps to our system:** The `compile_prompt` action already does partial pre-compaction via stable prefix + dynamic tail. The key value is defensive: ensure the orchestrator sends minimum viable context so subagents never trigger their own internal compaction, which may lose orchestrator instructions.
+
+**Relationship to observation masking:** Pre-dispatch compaction is the umbrella; observation masking is the specific technique within it. If masking + offloading keep the dispatch prompt small enough that subagents don't trigger internal compaction, explicit pre-compaction adds nothing.
+
+### Dimension 1 summary
+
+**Implement:** Observation masking (P0) + tool-result offloading (P0).
+**Evaluate later:** ACON (if 15+ step flows need smarter compression), pre-dispatch compaction (if subagents still trigger internal compaction despite masking).
+**Expected savings:** ~50% context reduction from masking, blowout prevention from offloading. ACON/compaction add marginal gains on top.
 
 ---
 
-### new: Observation Masking (Sliding Window)
+## Dimension 2: Shrink Dispatch Prompts
 
-**What:** Instead of LLM summarization, mask/truncate old environment observations (tool outputs, file contents, command results) while preserving the agent's full action and reasoning history. JetBrains Research showed this halves per-instance cost while matching or exceeding LLM-summarization solve rates on SWE-bench Verified. A hybrid approach (masking + selective summarization) yields an additional 7-11% savings.
+**The problem:** Each dispatch compiles a prompt containing steering docs, spec content, tool schemas, and task instructions. Much of this is redundant across dispatches or unnecessarily verbose.
 
-**Evidence:** ~50% cost reduction per instance. Matches LLM-summarization solve rate across 5 model configurations on SWE-bench Verified. NeurIPS 2025 DL4Code Workshop. Grade: **[strong]**
+### Start here: Provider-Aware Prompt Ordering — P0
 
-**Quality impact:** Quality-neutral. "Simple observation masking is as efficient as LLM summarization" is the paper's core finding.
+**What:** Structure compiled prompts so stable content (steering docs, spec content) always comes first and task-specific instructions come last. The subagent forwards this to its LLM provider, where a stable prefix maximizes provider-side KV-cache hits. Not a size reduction — a reordering that makes every other technique more effective.
 
-**Implementation reference:** [JetBrains-Research/the-complexity-trap](https://github.com/JetBrains-Research/the-complexity-trap) — configs in `config/`, notebooks for reproduction. Paper: [arxiv.org/abs/2508.21433](https://arxiv.org/abs/2508.21433)
+**Evidence:** Anthropic: 90% input cost reduction on cached prefixes. OpenAI: 50% automatic prefix discount. Grade: **[strong]** on provider pricing; **[indirect]** on CLI subagent path.
 
-**Maps to our system:** The existing `HistoryReducer` in `src/core/llm/history-reducer.ts` preserves recent N turns and summarizes the rest. The improvement: apply observation-only masking — keep all agent action/reasoning turns but aggressively truncate old `pairRole === 'result'` messages. The `preserveRecentRawTurns` knob already exists. For CLI dispatch, mask verbose subprocess stdout before the structured `BEGIN_DISPATCH_RESULT` block is extracted.
+**Implementation reference:** [Anthropic prompt caching docs](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching). [llm-d KV cache blog](https://llm-d.ai/blog/kvcache-wins-you-can-see). Already in codebase: `src/core/llm/prompt-prefix-compiler.ts`.
 
-**Priority: P0** — High savings (50%), strong evidence, directly extends existing code, zero quality risk when tuned.
+**Maps to our system:** Audit `compile_prompt` to ensure: (1) steering docs and spec content always first, no per-dispatch dynamic data (timestamps, run IDs) in the prefix; (2) task-specific instructions always last. The `PromptPrefixCompiler` with `stablePrefixHash`/`dynamicTailHash` split is the right pattern. Zero implementation cost — just an ordering audit.
 
----
+### Then: Magentic-One Task Ledger Pattern — P1
 
-### new: Tool-Result Offloading to Filesystem
+**What:** Maintain two compact ledgers — Task Ledger (facts, decisions, plan) and Progress Ledger (completion status per task) — instead of replaying full spec files on each dispatch. The orchestrator consults these ledgers to assemble focused dispatch prompts.
 
-**What:** When a tool invocation returns a response exceeding a token threshold (e.g., 20K tokens), write the full response to a temporary file and replace it in context with a file-path reference plus a short preview (~10 lines). The agent can re-read the file if needed. Prevents a single large tool result from consuming the entire context window.
+**Evidence:** Competitive with GPT-4o on GAIA, AssistantBench, WebArena. Token savings not separately quantified. Grade: **[medium]** on architecture; **[weak]** on token efficiency.
 
-**Evidence:** Prevents catastrophic context blowout. Tool results often comprise 60-80% of context in code-heavy agents. Grade: **[medium]** — production implementations exist (LangChain Deep Agents, Google ADK), no rigorous A/B benchmark.
+**Implementation reference:** Part of AutoGen: [microsoft/autogen magentic-one](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/magentic-one.html)
 
-**Quality impact:** Minor risk if agent needs offloaded details but doesn't re-read. Mitigated by meaningful preview.
+**Maps to our system:** The spec's `tasks.md` with `[ ]/[-]/[x]` markers is already a progress ledger. `StateSnapshotFact` entries are a task ledger. Gap: the orchestrator re-reads full spec files on each dispatch. Formalize fact/progress extraction so dispatches work from compact ledger state, not raw file content.
 
-**Implementation reference:** [Google ADK context compaction](https://google.github.io/adk-docs/context/compaction/) — `LlmEventSummarizer` with configurable `overlap_size`. [google/adk-python](https://github.com/google/adk-python). [LangChain deep agents blog](https://blog.langchain.com/context-management-for-deepagents/)
+### Then: Selective Tool Provision — P1
 
-**Maps to our system:** Before injecting a tool result into orchestrator context, check its size. If above threshold, write to `.spec/tmp/` and substitute reference + preview. The `HistoryReducer.buildSummary()` already clips tool outcomes to 120 chars (line 64) — this formalizes that into a file-backed approach for the pre-reduction stage.
+**What:** Expose only relevant MCP tools for the current workflow phase instead of all tools on every call. Fewer tool schemas = smaller host agent prompt. The "Less-is-More" paper shows this also improves accuracy.
 
-**Priority: P0** — Prevents worst-case context blowouts, straightforward to implement, low quality risk.
+**Evidence:** Up to 70% execution time reduction, 40% power/cost reduction. Improved success rates. DATE 2025. Grade: **[medium]**
 
----
+**Implementation reference:** [arxiv.org/abs/2411.15399](https://arxiv.org/abs/2411.15399). [guidance-ai/llguidance](https://github.com/guidance-ai/llguidance)
 
-### gap: Structured Output Contracts (Tighten)
+**Maps to our system:** The MCP server exposes all tools via `src/tools/index.ts` and `src/tools/registry.ts`. Filter by workflow phase: during implementation, expose only `get-implementer-guide`, `dispatch-runtime`, `spec-status`; hide brainstorm/steering tools. The `DispatchRole` and workflow phase drive filtering.
 
-**What:** Constrain subagent output to strict JSON schema. Eliminates parsing ambiguity, reduces wasted output tokens on prose/explanation. Reduces output token count by 30-60% vs. free-form responses.
+### Dimension 2 summary
 
-**Evidence:** 30-60% output token reduction (practitioner reports comparing structured vs. free-form). [JSONSchemaBench](https://arxiv.org/abs/2501.10868). Grade: **[medium]**
-
-**Quality impact:** Positive for dispatch output parsing — the subagent cannot produce malformed output.
-
-**Implementation reference:** [guidance-ai/jsonschemabench](https://github.com/guidance-ai/jsonschemabench). [Awesome-LLM-Constrained-Decoding](https://github.com/Saibo-creator/Awesome-LLM-Constrained-Decoding)
-
-**Maps to our system:** Already partially implemented — `ImplementerResult` and `ReviewerResult` interfaces with `BEGIN_DISPATCH_RESULT`/`END_DISPATCH_RESULT` delimiters. Tighten by: (1) pushing JSON schema into the dispatch prompt more aggressively via `SchemaRegistry`; (2) using `--output-format json` CLI flags where available; (3) adding explicit "no prose outside the JSON block" instructions to dispatch prompts.
-
-**Priority: P0** — Already partially implemented, incremental improvements are low-risk and high-value.
+**Implement:** Prompt ordering audit (P0, zero cost) → ledger pattern (P1, reduces spec content in prompts) → selective tools (P1, reduces tool schema payload).
+**These are additive within the dimension** — they shrink different portions of the dispatch prompt (ordering affects cache behavior, ledger reduces spec content, tool provision reduces schema payload).
+**Expected savings:** Prompt ordering is indirect (cache multiplier). Ledger + selective tools combined could cut dispatch prompt size 30-50% by eliminating redundant spec content and unused tool schemas.
 
 ---
 
-### gap: Provider-Aware Prompt Ordering (Indirect Cache Influence)
+## Dimension 3: Shrink Subagent Output
 
-**What:** Structure the prompts the orchestrator compiles for CLI subagents so stable content (steering docs, spec content, tool schemas) always comes first and task-specific instructions come last. The subagent receives this as its input. When it forwards the content to its LLM provider, the stable prefix maximizes provider-side KV-cache hits. Common anti-patterns: timestamps, run IDs, or per-dispatch metadata at the start of the prompt.
+**The problem:** CLI subagents emit verbose output — prose explanations, reasoning traces, formatting — on top of the structured result the orchestrator actually needs.
 
-**Evidence:** Anthropic: 90% input cost reduction on cached prefixes. OpenAI: 50% input cost reduction on automatic prefix matching. llm-d benchmarks: 57x faster response, 2x throughput with cache-aware ordering. Grade: **[strong]** on provider pricing; **[indirect]** on CLI subagent path since the orchestrator influences but doesn't guarantee cache behavior.
+### Start here: Structured Output Contracts (Tighten) — P0
 
-**Quality impact:** Quality-neutral. Purely a prompt ordering strategy — same content, different order.
+**What:** Constrain subagent output to strict JSON schema. Eliminates wasted output tokens on prose/explanation. The subagent emits only the structured `BEGIN_DISPATCH_RESULT`...`END_DISPATCH_RESULT` block with no surrounding prose.
 
-**Implementation reference:** [Anthropic prompt caching docs](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching). [llm-d KV cache blog](https://llm-d.ai/blog/kvcache-wins-you-can-see). [LMCache tech report](https://lmcache.ai/tech_report.pdf). Already in codebase: `src/core/llm/prompt-prefix-compiler.ts`.
+**Evidence:** 30-60% output token reduction vs. free-form. Grade: **[medium]**
 
-**Maps to our system:** The `PromptPrefixCompiler` already splits stable prefix from dynamic tail with `dynamicTailMessages: 2`. Audit `compile_prompt` to ensure: (1) steering docs and spec content always first, never include per-dispatch dynamic data; (2) task-specific instructions always last. When the subagent receives this and forwards to its provider, a long stable prefix = higher cache hit probability. The savings are indirect — the orchestrator can't guarantee the subagent preserves prompt ordering — but in practice CLI agents (claude, codex) pass system prompts through to the provider.
+**Implementation reference:** [guidance-ai/jsonschemabench](https://github.com/guidance-ai/jsonschemabench). [JSONSchemaBench paper](https://arxiv.org/abs/2501.10868). [Awesome-LLM-Constrained-Decoding](https://github.com/Saibo-creator/Awesome-LLM-Constrained-Decoding)
 
-**Priority: P0** — Zero implementation cost (audit + reorder). Savings are indirect but compound across every dispatch in a spec workflow.
+**Maps to our system:** Already partially implemented — `ImplementerResult` and `ReviewerResult` interfaces with delimiters. Tighten by: (1) pushing JSON schema into dispatch prompt more aggressively via `SchemaRegistry`; (2) using `--output-format json` CLI flags where available; (3) adding explicit "no prose outside the JSON block" instructions to dispatch prompts.
 
----
+### Later if needed: DSPy Prompt Template Optimization — P2
 
-## P1 — Near-Term
+**What:** DSPy optimizers (MIPROv2, GEPA) can automatically find shorter, more effective instruction phrasings for the implementer/reviewer system prompts. This indirectly reduces subagent output by giving crisper instructions that elicit more focused responses.
 
----
-
-### new: ACON (Agent Context Optimization for Long-Horizon Agents)
-
-**What:** Unified framework compressing both environment observations and interaction histories for 15+ step agents. Uses natural-language "compression guidelines" optimized by analyzing failure cases. Can distill compression strategy into smaller models preserving 95% accuracy.
-
-**Evidence:** 26-54% peak token reduction. 95% accuracy in distilled compressors. Up to 46% performance improvement for smaller LMs. AppWorld, OfficeBench, Multi-objective QA. October 2025. Grade: **[medium]**
-
-**Quality impact:** Quality-neutral to quality-positive. Guidelines are optimized to avoid quality-breaking compression.
-
-**Implementation reference:** Paper: [arxiv.org/abs/2510.00615](https://arxiv.org/abs/2510.00615). No public repo yet.
-
-**Maps to our system:** Directly addresses multi-step dispatch. The `StateProjector` and `StateSnapshotFact` types already provide a factual state abstraction that aligns with ACON's approach. The `ingest_output` action could use learned compression guidelines to decide what to keep vs. compress from each dispatch cycle's results before the next dispatch.
-
-**Priority: P1** — 26-54% savings compound across steps. Requires adapting concepts (no public code).
-
----
-
-### new: Magentic-One Task Ledger Pattern
-
-**What:** Microsoft's Magentic-One maintains two compact ledgers: a Task Ledger (facts, guesses, plan) and a Progress Ledger (self-reflection on completion status). The Orchestrator consults these instead of full conversation history to decide next actions and what to pass to subagents.
-
-**Evidence:** Competitive with GPT-4o on GAIA, AssistantBench, WebArena. Token savings not separately quantified. Grade: **[medium]** on architecture; **[weak]** on token efficiency specifically.
-
-**Quality impact:** Positive — self-reflection catches errors and stalls.
-
-**Implementation reference:** Part of AutoGen: [microsoft/autogen magentic-one guide](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/magentic-one.html)
-
-**Maps to our system:** The spec's `tasks.md` with `[ ]/[-]/[x]` markers is already a progress ledger. `StateSnapshotFact` entries are a task ledger. Gap: the orchestrator may re-read and re-process full spec files on each dispatch rather than working from compact ledger state. Formalize fact/progress extraction to reduce per-dispatch prompt size.
-
-**Priority: P1** — Proven pattern, maps directly to existing spec workflow. Incremental to implement.
-
----
-
-### new: Agentic Plan Caching
-
-**What:** Extracts reusable plan templates from successful agent trajectories. When a semantically similar task arrives, the cached plan is adapted using a lightweight model instead of invoking the expensive planner from scratch. Uses keyword extraction for matching.
-
-**Evidence:** 50.31% cost reduction, 27.28% latency reduction. 96.61% of optimal performance. NeurIPS 2025, evaluated on 5 diverse agent workloads. Grade: **[strong]**
-
-**Quality impact:** 3.4% performance degradation measured. Acceptable for non-critical tasks.
-
-**Implementation reference:** [arxiv.org/abs/2506.14852](https://arxiv.org/abs/2506.14852). No public GitHub repo.
-
-**Maps to our system:** Many implementation tasks follow similar patterns ("implement a new MCP tool", "add a test file"). A plan cache could store successful dispatch sequences (which CLI agent, what prompt, what structured output) and replay/adapt them. The `RuntimeSnapshotStore` already stores snapshots — extending it with similarity-matched templates is architecturally natural.
-
-**Priority: P1** — Strong evidence, meaningful savings. Non-trivial implementation (similarity matching, template extraction).
-
----
-
-### new: Selective Tool Provision
-
-**What:** Instead of providing all available MCP tools to the host agent in every call, dynamically select only relevant tools for the current workflow phase. The "Less-is-More" paper shows reducing the tool set via filtering improves both accuracy and token efficiency.
-
-**Evidence:** Up to 70% execution time reduction, 40% power/cost reduction. Improved agentic success rates (not just neutral). DATE 2025. Grade: **[medium]**
-
-**Quality impact:** Positive — fewer tools means less confusion, better tool selection accuracy.
-
-**Implementation reference:** [arxiv.org/abs/2411.15399](https://arxiv.org/abs/2411.15399). Also: [guidance-ai/llguidance](https://github.com/guidance-ai/llguidance)
-
-**Maps to our system:** The MCP server exposes all tools via `src/tools/index.ts` and `src/tools/registry.ts`. Implement selective exposure based on workflow phase: during implementation, only expose `get-implementer-guide`, `dispatch-runtime`, `spec-status`; hide brainstorm/steering tools. The `DispatchRole` and workflow phase can drive filtering. This reduces the tool schema payload in the host agent's context on every turn.
-
-**Priority: P1** — Straightforward via existing tool registry. Reduces host agent prompt size, actually improves quality.
-
----
-
-### gap: CLI Agent Routing by Task Complexity
-
-**What:** Route tasks to the cheapest CLI agent that can handle them. Simple tasks (test stubs, file moves, doc updates) go to cheaper agents; complex tasks (architectural implementation, multi-file refactors) go to stronger agents. Combines insights from RouteLLM, BudgetMLAgent, and Efficient Agents research.
-
-**Evidence:** RouteLLM: 85% cost reduction on MT-Bench retaining 95% quality. BudgetMLAgent: 94.2% cost reduction ($0.931→$0.054/run). Efficient Agents: 96.7% baseline performance at 43% cost reduction. Grade: **[strong]** on the routing concept; **[medium]** on applicability to CLI agent granularity (research is per-model, not per-CLI-tool).
-
-**Quality impact:** 5% quality degradation at 95th-percentile target (RouteLLM). Cascade failures can compound in multi-step coding.
-
-**Implementation reference:** [lm-sys/RouteLLM](https://github.com/lm-sys/RouteLLM). [arxiv.org/abs/2411.07464](https://arxiv.org/abs/2411.07464) (BudgetMLAgent). [arxiv.org/abs/2508.02694](https://arxiv.org/abs/2508.02694) (Efficient Agents).
-
-**Maps to our system:** The orchestrator dispatches to multiple CLI agents backed by different models at different costs (claude=Sonnet/Opus, codex=GPT-4, gemini=Gemini, opencode=various). `BudgetGuard` already implements cascading with `emergencyModelId` and `allowEmergencyDegrade`. Improvement: make this proactive — add a task-complexity classifier that drives CLI agent selection at `init_run` time.
-
-**Priority: P1** — Infrastructure exists in `BudgetGuard`. Missing piece: task-complexity classifier.
-
----
-
-### new: Tool-Result Caching for MCP Operations
-
-**What:** Cache results of deterministic MCP tool calls (file reads, spec status lookups, steering doc loads) using content-addressable hashing. Repeated invocations with same inputs return cached results without re-execution.
-
-**Evidence:** MCP documentation recommends caching expensive query results. Savings depend on call frequency. Grade: **[weak]** published; **[strong]** engineering common sense.
-
-**Quality impact:** Quality-neutral with content-hash matching and file-mtime TTL invalidation.
-
-**Implementation reference:** [MCP tools spec](https://modelcontextprotocol.io/specification/2025-06-18/server/tools). Relevant: `src/tools/workflow/steering-loader.ts`.
-
-**Maps to our system:** Tools like `spec-status`, `get-implementer-guide`, `get-reviewer-guide`, `steering-guide` all read files from disk and return text. Adding TTL-based in-memory cache (keyed on file path + mtime) eliminates redundant I/O and — more importantly — reduces token volume sent through MCP to the host agent, since tool results become part of the host agent's context window.
-
-**Priority: P1** — Low effort (simple mtime cache), directly reduces host agent context consumption.
-
----
-
-### gap: Context Compaction (Pre-Dispatch)
-
-**What:** When context reaches a threshold (60-95% of window), summarize into compact form before dispatching. Key insight from 2025: aggressive early compaction preserves more working memory and improves quality vs. late compaction. CLI agents implement their own compaction internally, but orchestrator-side pre-compaction prevents subagents from losing orchestrator-injected rules during their internal compaction.
-
-**Evidence:** 25-50% typical flow reduction with dispatch-runtime v2. Known issues in CLI agents: "agent loses rules after compaction" (OpenCode #3099), "compaction loses important context" (#4102). Grade: **[medium]**
-
-**Quality impact:** Documented regressions when CLI agents compact internally. Orchestrator-side pre-compaction mitigates this by sending focused, already-compact prompts.
-
-**Implementation reference:** [sst/opencode](https://github.com/sst/opencode). [Anthropic cookbook](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
-
-**Maps to our system:** The `compile_prompt` action with stable prefix + dynamic tail already does partial pre-compaction. Further: ensure the orchestrator sends the minimum viable context per dispatch so the subagent's context never needs internal compaction. This means the orchestrator does the summarization work (via `HistoryReducer` / observation masking) rather than trusting the subagent to do it.
-
-**Priority: P1** — Partially addressed by dispatch-runtime v2. Key value: prevents subagents from losing orchestrator-injected instructions during their own internal compaction.
-
----
-
-## P2 — Future / Evaluate Later
-
----
-
-### new: Zep/Graphiti (Temporal Knowledge Graph Memory)
-
-**What:** Extracts atomic facts and entity relationships from conversations into a temporal knowledge graph. Retrieves only relevant facts for the current query instead of replaying full history. Achieves 90% token reduction (1.8K vs 26K tokens) with 94.8% accuracy on Deep Memory Retrieval.
-
-**Evidence:** 94.8% DMR accuracy (vs. MemGPT 93.4%). +18.5% accuracy on LongMemEval with 90% latency reduction. January 2025. Grade: **[medium]** — strong benchmarks but self-reported by Zep team.
-
-**Quality impact:** Quality-positive on memory retrieval. Temporal awareness prevents stale fact retrieval.
-
-**Implementation reference:** [getzep/graphiti](https://github.com/getzep/graphiti). Paper: [arxiv.org/abs/2501.13956](https://arxiv.org/abs/2501.13956)
-
-**Maps to our system:** `StateSnapshotFact` already provides a factual state abstraction. Graphiti could maintain a knowledge graph of facts across dispatch cycles (what files changed, what tests passed/failed, what design decisions were made). The `get_snapshot` action could be backed by a fact graph instead of flat state. High potential for long-running multi-task sessions.
-
-**Priority: P2** — High savings (90% on long conversations) but adds graph database infrastructure.
-
----
-
-### new: LLM Cascade with Re-Dispatch (C3PO-Inspired)
-
-**What:** Dispatch to a cheaper CLI agent first. Validate the structured output against spec/tests. If the result is incomplete or fails validation, re-dispatch to a stronger CLI agent. Uses the structured dispatch contract to make the validate-and-escalate decision deterministic.
-
-**Evidence:** C3PO: <20% cost of strongest model with ≤2% accuracy gap across 16 reasoning benchmarks. NeurIPS 2025. Grade: **[strong]** on the cascade concept; **[medium]** on applying it to full CLI subprocess dispatches (each dispatch is a heavyweight operation, not a cheap API call).
-
-**Quality impact:** Bounded 2-10% accuracy gap (configurable). Main risk: two full subprocess invocations on escalation adds latency.
-
-**Implementation reference:** [AntonValk/C3PO-LLM](https://github.com/AntonValk/C3PO-LLM). Paper: [arxiv.org/abs/2511.07396](https://arxiv.org/abs/2511.07396). Also: [automix-llm/automix](https://github.com/automix-llm/automix)
-
-**Maps to our system:** The `ingest_output` action already validates structured results. Extend it with a re-dispatch path: if validation fails or the result is low-quality, re-dispatch to a stronger CLI agent with the original task + the failed attempt as context. The dispatch contract makes this decision deterministic.
-
-**Priority: P2** — Strong concept but each CLI dispatch is heavyweight (full subprocess). Latency cost of re-dispatch may outweigh token savings. Better after P1 routing classifier reduces the need for escalation.
-
----
-
-### new: DSPy Prompt Template Optimization
-
-**What:** DSPy treats prompts as compiled programs. Optimizers (MIPROv2, GEPA) find minimal, high-quality prompts through systematic search. Can automatically shrink verbose instruction templates while preserving task performance.
-
-**Evidence:** GEPA (July 2025) outperforms human-engineered prompts. Grade: **[strong]** on quality; **[medium]** on token efficiency (savings not always quantified separately).
-
-**Quality impact:** Quality-positive. Optimization explicitly maximizes a quality metric.
+**Evidence:** GEPA (July 2025) outperforms human-engineered prompts. Grade: **[strong]** on quality; **[medium]** on token efficiency.
 
 **Implementation reference:** [stanfordnlp/dspy](https://github.com/stanfordnlp/dspy). [dspy.ai/learn/optimization/optimizers](https://dspy.ai/learn/optimization/optimizers/)
 
-**Maps to our system:** Optimize the dispatch prompt templates in `PromptTemplateRegistry` — the instructions the orchestrator compiles for CLI subagents. DSPy could find shorter, more effective phrasings for the implementer/reviewer system prompts. Requires setting up a DSPy evaluation pipeline with spec-workflow metrics.
+**Maps to our system:** Optimize dispatch prompt templates in `PromptTemplateRegistry`. Requires DSPy evaluation pipeline with spec-workflow metrics. High setup cost.
 
-**Priority: P2** — High potential for shrinking dispatch prompt templates. Requires non-trivial evaluation pipeline setup. Best applied to the most frequently dispatched templates first.
+### Dimension 3 summary
+
+**Implement:** Tighten structured output contracts (P0).
+**Evaluate later:** DSPy template optimization (P2, high setup cost for incremental gains).
+**Expected savings:** 30-60% output token reduction from tighter contracts. This is fully additive to all other dimensions since it reduces a different token pool (subagent output vs. orchestrator context/prompts).
 
 ---
 
-### gap: Semantic Caching (Exact-Match Only)
+## Dimension 4: Route to Cheaper Agents
 
-**What:** Cache deterministic dispatch results by exact content hash. When the orchestrator would dispatch the same prompt to the same CLI agent, return the cached result. NOT semantic/embedding similarity — only exact-match to avoid correctness risks.
+**The problem:** The orchestrator dispatches all tasks to the same CLI agent regardless of complexity. Simple tasks (test stubs, file moves, doc updates) don't need expensive models.
 
-**Evidence:** Up to 100% savings on cache hits. Practical hit rates: 10-40% depending on workload repetitiveness. Grade: **[medium]**
+### Start here: CLI Agent Routing by Task Complexity — P1
 
-**Quality impact:** Quality-neutral for exact-match. Zero risk of returning wrong cached results.
+**What:** Route tasks to the cheapest CLI agent that can handle them. Simple tasks go to cheaper agents (codex, opencode with smaller models); complex tasks go to stronger agents (claude with Opus/Sonnet). Uses task-complexity classification at dispatch time.
 
-**Implementation reference:** [zilliztech/GPTCache](https://github.com/zilliztech/GPTCache) (exact-match mode). [BerriAI/litellm](https://github.com/BerriAI/litellm) (exact-match caching).
+**Evidence:** RouteLLM: 85% cost reduction retaining 95% quality. BudgetMLAgent: 94.2% cost reduction. Efficient Agents: 96.7% performance at 43% cost reduction. Grade: **[strong]** on the routing concept; **[medium]** on CLI agent granularity.
 
-**Maps to our system:** Limited applicability — dispatch prompts rarely repeat exactly (task IDs, timestamps, state snapshots differ). The main use case: if the orchestrator re-dispatches after a transient failure with the same prompt, skip the dispatch. The `PromptPrefixCompiler` already computes `cacheKey` from prompt content — this could gate dispatch deduplication.
+**Implementation reference:** [lm-sys/RouteLLM](https://github.com/lm-sys/RouteLLM). [arxiv.org/abs/2411.07464](https://arxiv.org/abs/2411.07464). [arxiv.org/abs/2508.02694](https://arxiv.org/abs/2508.02694).
 
-**Priority: P2** — Low hit rate expected for dispatch tasks. Main value is deduplication on retry/re-dispatch.
+**Maps to our system:** `BudgetGuard` already implements cascading with `emergencyModelId` and `allowEmergencyDegrade`. Improvement: make proactive — add a task-complexity classifier at `init_run` that drives CLI agent selection based on task description, file count, and estimated scope.
+
+### Later if needed: C3PO-Inspired Re-Dispatch Cascade — P2
+
+**What:** Dispatch to a cheaper CLI agent first. Validate structured output against spec/tests. If it fails, re-dispatch to a stronger agent with the original task + failed attempt as context.
+
+**Evidence:** C3PO: <20% cost with ≤2% accuracy gap. NeurIPS 2025. Grade: **[strong]** on concept; **[medium]** on CLI dispatch (each dispatch is heavyweight).
+
+**Implementation reference:** [AntonValk/C3PO-LLM](https://github.com/AntonValk/C3PO-LLM). [arxiv.org/abs/2511.07396](https://arxiv.org/abs/2511.07396).
+
+**Maps to our system:** `ingest_output` already validates structured results. Extend with a re-dispatch path on validation failure. Main risk: two full subprocess invocations doubles latency on escalation.
+
+**Relationship to routing:** These are sequential, not competing. Routing (P1) reduces the need for cascading by getting the agent selection right the first time. Cascading (P2) is the safety net when routing gets it wrong. Implement routing first; add cascading only if routing misclassifies often enough to justify the re-dispatch overhead.
+
+### Dimension 4 summary
+
+**Implement:** Task-complexity classifier for CLI agent routing (P1).
+**Evaluate later:** Re-dispatch cascade (P2, only if routing misclassifies often).
+**Expected savings:** Up to 85-94% cost reduction on simple tasks routed to cheaper agents. Fully additive to all other dimensions — reduces cost per token, not token count.
+
+---
+
+## Dimension 5: Avoid Calls Entirely
+
+**The problem:** The orchestrator makes redundant dispatches and MCP tool calls that could be skipped.
+
+### Start here: Tool-Result Caching for MCP Operations — P1
+
+**What:** Cache results of deterministic MCP tool calls (file reads, spec status, steering doc loads) using content-addressable hashing (file path + mtime). Repeated invocations return cached results.
+
+**Evidence:** MCP spec recommends caching. Grade: **[weak]** published; **[strong]** engineering common sense.
+
+**Implementation reference:** [MCP tools spec](https://modelcontextprotocol.io/specification/2025-06-18/server/tools). Relevant: `src/tools/workflow/steering-loader.ts`.
+
+**Maps to our system:** Tools like `spec-status`, `get-implementer-guide`, `get-reviewer-guide` all read files from disk. Add TTL-based in-memory cache keyed on file path + mtime. Reduces token volume sent through MCP to the host agent.
+
+### Then: Agentic Plan Caching — P1
+
+**What:** Cache successful dispatch sequences as reusable plan templates. When a semantically similar task arrives, adapt the cached plan using a lightweight model instead of running the full dispatch from scratch.
+
+**Evidence:** 50.31% cost reduction, 27.28% latency reduction. 96.61% of optimal performance. NeurIPS 2025. Grade: **[strong]**
+
+**Implementation reference:** [arxiv.org/abs/2506.14852](https://arxiv.org/abs/2506.14852). No public GitHub repo.
+
+**Maps to our system:** Many tasks follow similar patterns. The `RuntimeSnapshotStore` already stores snapshots — extend with similarity-matched templates. Non-trivial implementation (keyword extraction, template matching, adaptation).
+
+### Later if needed: Exact-Match Dispatch Deduplication — P2
+
+**What:** If the orchestrator would dispatch the same prompt to the same CLI agent (e.g., retry after transient failure), return the cached result. Exact content hash only — no semantic matching.
+
+**Evidence:** Up to 100% on hits, but low hit rate expected for dispatch tasks. Grade: **[medium]**
+
+**Implementation reference:** [zilliztech/GPTCache](https://github.com/zilliztech/GPTCache) (exact-match mode). `PromptPrefixCompiler` already computes `cacheKey`.
+
+**Maps to our system:** Limited — dispatch prompts rarely repeat exactly. Main value: deduplication on retry/re-dispatch after transient failures.
+
+### Later if needed: Zep/Graphiti Knowledge Graph — P2
+
+**What:** Temporal knowledge graph that extracts facts from dispatch results and retrieves only relevant facts per dispatch instead of replaying full history. 90% token reduction on long conversations.
+
+**Evidence:** 94.8% accuracy, 90% latency reduction. Grade: **[medium]** — self-reported by Zep team.
+
+**Implementation reference:** [getzep/graphiti](https://github.com/getzep/graphiti). [arxiv.org/abs/2501.13956](https://arxiv.org/abs/2501.13956)
+
+**Maps to our system:** `StateSnapshotFact` already provides a factual state abstraction. High potential for long-running multi-task sessions. Adds graph database infrastructure.
+
+**Relationship to other techniques:** Zep/Graphiti is also a Dimension 1 technique (shrinks accumulated context via fact extraction). It spans dimensions — it both avoids redundant lookups and compresses state. Only worth evaluating when sessions regularly exceed 10+ dispatch cycles.
+
+### Dimension 5 summary
+
+**Implement:** MCP tool-result caching (P1, low effort) → plan caching (P1, high impact but non-trivial).
+**Evaluate later:** Exact-match dedup (P2, low hit rate), Zep/Graphiti (P2, heavy infrastructure).
+**Expected savings:** Tool-result caching eliminates redundant MCP calls. Plan caching can skip entire dispatches (50% cost reduction). Fully additive to all other dimensions.
 
 ---
 
 ## Implementation Roadmap
 
-### Phase 1 — Immediate (P0, this sprint)
+### Phase 1 — This Sprint (P0)
 
-| Action | Files to change | Expected savings |
-|--------|----------------|-----------------|
-| Observation masking: aggressively truncate old `pairRole === 'result'` messages, keep action history | `src/core/llm/history-reducer.ts` | ~50% context reduction |
-| Tool-result size gate: offload >N char results to `.spec/tmp/`, inject reference + preview | `src/tools/workflow/dispatch-runtime.ts` | Prevents blowouts |
-| Tighten structured output: add "no prose outside JSON" instructions, use `--output-format json` flags | Dispatch prompt templates, `SchemaRegistry` | 30-60% output reduction |
-| Prompt prefix stability: ensure `compile_prompt` produces stable prefix (steering/spec first, task last) across dispatches | `src/core/llm/prompt-prefix-compiler.ts`, dispatch templates | Indirect — maximizes subagent provider cache hits |
+| Dimension | Action | Files | Savings |
+|-----------|--------|-------|---------|
+| 1 - Context | Observation masking: truncate old `pairRole === 'result'` messages | `src/core/llm/history-reducer.ts` | ~50% context |
+| 1 - Context | Tool-result size gate: offload large results to `.spec/tmp/` | `src/tools/workflow/dispatch-runtime.ts` | Prevents blowouts |
+| 2 - Prompts | Audit `compile_prompt` prefix stability: steering first, task last | `src/core/llm/prompt-prefix-compiler.ts` | Indirect cache multiplier |
+| 3 - Output | Tighten structured output: "no prose outside JSON", `--output-format json` | Dispatch templates, `SchemaRegistry` | 30-60% output |
 
-**Combined P0 estimate: 50-70% reduction on typical dispatch cycles with zero quality risk.**
+**Combined P0 estimate: 50-70% reduction across context + output with zero quality risk.**
 
-### Phase 2 — Near-Term (P1, next sprint)
+### Phase 2 — Next Sprint (P1)
 
-| Action | Expected savings |
-|--------|-----------------|
-| Task Ledger / Progress Ledger formalization from spec files | Reduces per-dispatch prompt size |
-| Selective tool provision by workflow phase | 40% exec time reduction |
-| MCP tool-result caching (mtime-based) | Eliminates redundant host-agent context |
-| CLI agent routing with task-complexity classifier | Up to 94% on simple tasks |
-| Orchestrator-side pre-compaction before dispatch | Prevents subagent internal compaction losing rules |
-| ACON-style compression guidelines for cross-dispatch state | 26-54% across multi-step flows |
+| Dimension | Action | Savings |
+|-----------|--------|---------|
+| 2 - Prompts | Task Ledger / Progress Ledger formalization from spec files | Reduces per-dispatch prompt |
+| 2 - Prompts | Selective tool provision by workflow phase | Reduces tool schema payload |
+| 4 - Routing | Task-complexity classifier for CLI agent selection | Up to 94% cost on simple tasks |
+| 5 - Avoidance | MCP tool-result caching (mtime-based) | Eliminates redundant calls |
+| 5 - Avoidance | Agentic plan caching for similar task patterns | 50% cost on cached patterns |
 
-### Phase 3 — Future (P2, evaluate)
+### Phase 3 — Evaluate Later (P2)
 
-| Technique | Gate condition |
-|-----------|---------------|
-| Zep/Graphiti knowledge graph | Long-running sessions with many dispatch cycles |
-| C3PO-inspired re-dispatch cascade | Dispatch volume justifies calibration effort |
-| DSPy prompt template optimization | High-frequency templates identified |
-| Exact-match dispatch deduplication | Retry/re-dispatch patterns observed in telemetry |
+| Dimension | Technique | Gate condition |
+|-----------|-----------|---------------|
+| 1 - Context | ACON compression guidelines | 15+ step flows where masking loses context |
+| 3 - Output | DSPy prompt template optimization | High-frequency templates identified |
+| 4 - Routing | C3PO re-dispatch cascade | Routing misclassifies often enough |
+| 5 - Avoidance | Exact-match dispatch dedup | Retry patterns observed in telemetry |
+| 1+5 | Zep/Graphiti knowledge graph | Sessions with 10+ dispatch cycles |
 
 ---
 

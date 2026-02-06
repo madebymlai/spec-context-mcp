@@ -61,6 +61,26 @@ async function loadMaskObservations(): Promise<MaskObservations> {
     return module.maskObservations as MaskObservations;
 }
 
+type ClipText = (value: string, maxChars: number) => string;
+
+async function loadClipText(): Promise<ClipText> {
+    const sourcePath = new URL('./history-reducer.ts', import.meta.url);
+    const source = readFileSync(sourcePath, 'utf8');
+    const clipTextFn = extractFunctionSource(source, 'clipText');
+    const compiled = ts.transpileModule(
+        `${clipTextFn}\nexport { clipText };`,
+        {
+            compilerOptions: {
+                target: ts.ScriptTarget.ES2022,
+                module: ts.ModuleKind.ES2022,
+            },
+        }
+    ).outputText;
+
+    const module = await import(`data:text/javascript,${encodeURIComponent(compiled)}`);
+    return module.clipText as ClipText;
+}
+
 async function loadMaskDispatchObservation(): Promise<MaskDispatchObservation> {
     const sourcePath = new URL('./history-reducer.ts', import.meta.url);
     const source = readFileSync(sourcePath, 'utf8');
@@ -466,5 +486,37 @@ describe('maskDispatchObservation (internal)', () => {
         expect(result.masked).toContain('[observation masked');
         expect(result.masked).not.toContain('BEGIN_DISPATCH_RESULT');
         expect(result.maskedChars).toBeGreaterThan(0);
+    });
+});
+
+describe('clipText (internal)', () => {
+    it('returns value unchanged when within maxChars', async () => {
+        const clipText = await loadClipText();
+        expect(clipText('hello', 10)).toBe('hello');
+        expect(clipText('hello', 5)).toBe('hello');
+    });
+
+    it('truncates with ellipsis when value exceeds maxChars', async () => {
+        const clipText = await loadClipText();
+        expect(clipText('hello world', 8)).toBe('hello...');
+    });
+
+    it('returns empty string when maxChars is 0 or negative', async () => {
+        const clipText = await loadClipText();
+        expect(clipText('hello', 0)).toBe('');
+        expect(clipText('hello', -1)).toBe('');
+    });
+
+    it('returns raw slice when maxChars is 3 or less', async () => {
+        const clipText = await loadClipText();
+        expect(clipText('hello', 3)).toBe('hel');
+        expect(clipText('hello', 2)).toBe('he');
+        expect(clipText('hello', 1)).toBe('h');
+    });
+
+    it('handles empty string input', async () => {
+        const clipText = await loadClipText();
+        expect(clipText('', 10)).toBe('');
+        expect(clipText('', 0)).toBe('');
     });
 });

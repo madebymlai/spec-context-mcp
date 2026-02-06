@@ -1,0 +1,22 @@
+{
+  "filePath": ".spec-context/specs/observation-masking/design.md",
+  "currentVersion": 2,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2026-02-06T03:30:19.783Z",
+      "trigger": "initial",
+      "approvalId": "approval_1770348619782_554x8tvrm",
+      "approvalTitle": "Observation Masking — Design"
+    },
+    {
+      "version": 2,
+      "filename": "snapshot-002.json",
+      "timestamp": "2026-02-06T03:30:22.832Z",
+      "trigger": "approved",
+      "approvalId": "approval_1770348619782_554x8tvrm",
+      "approvalTitle": "Observation Masking — Design"
+    }
+  ]
+}
