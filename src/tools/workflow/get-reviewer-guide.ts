@@ -7,6 +7,7 @@ import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getDisciplineMode } from '../../config/discipline.js';
 import { getSteeringDocs, getMissingSteeringDocs } from './steering-loader.js';
+import { ensureTierAtLeast } from '../registry.js';
 
 type GuideMode = 'full' | 'compact';
 
@@ -147,6 +148,9 @@ export async function getReviewerGuideHandler(
       cachedAt: new Date().toISOString(),
     });
   }
+
+  // Full guide loaded → expose L2 helpers (e.g. code_research) without drifting to L3.
+  ensureTierAtLeast(2);
 
   return response;
 }

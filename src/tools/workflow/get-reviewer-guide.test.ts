@@ -3,6 +3,7 @@ import { getReviewerGuideHandler } from './get-reviewer-guide.js';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { resetRegistry, getVisibilityTier, processToolCall } from '../registry.js';
 
 describe('get-reviewer-guide', () => {
   let testDir: string;
@@ -12,6 +13,7 @@ describe('get-reviewer-guide', () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     delete process.env.SPEC_CONTEXT_DISCIPLINE;
+    resetRegistry();
 
     testDir = join(tmpdir(), `reviewer-guide-test-${Date.now()}`);
     steeringDir = join(testDir, '.spec-context', 'steering');
@@ -20,6 +22,7 @@ describe('get-reviewer-guide', () => {
 
   afterEach(() => {
     process.env = originalEnv;
+    resetRegistry();
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true });
     }
@@ -172,6 +175,50 @@ describe('get-reviewer-guide', () => {
 
       expect(result.success).toBe(true);
       expect(result.data?.disciplineMode).toBe('full');
+    });
+  });
+
+  describe('tier escalation', () => {
+    beforeEach(() => {
+      process.env.SPEC_CONTEXT_DISCIPLINE = 'full';
+      createSteeringDocs();
+      processToolCall('get-reviewer-guide');
+    });
+
+    it('escalates tier from L1 to L2 on full guide load', async () => {
+      expect(getVisibilityTier()).toBe(1);
+
+      const result = await getReviewerGuideHandler({}, createContext());
+
+      expect(result.success).toBe(true);
+      expect(getVisibilityTier()).toBe(2);
+    });
+
+    it('does not escalate on compact mode', async () => {
+      await getReviewerGuideHandler({ mode: 'full', runId: 'rev-esc-run' }, createContext());
+      expect(getVisibilityTier()).toBe(2);
+
+      const compact = await getReviewerGuideHandler({ mode: 'compact', runId: 'rev-esc-run' }, createContext());
+      expect(compact.success).toBe(true);
+      expect(getVisibilityTier()).toBe(2);
+    });
+
+    it('does not escalate in minimal mode (guide load fails)', async () => {
+      process.env.SPEC_CONTEXT_DISCIPLINE = 'minimal';
+      expect(getVisibilityTier()).toBe(1);
+
+      const result = await getReviewerGuideHandler({}, createContext());
+      expect(result.success).toBe(false);
+      expect(getVisibilityTier()).toBe(1);
+    });
+
+    it('does not escalate when steering docs are missing', async () => {
+      rmSync(join(steeringDir, 'principles.md'));
+      expect(getVisibilityTier()).toBe(1);
+
+      const result = await getReviewerGuideHandler({}, createContext());
+      expect(result.success).toBe(false);
+      expect(getVisibilityTier()).toBe(1);
     });
   });
 });

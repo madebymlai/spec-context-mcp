@@ -4,6 +4,10 @@ import {
   processToolCall,
   resetRegistry,
   getSessionMode,
+  getVisibilityTier,
+  escalateTier,
+  isToolVisible,
+  ensureTierAtLeast,
 } from './registry.js';
 import type { Tool } from './index.js';
 
@@ -41,6 +45,10 @@ describe('registry', () => {
   describe('initial state', () => {
     it('starts in undetermined mode', () => {
       expect(getSessionMode()).toBe('undetermined');
+    });
+
+    it('starts at tier 1', () => {
+      expect(getVisibilityTier()).toBe(1);
     });
 
     it('shows 6 initial tools', () => {
@@ -115,14 +123,40 @@ describe('registry', () => {
       expect(getSessionMode()).toBe('implementer');
     });
 
-    it('shows 3 implementer tools', () => {
+    it('shows 3 implementer tools at L1', () => {
       processToolCall('get-implementer-guide');
+      expect(getVisibilityTier()).toBe(1);
       const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
       expect(visible).toHaveLength(3);
       expect(visible).toContain('get-implementer-guide');
       expect(visible).toContain('spec-status');
       expect(visible).toContain('search');
       expect(visible).not.toContain('code_research');
+    });
+
+    it('shows 4 implementer tools at L2', () => {
+      processToolCall('get-implementer-guide');
+      escalateTier();
+      expect(getVisibilityTier()).toBe(2);
+      const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
+      expect(visible).toHaveLength(4);
+      expect(visible).toContain('get-implementer-guide');
+      expect(visible).toContain('spec-status');
+      expect(visible).toContain('search');
+      expect(visible).toContain('code_research');
+    });
+
+    it('shows all tools at L3', () => {
+      processToolCall('get-implementer-guide');
+      escalateTier();
+      escalateTier();
+      expect(getVisibilityTier()).toBe(3);
+      const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
+      // L3 = all tools minus dispatch-runtime when v2 disabled
+      expect(visible).toHaveLength(10);
+      expect(visible).toContain('code_research');
+      expect(visible).toContain('approvals');
+      expect(visible).toContain('get-reviewer-guide');
     });
   });
 
@@ -133,13 +167,25 @@ describe('registry', () => {
       expect(getSessionMode()).toBe('reviewer');
     });
 
-    it('shows 2 reviewer tools', () => {
+    it('shows 2 reviewer tools at L1', () => {
       processToolCall('get-reviewer-guide');
       const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
       expect(visible).toHaveLength(2);
       expect(visible).toContain('get-reviewer-guide');
       expect(visible).toContain('search');
       expect(visible).not.toContain('code_research');
+    });
+
+    it('shows 4 reviewer tools at L2', () => {
+      processToolCall('get-reviewer-guide');
+      escalateTier();
+      expect(getVisibilityTier()).toBe(2);
+      const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
+      expect(visible).toHaveLength(4);
+      expect(visible).toContain('get-reviewer-guide');
+      expect(visible).toContain('search');
+      expect(visible).toContain('code_research');
+      expect(visible).toContain('spec-status');
     });
   });
 
@@ -162,10 +208,94 @@ describe('registry', () => {
       'approvals',
       'wait-for-approval',
       'dispatch-runtime',
-    ])('%s does not trigger a mode transition', (toolName) => {
+    ])('%s does not trigger mode transition or tier change', (toolName) => {
       const changed = processToolCall(toolName);
       expect(changed).toBe(false);
       expect(getSessionMode()).toBe('undetermined');
+      expect(getVisibilityTier()).toBe(1);
+    });
+  });
+
+  describe('isToolVisible', () => {
+    it('returns true for tools in current tier', () => {
+      processToolCall('get-implementer-guide');
+      expect(isToolVisible('search')).toBe(true);
+      expect(isToolVisible('spec-status')).toBe(true);
+      expect(isToolVisible('get-implementer-guide')).toBe(true);
+    });
+
+    it('returns false for tools outside current tier', () => {
+      processToolCall('get-implementer-guide');
+      expect(isToolVisible('code_research')).toBe(false);
+      expect(isToolVisible('approvals')).toBe(false);
+    });
+
+    it('returns true after tier escalation exposes the tool', () => {
+      processToolCall('get-implementer-guide');
+      expect(isToolVisible('code_research')).toBe(false);
+      escalateTier();
+      expect(isToolVisible('code_research')).toBe(true);
+    });
+
+    it('rejects hidden tools in undetermined mode', () => {
+      expect(isToolVisible('search')).toBe(false);
+      expect(isToolVisible('code_research')).toBe(false);
+      expect(isToolVisible('approvals')).toBe(false);
+    });
+
+    it('allows initial tools in undetermined mode', () => {
+      expect(isToolVisible('spec-workflow-guide')).toBe(true);
+      expect(isToolVisible('get-implementer-guide')).toBe(true);
+      expect(isToolVisible('spec-status')).toBe(true);
+    });
+  });
+
+  describe('tier escalation', () => {
+    it('escalateTier advances L1 → L2 → L3', () => {
+      processToolCall('get-implementer-guide');
+      expect(getVisibilityTier()).toBe(1);
+
+      expect(escalateTier()).toBe(true);
+      expect(getVisibilityTier()).toBe(2);
+
+      expect(escalateTier()).toBe(true);
+      expect(getVisibilityTier()).toBe(3);
+    });
+
+    it('escalateTier returns false at L3', () => {
+      processToolCall('get-implementer-guide');
+      escalateTier();
+      escalateTier();
+      expect(escalateTier()).toBe(false);
+      expect(getVisibilityTier()).toBe(3);
+    });
+
+    it('resetRegistry resets tier to 1', () => {
+      processToolCall('get-implementer-guide');
+      escalateTier();
+      expect(getVisibilityTier()).toBe(2);
+      resetRegistry();
+      expect(getVisibilityTier()).toBe(1);
+    });
+
+    it('advances exactly one level per call (no tier skipping)', () => {
+      processToolCall('get-implementer-guide');
+      escalateTier();
+      // Even though L2 doesn't have 'approvals', escalateTier only goes one step
+      expect(getVisibilityTier()).toBe(2);
+      expect(isToolVisible('approvals')).toBe(false);
+      escalateTier();
+      expect(getVisibilityTier()).toBe(3);
+      expect(isToolVisible('approvals')).toBe(true);
+    });
+
+    it('ensureTierAtLeast(2) promotes L1 to L2 without jumping to L3', () => {
+      processToolCall('get-implementer-guide');
+      expect(getVisibilityTier()).toBe(1);
+      expect(ensureTierAtLeast(2)).toBe(true);
+      expect(getVisibilityTier()).toBe(2);
+      expect(ensureTierAtLeast(2)).toBe(false);
+      expect(getVisibilityTier()).toBe(2);
     });
   });
 });

@@ -10,7 +10,7 @@ import {
 import type { SpecContextConfig } from './config.js';
 import type { ToolResponse, MCPToolResponse } from './workflow-types.js';
 import { getTools, handleToolCall } from './tools/index.js';
-import { processToolCall } from './tools/registry.js';
+import { processToolCall, isToolVisible, getVisibilityTier } from './tools/registry.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
 import { initChunkHoundBridge, resetChunkHoundBridge } from './bridge/chunkhound-bridge.js';
 import { resolveDashboardUrl } from './core/workflow/dashboard-url.js';
@@ -50,18 +50,36 @@ export class SpecContextServer {
         // Handle tool calls
         this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const { name, arguments: args } = request.params;
+            let modeChanged = false;
+            let shouldNotifyListChanged = false;
 
             try {
+                // Pre-check: entry-point tools trigger mode transition before
+                // visibility gate so they pass on first call from undetermined.
+                modeChanged = processToolCall(name);
+                shouldNotifyListChanged = modeChanged;
+
+                // Visibility gate: reject calls to tools not in current tier.
+                if (!isToolVisible(name)) {
+                    console.error(`[spec-context] tool call rejected: "${name}" not visible in current mode/tier`);
+                    const rejectResponse: ToolResponse = {
+                        success: false,
+                        message: `Tool "${name}" is not available in the current session mode. Call an entry-point tool first (e.g. spec-workflow-guide, get-implementer-guide, get-reviewer-guide).`,
+                    };
+                    return toMCPResponse(rejectResponse, true);
+                }
+
+                // Snapshot tier before handler — handlers may call escalateTier().
+                const tierBefore = getVisibilityTier();
+
                 const result = await handleToolCall(
                     name,
                     args as Record<string, unknown>
                 );
 
-                const modeChanged = processToolCall(name);
-                if (modeChanged) {
-                    this.server.sendToolListChanged().catch(err =>
-                        console.error('[spec-context] tool list changed notification failed:', err)
-                    );
+                const tierAfter = getVisibilityTier();
+                if (tierAfter !== tierBefore) {
+                    shouldNotifyListChanged = true;
                 }
 
                 return normalizeToolResult(result);
@@ -72,6 +90,12 @@ export class SpecContextServer {
                     message,
                 };
                 return toMCPResponse(errorResponse, true);
+            } finally {
+                if (shouldNotifyListChanged) {
+                    this.server.sendToolListChanged().catch(err =>
+                        console.error('[spec-context] tool list changed notification failed:', err)
+                    );
+                }
             }
         });
 
