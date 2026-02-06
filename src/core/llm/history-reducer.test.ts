@@ -23,6 +23,33 @@ describe('HistoryReducer', () => {
         expect(pairMessages).toHaveLength(2);
     });
 
+    it('includes tagged unresolved and constraint messages in summary', () => {
+        const reducer = new HistoryReducer();
+        const result = reducer.reduce(
+            [
+                { role: 'system', content: 'system rules' },
+                { role: 'user', content: `old question ${'A'.repeat(400)}` },
+                { role: 'user', content: 'Fix the login bug', tags: ['unresolved'] },
+                { role: 'user', content: 'Max response time must be under 200ms', tags: ['constraint'] },
+                { role: 'user', content: 'latest question' },
+            ],
+            {
+                enabled: true,
+                maxInputChars: 450,
+                preserveRecentRawTurns: 1,
+                summaryMaxChars: 1400,
+            }
+        );
+
+        expect(result.reduced).toBe(true);
+        const summaryMessage = result.messages.find(
+            m => m.role === 'system' && m.content.includes('Conversation summary')
+        );
+        expect(summaryMessage).toBeDefined();
+        expect(summaryMessage!.content).toContain('Fix the login bug');
+        expect(summaryMessage!.content).toContain('Max response time');
+    });
+
     it('falls back safely when max budget is too small', () => {
         const reducer = new HistoryReducer();
         const result = reducer.reduce(

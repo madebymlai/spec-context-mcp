@@ -12,6 +12,7 @@ export interface ChatMessage {
      */
     pairId?: string;
     pairRole?: 'call' | 'result';
+    tags?: string[];
 }
 
 /**

@@ -71,6 +71,7 @@ function buildImplementerGuide(mode: 'full' | 'standard' | 'minimal'): string {
   const sections: string[] = [];
 
   sections.push('# Implementation Guide\n');
+  sections.push(getOutputContract());
 
   if (mode === 'full') {
     sections.push(getTddRules());
@@ -83,6 +84,38 @@ function buildImplementerGuide(mode: 'full' | 'standard' | 'minimal'): string {
   }
 
   return sections.join('\n');
+}
+
+function getOutputContract(): string {
+  return `## Required Final Output Contract
+
+Your LAST output must be one strict trailing contract block only:
+
+${'```text'}
+BEGIN_DISPATCH_RESULT
+{
+  "task_id": "2.1",
+  "status": "completed",
+  "summary": "Implemented X and verified Y",
+  "files_changed": ["src/a.ts", "src/b.ts"],
+  "tests": [
+    {
+      "command": "npm test -- src/a.test.ts --run",
+      "passed": true
+    }
+  ],
+  "follow_up_actions": ["none"]
+}
+END_DISPATCH_RESULT
+${'```'}
+
+Rules:
+- \`status\` must be one of: \`completed\`, \`blocked\`, \`failed\`
+- Keep \`summary\` concise (1-3 sentences)
+- Include every changed file in \`files_changed\`
+- Include at least one test/verification command in \`tests\`
+- Output must start with \`BEGIN_DISPATCH_RESULT\` and end with \`END_DISPATCH_RESULT\` (no extra prose)
+- This contract is parsed by \`dispatch-runtime\`; invalid schema triggers one retry, then terminal failure`;
 }
 
 function getTddRules(): string {

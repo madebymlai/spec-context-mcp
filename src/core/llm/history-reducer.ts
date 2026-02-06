@@ -41,8 +41,8 @@ function buildSummary(messages: ChatMessage[], maxChars: number): string {
 
     const unresolved = uniqueLines(
         messages
-            .flatMap(message => message.content.split('\n'))
-            .filter(line => /- \[ \]|todo|follow[- ]?up|pending|needs/i.test(line))
+            .filter(message => message.tags?.includes('unresolved'))
+            .map(message => message.content.replace(/\s+/g, ' ').trim())
     ).slice(0, 6);
 
     const toolOutcomes = uniqueLines(
@@ -53,8 +53,8 @@ function buildSummary(messages: ChatMessage[], maxChars: number): string {
 
     const constraints = uniqueLines(
         messages
-            .flatMap(message => message.content.split('\n'))
-            .filter(line => /constraint|must|budget|max|limit|deadline|p95|schema/i.test(line))
+            .filter(message => message.tags?.includes('constraint'))
+            .map(message => message.content.replace(/\s+/g, ' ').trim())
     ).slice(0, 8);
 
     const summary = [

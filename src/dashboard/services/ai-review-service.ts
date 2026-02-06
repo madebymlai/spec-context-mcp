@@ -1,14 +1,9 @@
 import { createHash, randomUUID } from 'crypto';
 import {
     BudgetGuard,
+    BudgetExceededError,
     OpenRouterChat,
-    RuntimeEventStream,
-    RuntimeSnapshotStore,
     redactionInterceptor,
-    InMemoryEventBusAdapter,
-    SchemaRegistry,
-    PromptTemplateRegistry,
-    StateProjector,
     TelemetryMeter,
 } from '../../core/llm/index.js';
 import type {
@@ -19,10 +14,6 @@ import type {
     ChatInterceptor,
     ChatOptions,
     ChatProvider,
-    RuntimeEventDraft,
-    RuntimeEventEnvelope,
-    EventBusAdapter,
-    StateSnapshot,
     StateSnapshotFact,
 } from '../../core/llm/index.js';
 
@@ -135,8 +126,8 @@ Respond with valid JSON only, in this exact format:
 
 Be selective - only include suggestions that would significantly improve the document.`;
 
-const REVIEW_USER_TEMPLATE_ID = 'ai_review_user_prompt';
-const REVIEW_USER_TEMPLATE_VERSION = 'v1';
+const REVIEW_USER_PREFIX = 'Please review this document and provide feedback:';
+const REVIEW_USER_SUFFIX = 'Respond with JSON containing your suggestions.';
 const MAX_SCHEMA_RETRIES = 2;
 const SCHEMA_RETRY_PROMPT = 'Your previous reply did not match the required JSON schema. Return only valid JSON with top-level {"suggestions":[{"quote?":"...","comment":"..."}]} and no extra text.';
 
@@ -157,15 +148,15 @@ export interface SpecDocsContext {
     design?: string;
 }
 
+interface AiReviewRunState {
+    revision: number;
+    status: 'running' | 'blocked' | 'done' | 'failed';
+    facts: StateSnapshotFact[];
+}
+
 export interface AiReviewServiceOptions {
     chatProvider?: ChatProvider;
     budgetPolicy?: Partial<BudgetPolicy>;
-    snapshotStore?: RuntimeSnapshotStore;
-    eventStream?: RuntimeEventStream;
-    eventBus?: EventBusAdapter<RuntimeEventEnvelope>;
-    schemaRegistry?: SchemaRegistry;
-    promptTemplateRegistry?: PromptTemplateRegistry;
-    stateProjector?: StateProjector;
     telemetryMeter?: TelemetryMeter;
     interceptors?: ChatInterceptor[];
     defaultMaxInputChars?: number;
@@ -219,39 +210,19 @@ function isAiReviewResponsePayload(payload: unknown): payload is { suggestions: 
     });
 }
 
-function isRuntimeEventEnvelope(payload: unknown): payload is RuntimeEventEnvelope {
-    if (!isRecord(payload)) {
-        return false;
-    }
-    return typeof payload.event_id === 'string' &&
-        typeof payload.idempotency_key === 'string' &&
-        typeof payload.partition_key === 'string' &&
-        typeof payload.sequence === 'number' &&
-        typeof payload.run_id === 'string' &&
-        typeof payload.step_id === 'string' &&
-        typeof payload.agent_id === 'string' &&
-        typeof payload.type === 'string' &&
-        payload.schema_version === 'v2' &&
-        isRecord(payload.payload);
-}
-
 /**
  * Service for AI-powered document review.
+ * Thin path: budget + schema validation + provider call + telemetry.
  */
 export class AiReviewService {
     private chat: ChatProvider;
     private budgetPolicy: BudgetPolicy;
     private budgetGuard: BudgetGuard;
-    private eventStream: RuntimeEventStream;
-    private snapshotStore: RuntimeSnapshotStore;
-    private eventBus: EventBusAdapter<RuntimeEventEnvelope>;
-    private schemaRegistry: SchemaRegistry;
-    private promptTemplates: PromptTemplateRegistry;
-    private stateProjector: StateProjector;
     private telemetryMeter: TelemetryMeter;
     private interceptors: ChatInterceptor[];
     private defaultMaxInputChars: number;
     private defaultMaxOutputTokens: number;
+    private runState = new Map<string, AiReviewRunState>();
 
     constructor(apiKey: string, options: AiReviewServiceOptions = {}) {
         this.telemetryMeter = options.telemetryMeter ?? new TelemetryMeter();
@@ -262,21 +233,9 @@ export class AiReviewService {
         });
         this.budgetPolicy = { ...DEFAULT_BUDGET_POLICY, ...options.budgetPolicy };
         this.budgetGuard = new BudgetGuard();
-        this.eventStream = options.eventStream ?? new RuntimeEventStream();
-        this.snapshotStore = options.snapshotStore ?? new RuntimeSnapshotStore();
-        this.eventBus = options.eventBus ?? new InMemoryEventBusAdapter<RuntimeEventEnvelope>();
-        this.schemaRegistry = options.schemaRegistry ?? new SchemaRegistry();
-        this.promptTemplates = options.promptTemplateRegistry ?? new PromptTemplateRegistry();
-        this.stateProjector = options.stateProjector ?? new StateProjector();
         this.interceptors = options.interceptors ?? [redactionInterceptor];
         this.defaultMaxInputChars = options.defaultMaxInputChars ?? 18000;
         this.defaultMaxOutputTokens = options.defaultMaxOutputTokens ?? 1200;
-
-        this.registerSchemas();
-        this.registerPromptTemplates();
-        this.eventBus.subscribe(event => {
-            void this.projectAndPersistEvent(event);
-        });
     }
 
     getTelemetrySnapshot() {
@@ -284,8 +243,7 @@ export class AiReviewService {
     }
 
     async flushRuntimeState(): Promise<void> {
-        await this.eventStream.flush();
-        await this.snapshotStore.flush();
+        // No-op for thin AI review path.
     }
 
     /**
@@ -303,16 +261,16 @@ export class AiReviewService {
         const interactive = runtimeOptions.interactive ?? true;
         const maxInputChars = runtimeOptions.maxInputChars ?? this.defaultMaxInputChars;
         const maxOutputTokens = runtimeOptions.maxOutputTokens ?? this.defaultMaxOutputTokens;
-        const previousSnapshot = await this.snapshotStore.get(runId);
+        const previousFacts = this.getRunFacts(runId);
 
-        const context = this.buildContextPacket(content, steeringContext, specDocsContext, previousSnapshot, maxInputChars);
-        const userPrompt = this.promptTemplates.compile(
-            REVIEW_USER_TEMPLATE_ID,
-            REVIEW_USER_TEMPLATE_VERSION,
-            context.contextText
-        );
+        const context = this.buildContextPacket(content, steeringContext, specDocsContext, previousFacts, maxInputChars);
+        const userPrompt = `${REVIEW_USER_PREFIX}
 
-        const estimatedInputTokens = this.estimateTokens(REVIEW_SYSTEM_PROMPT.length + userPrompt.text.length);
+${context.contextText}
+
+${REVIEW_USER_SUFFIX}`;
+
+        const estimatedInputTokens = this.estimateTokens(REVIEW_SYSTEM_PROMPT.length + userPrompt.length);
         const candidates = this.buildBudgetCandidates();
         const budgetResult = this.budgetGuard.filterCandidates(
             { estimatedInputTokens, estimatedOutputTokens: maxOutputTokens, interactive },
@@ -326,42 +284,22 @@ export class AiReviewService {
             budgetResult.decision.decision === 'queue' ||
             !budgetResult.selectedCandidate
         ) {
-            await this.persistSnapshot(runId, 'failed', context.facts, {
-                remaining_input: 0,
-                remaining_output: 0,
-            }, [
-                {
-                    channel: 'ai-review',
-                    task_id: 'budget-deny',
-                    value: {
-                        modelRequested: modelConfig.model,
-                        decision: budgetResult.decision,
-                    },
-                },
+            this.upsertRunState(runId, 'failed', [
+                ...context.facts,
+                { k: 'budget_decision', v: budgetResult.decision.decision, confidence: 1 },
             ]);
-            const budgetError = new Error(
-                `429_budget_exceeded: ${budgetResult.decision.reason_codes.join(', ')}`
-            ) as Error & { code?: string; budgetDecision?: BudgetDecision };
-            budgetError.code = '429_budget_exceeded';
-            budgetError.budgetDecision = budgetResult.decision;
-            throw budgetError;
+            throw new BudgetExceededError(
+                `429_budget_exceeded: ${budgetResult.decision.reason_codes.join(', ')}`,
+                budgetResult.decision
+            );
         }
 
         const selectedCandidate = budgetResult.selectedCandidate;
         const decision = budgetResult.decision;
 
-        const budgetEvent = await this.publishRuntimeEvent({
-            partition_key: runId,
-            run_id: runId,
-            step_id: 'budget-filter',
-            agent_id: 'ai_review_service',
-            type: 'BUDGET_DECISION',
-            payload: decision as unknown as Record<string, unknown>,
-        });
-
         const baseMessages: ChatMessage[] = [
             { role: 'system' as const, content: REVIEW_SYSTEM_PROMPT },
-            { role: 'user' as const, content: userPrompt.text },
+            { role: 'user' as const, content: userPrompt },
         ];
 
         let response: Awaited<ReturnType<ChatProvider['chat']>> | null = null;
@@ -369,6 +307,8 @@ export class AiReviewService {
         let previousAssistantContent: string | null = null;
 
         try {
+            this.upsertRunState(runId, 'running', context.facts);
+
             for (let attempt = 1; attempt <= MAX_SCHEMA_RETRIES; attempt += 1) {
                 const attemptMessages: ChatMessage[] = [...baseMessages];
                 if (previousAssistantContent) {
@@ -388,7 +328,6 @@ export class AiReviewService {
                         partitionKey: runId,
                         idempotencyKey: `${runId}:review:${attempt}`,
                         agentId: 'ai_review_service',
-                        causalParentEventId: budgetEvent.event_id,
                     },
                     runtime: {
                         interceptors: this.interceptors,
@@ -398,33 +337,17 @@ export class AiReviewService {
                             preserveRecentRawTurns: 4,
                             summaryMaxChars: 1200,
                         },
-                        emitEvent: async event => {
-                            await this.publishRuntimeEvent(event);
-                        },
                     },
-                    providerOptions: this.buildProviderOptions(modelConfig, userPrompt.stablePrefixHash),
+                    providerOptions: this.buildProviderOptions(modelConfig),
                 });
 
                 try {
                     suggestions = this.parseResponseStrict(response.content);
                     break;
-                } catch (error) {
+                } catch {
                     previousAssistantContent = response.content;
-                    await this.publishRuntimeEvent({
-                        partition_key: runId,
-                        run_id: runId,
-                        step_id: `schema-validate-${attempt}`,
-                        agent_id: 'ai_review_service',
-                        type: 'ERROR',
-                        payload: {
-                            code: 'schema_validation_failed',
-                            message: error instanceof Error ? error.message : String(error),
-                            attempt,
-                        },
-                    });
-
                     if (attempt >= MAX_SCHEMA_RETRIES) {
-                        throw error;
+                        throw new Error('schema_validation_failed');
                     }
                 }
             }
@@ -433,8 +356,7 @@ export class AiReviewService {
                 throw new Error('schema_validation_failed');
             }
 
-            const latestOffset = this.eventStream.latestOffset(runId);
-            const snapshot = await this.persistSnapshot(
+            const revision = this.upsertRunState(
                 runId,
                 'done',
                 [
@@ -451,174 +373,34 @@ export class AiReviewService {
                     },
                     {
                         k: 'prompt_stable_prefix_hash',
-                        v: userPrompt.stablePrefixHash,
+                        v: this.getStablePromptPrefixHash(),
                         confidence: 1,
                     },
-                ],
-                {
-                    remaining_input: Math.max(0, maxInputChars - REVIEW_SYSTEM_PROMPT.length - userPrompt.text.length),
-                    remaining_output: Math.max(0, maxOutputTokens - (response.usage?.completionTokens ?? 0)),
-                },
-                [
-                    {
-                        channel: 'ai-review',
-                        task_id: 'latest-result',
-                        value: {
-                            suggestionsCount: suggestions.length,
-                            usage: response.usage ?? null,
-                            cacheKey: response.runtime?.cacheKey ?? null,
-                        },
-                    },
-                ],
-                latestOffset
+                ]
             );
-
-            await this.publishRuntimeEvent({
-                partition_key: runId,
-                run_id: runId,
-                step_id: 'snapshot',
-                agent_id: 'ai_review_service',
-                type: 'STATE_DELTA',
-                payload: {
-                    revision: snapshot.revision,
-                    status: snapshot.status,
-                },
-            });
 
             return {
                 suggestions,
                 modelUsed: response.model,
                 budgetDecision: decision,
-                snapshotRevision: snapshot.revision,
+                snapshotRevision: revision,
                 usage: response.usage,
                 contextStats: {
                     includedSections: context.includedSections,
                     unchangedSections: context.unchangedSections,
-                    inputChars: REVIEW_SYSTEM_PROMPT.length + userPrompt.text.length,
+                    inputChars: REVIEW_SYSTEM_PROMPT.length + userPrompt.length,
                 },
             };
         } catch (error) {
-            await this.persistSnapshot(
-                runId,
-                'failed',
-                context.facts,
-                {
-                    remaining_input: 0,
-                    remaining_output: 0,
-                },
-                [
-                    {
-                        channel: 'ai-review',
-                        task_id: 'error',
-                        value: {
-                            message: error instanceof Error ? error.message : String(error),
-                            modelRequested: selectedCandidate.model,
-                        },
-                    },
-                ]
-            );
-
-            if ((error as any)?.code === '429_budget_exceeded') {
+            this.upsertRunState(runId, 'failed', context.facts);
+            if (error instanceof BudgetExceededError) {
                 throw error;
             }
-
             const message = error instanceof Error ? error.message : String(error);
             const wrapped = new Error(`AI review failed: ${message}`) as Error & { code?: string };
             wrapped.code = (error as any)?.code ?? 'ai_review_failed';
             throw wrapped;
         }
-    }
-
-    private registerSchemas(): void {
-        this.schemaRegistry.register('runtime.event.envelope', 'runtime_event_envelope', 'v2', isRuntimeEventEnvelope);
-        this.schemaRegistry.register(
-            'runtime.event.payload.BUDGET_DECISION',
-            'runtime_event_payload_budget_decision',
-            'v2',
-            (payload): payload is Record<string, unknown> => isRecord(payload) && typeof payload.decision === 'string'
-        );
-        this.schemaRegistry.register(
-            'runtime.event.payload.LLM_REQUEST',
-            'runtime_event_payload_llm_request',
-            'v2',
-            (payload): payload is Record<string, unknown> => isRecord(payload)
-        );
-        this.schemaRegistry.register(
-            'runtime.event.payload.LLM_RESPONSE',
-            'runtime_event_payload_llm_response',
-            'v2',
-            (payload): payload is Record<string, unknown> => isRecord(payload)
-        );
-        this.schemaRegistry.register(
-            'runtime.event.payload.INTERCEPTOR_DECISION',
-            'runtime_event_payload_interceptor_decision',
-            'v2',
-            (payload): payload is Record<string, unknown> => isRecord(payload)
-        );
-        this.schemaRegistry.register(
-            'runtime.event.payload.STATE_DELTA',
-            'runtime_event_payload_state_delta',
-            'v2',
-            (payload): payload is Record<string, unknown> => isRecord(payload)
-        );
-        this.schemaRegistry.register(
-            'runtime.event.payload.ERROR',
-            'runtime_event_payload_error',
-            'v2',
-            (payload): payload is Record<string, unknown> => isRecord(payload) && typeof payload.message === 'string'
-        );
-        this.schemaRegistry.register('ai_review.response', 'ai_review_response', 'v1', isAiReviewResponsePayload);
-    }
-
-    private registerPromptTemplates(): void {
-        if (this.promptTemplates.get(REVIEW_USER_TEMPLATE_ID, REVIEW_USER_TEMPLATE_VERSION)) {
-            return;
-        }
-
-        this.promptTemplates.register({
-            templateId: REVIEW_USER_TEMPLATE_ID,
-            version: REVIEW_USER_TEMPLATE_VERSION,
-            segments: [
-                {
-                    kind: 'system',
-                    stable: true,
-                    content: 'Please review this document and provide feedback:',
-                },
-                {
-                    kind: 'examples',
-                    stable: true,
-                    content: 'Respond with JSON containing your suggestions.',
-                },
-            ],
-        });
-    }
-
-    private async projectAndPersistEvent(event: RuntimeEventEnvelope): Promise<void> {
-        try {
-            this.schemaRegistry.assert('runtime.event.envelope', event, 'v2');
-            this.schemaRegistry.assert(`runtime.event.payload.${event.type}`, event.payload, 'v2');
-
-            const previous = await this.snapshotStore.get(event.run_id);
-            const projected = this.stateProjector.apply({ event, previous });
-            await this.snapshotStore.upsert({
-                runId: projected.runId,
-                goal: projected.goal,
-                status: projected.status,
-                facts: projected.facts,
-                pendingWrites: projected.pendingWrites,
-                tokenBudget: projected.tokenBudget,
-                appliedOffset: projected.appliedOffset,
-            });
-        } catch (error) {
-            // Contract failures should not interrupt request path.
-            console.warn('[ai-review] runtime event projection failed:', error);
-        }
-    }
-
-    private async publishRuntimeEvent(draft: RuntimeEventDraft): Promise<RuntimeEventEnvelope> {
-        const envelope = this.eventStream.publish(draft);
-        await this.eventBus.publish(envelope);
-        return envelope;
     }
 
     private parseResponseStrict(content: string): AiSuggestion[] {
@@ -631,10 +413,13 @@ export class AiReviewService {
             throw parseError;
         }
 
-        this.schemaRegistry.assert('ai_review.response', parsed, 'v1');
-        const payload = parsed as { suggestions: Array<{ quote?: string; comment: string }> };
+        if (!isAiReviewResponsePayload(parsed)) {
+            const schemaError = new Error('schema_validation_failed: invalid_schema') as Error & { code?: string };
+            schemaError.code = 'schema_validation_failed';
+            throw schemaError;
+        }
 
-        return payload.suggestions
+        return parsed.suggestions
             .map(item => ({
                 quote: typeof item.quote === 'string' && item.quote.trim() ? item.quote.trim() : undefined,
                 comment: String(item.comment).trim(),
@@ -646,11 +431,9 @@ export class AiReviewService {
         content: string,
         steeringContext: SteeringContext | undefined,
         specDocsContext: SpecDocsContext | undefined,
-        previousSnapshot: StateSnapshot | null,
+        previousFacts: Map<string, string>,
         maxInputChars: number
     ): ContextBuildResult {
-        const previousFacts = new Map((previousSnapshot?.facts ?? []).map(fact => [fact.k, fact.v]));
-
         const sections: ContextSection[] = [
             {
                 id: 'product',
@@ -755,13 +538,14 @@ export class AiReviewService {
         }));
     }
 
-    private buildProviderOptions(
-        modelConfig: AiReviewModelConfig,
-        stablePromptPrefixHash: string
-    ): ChatOptions['providerOptions'] {
+    private getStablePromptPrefixHash(): string {
+        return createHash('sha256').update(`${REVIEW_SYSTEM_PROMPT}\n${REVIEW_USER_PREFIX}\n${REVIEW_USER_SUFFIX}`).digest('hex');
+    }
+
+    private buildProviderOptions(modelConfig: AiReviewModelConfig): ChatOptions['providerOptions'] {
         const providerOptions: NonNullable<ChatOptions['providerOptions']> = {
             promptCaching: {
-                key: `ai-review:${stablePromptPrefixHash}`,
+                key: `ai-review:${this.getStablePromptPrefixHash()}`,
                 retention: 'in_memory',
             },
         };
@@ -773,29 +557,31 @@ export class AiReviewService {
         return providerOptions;
     }
 
-    private async persistSnapshot(
+    private getRunFacts(runId: string): Map<string, string> {
+        const run = this.runState.get(runId);
+        return new Map((run?.facts ?? []).map(fact => [fact.k, fact.v]));
+    }
+
+    private upsertRunState(
         runId: string,
-        status: StateSnapshot['status'],
-        facts: StateSnapshotFact[],
-        tokenBudget: StateSnapshot['token_budget'],
-        pendingWrites: Array<{
-            channel: string;
-            task_id: string;
-            value: Record<string, unknown>;
-        }>,
-        sequence?: number
-    ) {
-        return this.snapshotStore.upsert({
-            runId,
-            goal: 'review_document',
+        status: AiReviewRunState['status'],
+        facts: StateSnapshotFact[]
+    ): number {
+        const previous = this.runState.get(runId);
+        const factMap = new Map<string, StateSnapshotFact>();
+        for (const fact of previous?.facts ?? []) {
+            factMap.set(fact.k, fact);
+        }
+        for (const fact of facts) {
+            factMap.set(fact.k, fact);
+        }
+
+        const revision = (previous?.revision ?? 0) + 1;
+        this.runState.set(runId, {
+            revision,
             status,
-            facts,
-            pendingWrites,
-            tokenBudget,
-            appliedOffset: {
-                partition_key: runId,
-                sequence: sequence ?? this.eventStream.latestOffset(runId),
-            },
+            facts: Array.from(factMap.values()),
         });
+        return revision;
     }
 }

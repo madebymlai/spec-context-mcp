@@ -27,6 +27,7 @@ const ALL_TOOL_NAMES = [
   'get-implementer-guide',
   'get-reviewer-guide',
   'get-brainstorm-guide',
+  'dispatch-runtime',
 ];
 
 const ALL_TOOLS = stubTools(ALL_TOOL_NAMES);
@@ -34,6 +35,7 @@ const ALL_TOOLS = stubTools(ALL_TOOL_NAMES);
 describe('registry', () => {
   beforeEach(() => {
     resetRegistry();
+    delete process.env.SPEC_CONTEXT_DISPATCH_RUNTIME_V2;
   });
 
   describe('initial state', () => {
@@ -52,12 +54,13 @@ describe('registry', () => {
       expect(visible).toContain('spec-status');
     });
 
-    it('hides search, code_research, approvals, wait-for-approval', () => {
+    it('hides search, code_research, approvals, wait-for-approval, dispatch-runtime', () => {
       const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
       expect(visible).not.toContain('search');
       expect(visible).not.toContain('code_research');
       expect(visible).not.toContain('approvals');
       expect(visible).not.toContain('wait-for-approval');
+      expect(visible).not.toContain('dispatch-runtime');
     });
   });
 
@@ -72,7 +75,7 @@ describe('registry', () => {
       expect(getSessionMode()).toBe('orchestrator');
     });
 
-    it('shows 8 orchestrator tools', () => {
+    it('shows 8 orchestrator tools when dispatch runtime v2 is disabled', () => {
       processToolCall('spec-workflow-guide');
       const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
       expect(visible).toHaveLength(8);
@@ -82,6 +85,17 @@ describe('registry', () => {
       expect(visible).toContain('spec-status');
       expect(visible).toContain('approvals');
       expect(visible).toContain('wait-for-approval');
+      expect(visible).not.toContain('dispatch-runtime');
+      expect(visible).toContain('search');
+      expect(visible).toContain('code_research');
+    });
+
+    it('shows dispatch-runtime when v2 flag is enabled', () => {
+      process.env.SPEC_CONTEXT_DISPATCH_RUNTIME_V2 = '1';
+      processToolCall('spec-workflow-guide');
+      const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
+      expect(visible).toHaveLength(9);
+      expect(visible).toContain('dispatch-runtime');
       expect(visible).toContain('search');
       expect(visible).toContain('code_research');
     });
@@ -147,6 +161,7 @@ describe('registry', () => {
       'code_research',
       'approvals',
       'wait-for-approval',
+      'dispatch-runtime',
     ])('%s does not trigger a mode transition', (toolName) => {
       const changed = processToolCall(toolName);
       expect(changed).toBe(false);

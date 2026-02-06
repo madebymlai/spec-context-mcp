@@ -6,6 +6,7 @@
  * and subsequent tools/list requests only return the tools for that mode.
  */
 import type { Tool } from './index.js';
+import { isDispatchRuntimeV2Enabled } from '../config/dispatch-runtime.js';
 
 export type SessionMode = 'undetermined' | 'orchestrator' | 'implementer' | 'reviewer';
 
@@ -25,6 +26,7 @@ const ORCHESTRATOR_TOOLS: ReadonlySet<string> = new Set([
   'spec-status',
   'approvals',
   'wait-for-approval',
+  'dispatch-runtime',
   'search',
   'code_research',
 ]);
@@ -68,7 +70,15 @@ export function getSessionMode(): SessionMode {
 /** Filter an array of tools to only those visible in the current mode. */
 export function filterVisibleTools(allTools: Tool[]): Tool[] {
   const visible = MODE_TOOLS[currentMode];
-  return allTools.filter(t => visible.has(t.name));
+  return allTools.filter(t => {
+    if (!visible.has(t.name)) {
+      return false;
+    }
+    if (t.name === 'dispatch-runtime' && !isDispatchRuntimeV2Enabled()) {
+      return false;
+    }
+    return true;
+  });
 }
 
 /**

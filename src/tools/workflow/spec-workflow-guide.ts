@@ -2,6 +2,7 @@ import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getSteeringDocs } from './steering-loader.js';
 import { getDisciplineMode, getDispatchCli } from '../../config/discipline.js';
+import { isDispatchRuntimeV2Enabled } from '../../config/dispatch-runtime.js';
 
 export const specWorkflowGuideTool: Tool = {
   name: 'spec-workflow-guide',
@@ -60,6 +61,7 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
 
 function getSpecWorkflowGuide(disciplineMode: 'full' | 'standard' | 'minimal', implementerCli: string | null, reviewerCli: string | null): string {
   const currentYear = new Date().getFullYear();
+  const dispatchRuntimeV2 = isDispatchRuntimeV2Enabled();
   return `# Spec Development Workflow
 
 ## Overview
@@ -260,6 +262,7 @@ ${reviewerCli ? '- You DISPATCH reviews to the reviewer agent via bash.' : '- Yo
 
 **Tools**:
 - spec-status: Check overall progress
+${dispatchRuntimeV2 ? '- dispatch-runtime: Validate/ingest structured agent output and read runtime snapshot state' : '- dispatch-runtime: disabled (enable with SPEC_CONTEXT_DISPATCH_RUNTIME_V2=1)'}
 - Direct editing: Mark tasks as in-progress [-] or complete [x] in tasks.md
 - Bash: Dispatch tasks to implementer agent (\`${implementerCli}\`)
 ${reviewerCli ? `- Bash: Dispatch reviews to reviewer agent (\`${reviewerCli}\`)` : '- get-reviewer-guide: Load review checklist (you review directly)'}
@@ -290,34 +293,63 @@ ${reviewerCli ? `- Bash: Dispatch reviews to reviewer agent (\`${reviewerCli}\`)
    - File paths from _Leverage fields
    - Requirements from _Requirements fields
    - Instructions to mark [-] before starting and [x] when done
-4. **Dispatch to implementer agent via bash** (redirect output to log):
+${dispatchRuntimeV2 ? `4. **Initialize runtime state for this task**:
+   - Call \`dispatch-runtime\` with:
+     - \`action: "init_run"\`
+     - \`specName: "{spec-name}"\`
+     - \`taskId: "{taskId}"\`
+   - Save \`runId\` for subsequent ingest calls.` : `4. **Runtime v2 disabled**:
+   - Use legacy dispatch flow with minimal log inspection.`}
+5. **Dispatch to implementer agent via bash** (redirect output to log):
+${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
+     - \`action: "compile_prompt"\`
+     - \`runId: "{runId}"\`
+     - \`role: "implementer"\`
+     - \`taskId: "{taskId}"\`
+     - \`taskPrompt: "{task prompt content}"\`
+     - \`maxOutputTokens: 1200\`
+   - Use returned \`prompt\` for dispatch.` : ''}
    \`\`\`bash
    ${implementerCli} "Implement the task for spec {spec-name}, first call get-implementer-guide to load implementation rules then implement the task: {task prompt content}." > /tmp/spec-impl.log 2>&1
    \`\`\`
-   - Full output goes to log file — do NOT read the full log
+   - Implementer LAST output must be strict contract markers \`BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT\`
    - Wait for the command to complete before proceeding
-5. **Verify task completion**:
-   - Check tasks.md — task should now be [x]. If still [-], check \`tail -n 30 /tmp/spec-impl.log\` for errors.
+${dispatchRuntimeV2 ? `6. **Ingest implementer output (no raw-log orchestration):**
+   - Call \`dispatch-runtime\` with:
+     - \`action: "ingest_output"\`
+     - \`runId: "{runId}"\`
+     - \`role: "implementer"\`
+     - \`taskId: "{taskId}"\`
+     - \`maxOutputTokens: 1200\`
+     - \`outputFilePath: "/tmp/spec-impl.log"\`
+   - Use returned \`nextAction\` for branch decisions.` : `6. **Legacy result handling**:
+   - Runtime v2 disabled: use task markers and minimal diagnostics to decide next action.`}
+7. **Verify task completion**:
+   - Check tasks.md — task should now be [x].
    - Get the diff (this is all you need to see):
      \`\`\`bash
      git diff {base-sha}..HEAD
      \`\`\`
-6. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
+8. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
 ${reviewerCli ? `   \`\`\`bash
-   ${reviewerCli} "Review task {taskId} for spec {spec-name}. Base SHA: {base-sha}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be ONLY the Review Outcome block (Strengths/Issues/Assessment)." > /tmp/spec-review.log 2>&1
+   ${reviewerCli} "Review task {taskId} for spec {spec-name}. Base SHA: {base-sha}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1
    \`\`\`
-   - Full output goes to log file — read only the verdict:
-     \`\`\`bash
-     tail -n 40 /tmp/spec-review.log
-     \`\`\`` : '   - Review the implementation yourself using loaded reviewer guide\n   - Run `git diff {base-sha}..HEAD` to see changes'}
+${dispatchRuntimeV2 ? `   - Call \`dispatch-runtime\` with:
+     - \`action: "ingest_output"\`
+     - \`runId: "{runId}"\`
+     - \`role: "reviewer"\`
+     - \`taskId: "{taskId}"\`
+     - \`maxOutputTokens: 1200\`
+     - \`outputFilePath: "/tmp/spec-review.log"\`` : '   - Runtime v2 disabled: evaluate reviewer verdict from final structured output manually'}` : '   - Review the implementation yourself using loaded reviewer guide\n   - Run `git diff {base-sha}..HEAD` to see changes'}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: proceed to next task
-7. **Repeat from step 1** for the next pending task
+9. **Repeat from step 1** for the next pending task
 
 **CRITICAL rules:**
 - NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`
 - NEVER dispatch multiple tasks at once — wait for each to complete
 - NEVER skip the review step
+${dispatchRuntimeV2 ? '- NEVER branch orchestration state from raw logs; only use `dispatch-runtime` validated output' : '- Runtime v2 disabled: keep log usage minimal and deterministic'}
 - If the implementer agent fails or produces bad output, dispatch it again with clearer instructions`}
 
 ## Workflow Rules

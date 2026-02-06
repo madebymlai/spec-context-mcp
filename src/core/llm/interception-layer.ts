@@ -64,9 +64,28 @@ export class InterceptionLayer {
             let decision: InterceptorDecision;
 
             try {
-                decision = await handler(current, context);
+                decision = await Promise.race([
+                    Promise.resolve(handler(current, context)),
+                    new Promise<never>((_, reject) =>
+                        setTimeout(() => reject(new Error('hook_budget_exceeded')), this.perHookBudgetMs)
+                    ),
+                ]);
             } catch (error) {
                 const durationMs = Date.now() - hookStart;
+                const isTimeout = error instanceof Error && error.message === 'hook_budget_exceeded';
+
+                if (isTimeout && interceptor.criticality === 'best_effort') {
+                    reports.push({
+                        interceptor_id: interceptor.id,
+                        criticality: interceptor.criticality,
+                        action: 'allow',
+                        reason_code: 'hook_budget_exceeded',
+                        mutated_fields: [],
+                        duration_ms: durationMs,
+                    });
+                    continue;
+                }
+
                 if (interceptor.criticality === 'critical') {
                     throw new Error(
                         `Critical interceptor "${interceptor.id}" failed on ${hook}: ${
@@ -88,17 +107,6 @@ export class InterceptionLayer {
 
             const durationMs = Date.now() - hookStart;
             const reasonCode = decision.reasonCode || 'noop';
-
-            if (durationMs > this.perHookBudgetMs) {
-                reports.push({
-                    interceptor_id: interceptor.id,
-                    criticality: interceptor.criticality,
-                    action: 'allow',
-                    reason_code: 'hook_budget_exceeded',
-                    mutated_fields: [],
-                    duration_ms: durationMs,
-                });
-            }
 
             if (decision.action === 'drop') {
                 reports.push({

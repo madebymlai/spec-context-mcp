@@ -36,6 +36,10 @@ import {
     getBrainstormGuideTool,
     getBrainstormGuideHandler,
 } from './workflow/get-brainstorm-guide.js';
+import {
+    dispatchRuntimeTool,
+    dispatchRuntimeHandler,
+} from './workflow/dispatch-runtime.js';
 
 export interface Tool {
     name: string;
@@ -146,6 +150,7 @@ export function getAllTools(): Tool[] {
         getImplementerGuideTool as Tool,
         getReviewerGuideTool as Tool,
         getBrainstormGuideTool as Tool,
+        dispatchRuntimeTool as Tool,
     ];
 }
 
@@ -215,6 +220,9 @@ export async function handleToolCall(
 
         case 'get-brainstorm-guide':
             return getBrainstormGuideHandler(args, wfCtx);
+
+        case 'dispatch-runtime':
+            return dispatchRuntimeHandler(args, wfCtx);
 
         default:
             throw new Error(`Unknown tool: ${name}`);

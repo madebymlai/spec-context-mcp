@@ -216,6 +216,36 @@ Issues:
 Assessment: [Approved | Needs Changes | Blocked]
 \`\`\`
 
+## Required Final Output Contract
+
+Your LAST output must be one strict trailing contract block only:
+
+${'```text'}
+BEGIN_DISPATCH_RESULT
+{
+  "task_id": "2.1",
+  "assessment": "needs_changes",
+  "strengths": ["Clear structure"],
+  "issues": [
+    {
+      "severity": "important",
+      "file": "src/a.ts",
+      "message": "Missing error path handling",
+      "fix": "Return explicit Result on parse failure"
+    }
+  ],
+  "required_fixes": ["Handle parse error path in src/a.ts"]
+}
+END_DISPATCH_RESULT
+${'```'}
+
+Rules:
+- \`assessment\` must be one of: \`approved\`, \`needs_changes\`, \`blocked\`
+- \`issues[].severity\` must be one of: \`critical\`, \`important\`, \`minor\`
+- Use empty arrays when no issues/fixes
+- Output must start with \`BEGIN_DISPATCH_RESULT\` and end with \`END_DISPATCH_RESULT\` (no extra prose)
+- This contract is parsed by \`dispatch-runtime\`; invalid schema triggers one retry, then terminal failure
+
 ## Red Flags in Review
 
 **Never:**

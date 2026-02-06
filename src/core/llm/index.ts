@@ -34,3 +34,4 @@ export {
   type LlmProvider,
 } from './provider-cache-adapter.js';
 export { redactionInterceptor } from './default-interceptors.js';
+export { BudgetExceededError, InterceptorDroppedError } from './errors.js';

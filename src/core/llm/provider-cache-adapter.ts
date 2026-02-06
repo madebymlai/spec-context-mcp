@@ -60,46 +60,8 @@ class OpenRouterCacheAdapter implements ProviderCacheAdapter {
     }
 }
 
-class ClaudeCacheAdapter implements ProviderCacheAdapter {
-    provider: LlmProvider = 'claude';
-
-    apply(_request: ProviderCacheRequest): ProviderCacheMutation {
-        // Anthropic caching is handled with message-level cache controls.
-        return {};
-    }
-
-    extractTelemetry(_usage: unknown, request: ProviderCacheRequest): ProviderCacheTelemetry {
-        return {
-            promptCacheKey: request.promptCacheKey,
-            promptCacheRetention: request.promptCacheRetention,
-            cachedInputTokens: 0,
-            cacheWriteTokens: 0,
-            cacheMissReason: 'provider_telemetry_unavailable',
-        };
-    }
-}
-
-class GeminiCacheAdapter implements ProviderCacheAdapter {
-    provider: LlmProvider = 'gemini';
-
-    apply(_request: ProviderCacheRequest): ProviderCacheMutation {
-        // Gemini cached content uses a separate API resource.
-        return {};
-    }
-
-    extractTelemetry(_usage: unknown, request: ProviderCacheRequest): ProviderCacheTelemetry {
-        return {
-            promptCacheKey: request.promptCacheKey,
-            promptCacheRetention: request.promptCacheRetention,
-            cachedInputTokens: 0,
-            cacheWriteTokens: 0,
-            cacheMissReason: 'provider_telemetry_unavailable',
-        };
-    }
-}
-
-class OpenAICacheAdapter implements ProviderCacheAdapter {
-    provider: LlmProvider = 'openai';
+class NoopCacheAdapter implements ProviderCacheAdapter {
+    constructor(readonly provider: LlmProvider) {}
 
     apply(_request: ProviderCacheRequest): ProviderCacheMutation {
         return {};
@@ -111,23 +73,14 @@ class OpenAICacheAdapter implements ProviderCacheAdapter {
             promptCacheRetention: request.promptCacheRetention,
             cachedInputTokens: 0,
             cacheWriteTokens: 0,
-            cacheMissReason: 'provider_telemetry_unavailable',
+            cacheMissReason: 'provider_not_supported',
         };
     }
 }
 
 export class ProviderCacheAdapterFactory {
     static create(provider: LlmProvider): ProviderCacheAdapter {
-        switch (provider) {
-            case 'claude':
-                return new ClaudeCacheAdapter();
-            case 'gemini':
-                return new GeminiCacheAdapter();
-            case 'openai':
-                return new OpenAICacheAdapter();
-            case 'openrouter':
-            default:
-                return new OpenRouterCacheAdapter();
-        }
+        if (provider === 'openrouter') return new OpenRouterCacheAdapter();
+        return new NoopCacheAdapter(provider);
     }
 }

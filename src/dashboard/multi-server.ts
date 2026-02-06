@@ -25,7 +25,7 @@ import {
 } from '../core/workflow/security-utils.js';
 import { SecurityConfig } from '../workflow-types.js';
 import { AiReviewService, AiReviewModel, AI_REVIEW_MODELS, SpecDocsContext } from './services/ai-review-service.js';
-import { RuntimeEventStream, RuntimeSnapshotStore } from '../core/llm/index.js';
+import { BudgetExceededError } from '../core/llm/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -63,8 +63,6 @@ export class MultiProjectDashboardServer {
   // Debounce spec broadcasts to coalesce rapid updates
   private pendingSpecBroadcasts: Map<string, NodeJS.Timeout> = new Map();
   private readonly SPEC_BROADCAST_DEBOUNCE_MS = 300;
-  private readonly aiReviewEventStream = new RuntimeEventStream();
-  private readonly aiReviewSnapshotStore = new RuntimeSnapshotStore();
   private readonly aiReviewServicesByApiKeyHash = new Map<string, { service: AiReviewService; lastAccessAt: number }>();
   private readonly aiReviewServiceCacheSalt = randomUUID();
   private readonly AI_REVIEW_SERVICE_TTL_MS = 30 * 60 * 1000;
@@ -341,8 +339,6 @@ export class MultiProjectDashboardServer {
       return existing.service;
     }
     const service = new AiReviewService(apiKey, {
-      eventStream: this.aiReviewEventStream,
-      snapshotStore: this.aiReviewSnapshotStore,
     });
     this.aiReviewServicesByApiKeyHash.set(keyHash, {
       service,
@@ -1218,11 +1214,9 @@ export class MultiProjectDashboardServer {
         };
       } catch (error: any) {
         console.error('AI review failed:', error);
-        const isBudgetError =
-          error?.code === '429_budget_exceeded' ||
-          (typeof error?.message === 'string' && error.message.includes('429_budget_exceeded'));
+        const isBudgetError = error instanceof BudgetExceededError;
         if (isBudgetError) {
-          const retryAfter = error?.budgetDecision?.retry_after_s ?? 3600;
+          const retryAfter = error.budgetDecision?.retry_after_s ?? 3600;
           reply.header('Retry-After', String(retryAfter));
           return reply.code(429).send({
             error: '429_budget_exceeded',
@@ -1698,8 +1692,6 @@ export class MultiProjectDashboardServer {
     await this.projectManager.stop();
 
     // Flush runtime telemetry/state before shutdown
-    await this.aiReviewEventStream.flush();
-    await this.aiReviewSnapshotStore.flush();
     for (const { service } of this.aiReviewServicesByApiKeyHash.values()) {
       await service.flushRuntimeState();
     }

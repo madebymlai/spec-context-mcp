@@ -2,6 +2,7 @@ import { Prompt, PromptMessage } from '@modelcontextprotocol/sdk/types.js';
 import { PromptDefinition } from './types.js';
 import { ToolContext } from '../workflow-types.js';
 import { getDisciplineMode, getDispatchCli } from '../config/discipline.js';
+import { isDispatchRuntimeV2Enabled } from '../config/dispatch-runtime.js';
 
 const prompt: Prompt = {
   name: 'implement-task',
@@ -41,6 +42,60 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
   const isFull = disciplineMode === 'full';
   const isMinimal = disciplineMode === 'minimal';
   const reviewsEnabled = !isMinimal;
+  const dispatchRuntimeV2 = isDispatchRuntimeV2Enabled();
+
+  const runtimeSteps = dispatchRuntimeV2 ? `
+4. **Initialize Runtime State (once per task):**
+   - Call \`dispatch-runtime\` with:
+     - \`action: "init_run"\`
+     - \`specName: "${specName}"\`
+     - \`taskId: "${taskId || '{taskId}'}"\`
+   - Save returned \`runId\` for this task.
+
+5. **Compile Dispatch Prompt (stable prefix + delta):**
+   - Call \`dispatch-runtime\` with:
+     - \`action: "compile_prompt"\`
+     - \`runId: "{runId from step 4}"\`
+     - \`role: "implementer"\`
+     - \`taskId: "${taskId || '{taskId}'}"\`
+     - \`taskPrompt: "{_Prompt content}"\`
+     - \`maxOutputTokens: 1200\`
+   - Use returned \`prompt\` as the exact implementer dispatch payload.
+` : '';
+
+  const implementerIngestStep = dispatchRuntimeV2 ? `
+7. **Ingest Implementer Result (no raw-log parsing):**
+   - Call \`dispatch-runtime\` with:
+     - \`action: "ingest_output"\`
+     - \`runId: "{runId from step 4}"\`
+     - \`role: "implementer"\`
+     - \`taskId: "${taskId || '{taskId}'}"\`
+     - \`maxOutputTokens: 1200\`
+     - \`outputFilePath: "/tmp/spec-impl.log"\`
+   - If schema invalid: re-dispatch implementer once with stricter reminder.
+` : `
+6. **Legacy Result Handling (runtime v2 disabled):**
+   - Use task marker changes + targeted diagnostics from logs.
+   - Keep log reads minimal; do not parse full logs.
+`;
+
+  const reviewIngestStep = dispatchRuntimeV2 ? `
+   - Ingest reviewer result via \`dispatch-runtime\`:
+     - \`action: "ingest_output"\`
+     - \`runId: "{runId from step 4}"\`
+     - \`role: "reviewer"\`
+     - \`taskId: "${taskId || '{taskId}'}"\`
+     - \`maxOutputTokens: 1200\`
+     - \`outputFilePath: "/tmp/spec-review.log"\`` : `
+   - Runtime v2 disabled: evaluate reviewer verdict from structured final output manually`;
+
+  const runtimeGuideline = dispatchRuntimeV2
+    ? '- Never branch orchestration logic from raw logs — only from \`dispatch-runtime\` structured results'
+    : '- Runtime v2 disabled: prefer minimal log reads and deterministic task markers';
+
+  const runtimeToolLine = dispatchRuntimeV2
+    ? '- dispatch-runtime: Validate structured agent output and update runtime snapshot'
+    : '- dispatch-runtime: disabled (enable with SPEC_CONTEXT_DISPATCH_RUNTIME_V2=1)';
 
   const messages: PromptMessage[] = [
     {
@@ -100,48 +155,51 @@ Do NOT implement tasks yourself. STOP and ask the user to configure the env var.
    - Read the _Prompt field from the task
    - Note _Leverage fields, _Requirements fields, and success criteria
 
-4. **Build and Dispatch to Implementer Agent** (redirect output to log):
-   - Build the task prompt from the _Prompt field content
+${runtimeSteps}
+
+${dispatchRuntimeV2 ? '6.' : '5.'} **Build and Dispatch to Implementer Agent** (redirect output to log):
+   - ${dispatchRuntimeV2 ? 'Use compiled prompt from dispatch-runtime compile_prompt action' : 'Build the task prompt from the _Prompt field content'}
    - Dispatch via bash:
      \`\`\`bash
      ${implementerCli} "Implement the task for spec ${specName}, first call get-implementer-guide to load implementation rules then implement the task: [task prompt content from _Prompt field]." > /tmp/spec-impl.log 2>&1
      \`\`\`
-   - Full output goes to log file — do NOT read the full log
+   - Agent output must end with strict contract markers (\`BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT\`)
    - WAIT for the command to complete — do not proceed until done
 
-5. **Verify Completion:**
-   - Check tasks.md — the task should now be marked [x]
-   - If still [-], check \`tail -n 30 /tmp/spec-impl.log\` for errors, then re-dispatch
+${implementerIngestStep}
+
+${dispatchRuntimeV2 ? '8.' : '7.'} **Verify Completion:**
+   - Check tasks.md — task should now be marked [x]
+   ${dispatchRuntimeV2 ? '- Use \\`dispatch-runtime\\` nextAction as source of truth for orchestration branch' : '- Use explicit task marker + review status as source of truth'}
    - Get the diff (this is all you need to see):
      \`\`\`bash
      git diff {base-sha from step 2}..HEAD
      \`\`\`
 
-${reviewsEnabled ? '6. **Dispatch Review:**' : '6. **Skip Review (minimal mode):**'}
+${reviewsEnabled ? `${dispatchRuntimeV2 ? '9' : '8'}. **Dispatch Review:**` : `${dispatchRuntimeV2 ? '9' : '8'}. **Skip Review (minimal mode):**`}
 ${reviewerCli ? `   - Dispatch to reviewer agent via bash (redirect output to log):
      \`\`\`bash
-     ${reviewerCli} "Review task ${taskId || '{taskId}'} for spec ${specName}. Base SHA: {base-sha from step 2}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be ONLY the Review Outcome block (Strengths/Issues/Assessment)." > /tmp/spec-review.log 2>&1
+     ${reviewerCli} "Review task ${taskId || '{taskId}'} for spec ${specName}. Base SHA: {base-sha from step 2}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1
      \`\`\`
-   - Full output goes to log — read only the verdict:
-     \`\`\`bash
-     tail -n 40 /tmp/spec-review.log
-     \`\`\`` : `   - No reviewer CLI configured — review the implementation yourself
+${reviewIngestStep}` : `   - No reviewer CLI configured — review the implementation yourself
    - Run \`git diff {base-sha}..HEAD\` to see changes
    - Call get-reviewer-guide for review criteria`}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: this task is done
 
-7. **STOP** — do NOT proceed to the next task in this same session
+${dispatchRuntimeV2 ? '10' : '9'}. **STOP** — do NOT proceed to the next task in this same session
 
 **Important Guidelines:**
 - You are the ORCHESTRATOR — NEVER implement tasks yourself
 - ONE task at a time — dispatch, wait, review, THEN next
 - NEVER dispatch multiple tasks in parallel
 - If the implementer agent fails, re-dispatch with clearer instructions
+${runtimeGuideline}
 - If same issue appears twice in review, take over directly
 
 **Tools to Use:**
 - spec-status: Check overall progress
+${runtimeToolLine}
 - Bash: Dispatch to implementer/reviewer agents
 - Edit: Update task markers if agents fail to
 - Read: Read tasks.md, _Prompt fields`}

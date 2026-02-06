@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
 import { BudgetGuard } from './budget-guard.js';
+import { BudgetExceededError, InterceptorDroppedError } from './errors.js';
 import { HistoryReducer } from './history-reducer.js';
 import { InterceptionLayer } from './interception-layer.js';
 import { PromptPrefixCompiler } from './prompt-prefix-compiler.js';
@@ -99,9 +100,7 @@ export class OpenRouterChat implements ChatProvider {
                 request = ingressResult.request;
                 interceptionReports.push(...ingressResult.reports);
                 if (ingressResult.dropped) {
-                    const error = new Error(`Request dropped by interceptor at ingress: ${ingressResult.dropReasonCode}`);
-                    (error as any).code = 'interceptor_dropped';
-                    throw error;
+                    throw new InterceptorDroppedError(`Request dropped by interceptor at ingress: ${ingressResult.dropReasonCode}`);
                 }
 
                 const preCacheContext = {
@@ -120,9 +119,7 @@ export class OpenRouterChat implements ChatProvider {
                 request = preCacheResult.request;
                 interceptionReports.push(...preCacheResult.reports);
                 if (preCacheResult.dropped) {
-                    const error = new Error(`Request dropped before cache key: ${preCacheResult.dropReasonCode}`);
-                    (error as any).code = 'interceptor_dropped';
-                    throw error;
+                    throw new InterceptorDroppedError(`Request dropped before cache key: ${preCacheResult.dropReasonCode}`);
                 }
             }
 
@@ -146,10 +143,7 @@ export class OpenRouterChat implements ChatProvider {
                     budgetResult.decision.decision === 'queue' ||
                     !budgetResult.selectedCandidate
                 ) {
-                    const error = new Error('429_budget_exceeded');
-                    (error as any).code = '429_budget_exceeded';
-                    (error as any).budgetDecision = budgetDecision;
-                    throw error;
+                    throw new BudgetExceededError('429_budget_exceeded', budgetResult.decision);
                 }
                 request.model = budgetResult.selectedCandidate.model;
             }
@@ -187,9 +181,7 @@ export class OpenRouterChat implements ChatProvider {
                 request = postRouteResult.request;
                 interceptionReports.push(...postRouteResult.reports);
                 if (postRouteResult.dropped) {
-                    const error = new Error(`Request dropped post-route: ${postRouteResult.dropReasonCode}`);
-                    (error as any).code = 'interceptor_dropped';
-                    throw error;
+                    throw new InterceptorDroppedError(`Request dropped post-route: ${postRouteResult.dropReasonCode}`);
                 }
             }
 
