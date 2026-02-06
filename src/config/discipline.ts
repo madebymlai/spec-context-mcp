@@ -19,8 +19,8 @@ const ENV_VARS: Record<DispatchRole, string> = {
  * Used for --allowedTools (Claude) and prompt-level restriction (others).
  */
 const ROLE_TOOLS: Record<DispatchRole, string[]> = {
-  implementer: ['get-implementer-guide', 'search', 'code_research', 'spec-status'],
-  reviewer: ['get-reviewer-guide', 'search', 'code_research'],
+  implementer: ['get-implementer-guide', 'search', 'spec-status'],
+  reviewer: ['get-reviewer-guide', 'search'],
 };
 
 const CLAUDE_ALLOWED_TOOLS = {

@@ -115,14 +115,14 @@ describe('registry', () => {
       expect(getSessionMode()).toBe('implementer');
     });
 
-    it('shows 4 implementer tools', () => {
+    it('shows 3 implementer tools', () => {
       processToolCall('get-implementer-guide');
       const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
-      expect(visible).toHaveLength(4);
+      expect(visible).toHaveLength(3);
       expect(visible).toContain('get-implementer-guide');
       expect(visible).toContain('spec-status');
       expect(visible).toContain('search');
-      expect(visible).toContain('code_research');
+      expect(visible).not.toContain('code_research');
     });
   });
 
@@ -133,13 +133,13 @@ describe('registry', () => {
       expect(getSessionMode()).toBe('reviewer');
     });
 
-    it('shows 3 reviewer tools', () => {
+    it('shows 2 reviewer tools', () => {
       processToolCall('get-reviewer-guide');
       const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
-      expect(visible).toHaveLength(3);
+      expect(visible).toHaveLength(2);
       expect(visible).toContain('get-reviewer-guide');
       expect(visible).toContain('search');
-      expect(visible).toContain('code_research');
+      expect(visible).not.toContain('code_research');
     });
   });
 

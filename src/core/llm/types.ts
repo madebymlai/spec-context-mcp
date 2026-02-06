@@ -180,6 +180,10 @@ export interface HistoryReducerOptions {
     maxInputChars: number;
     preserveRecentRawTurns?: number;
     summaryMaxChars?: number;
+    /** Defaults to true when history reduction is enabled. */
+    observationMasking?: boolean;
+    /** Defaults to 80 when observation masking is enabled. */
+    maxObservationChars?: number;
 }
 
 export interface ChatRuntimeOptions {

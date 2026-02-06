@@ -35,13 +35,11 @@ const IMPLEMENTER_TOOLS: ReadonlySet<string> = new Set([
   'get-implementer-guide',
   'spec-status',
   'search',
-  'code_research',
 ]);
 
 const REVIEWER_TOOLS: ReadonlySet<string> = new Set([
   'get-reviewer-guide',
   'search',
-  'code_research',
 ]);
 
 const MODE_TOOLS: Record<SessionMode, ReadonlySet<string>> = {

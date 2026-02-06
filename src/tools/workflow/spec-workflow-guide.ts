@@ -225,7 +225,7 @@ flowchart TD
    - _Leverage: files/utilities to use
    - _Requirements: requirements that the task implements
    - Success: specific completion criteria
-   - Instructions: "Mark this ONE task as [-] in tasks.md before starting. Follow the loaded implementer guide rules (${disciplineMode === 'full' ? 'TDD required' : 'verification required'}). When done, mark [x] in tasks.md.${disciplineMode !== 'minimal' ? ' Then perform code review using the loaded reviewer guide.' : ''} Do NOT start the next task until ${disciplineMode !== 'minimal' ? 'review is approved' : 'verification passes'}."
+   - Instructions: "Mark this ONE task as [-] in tasks.md before starting. Follow the loaded implementer guide rules (${disciplineMode === 'full' ? 'TDD required' : 'verification required'}). When done, mark [x] in tasks.md.${disciplineMode !== 'minimal' ? ' Then perform code review using the loaded reviewer guide.' : ''}"
    - Start the prompt with "Implement the task for spec {spec-name}, first call get-implementer-guide to load implementation rules then implement the task:"
 6. Create \`tasks.md\` at \`.spec-context/specs/{spec-name}/tasks.md\`
 7. Request approval using approvals tool with action:'request'

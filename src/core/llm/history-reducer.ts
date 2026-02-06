@@ -5,20 +5,124 @@ export interface HistoryReductionResult {
     reduced: boolean;
     droppedCount: number;
     invariantStatus: 'ok' | 'fallback';
+    maskedCount?: number;
+    maskedChars?: number;
+    reductionStage?: 'masking' | 'summarization' | 'fallback';
 }
 
 const DEFAULT_PRESERVE_RECENT = 4;
 const DEFAULT_SUMMARY_MAX_CHARS = 1400;
+const DEFAULT_MAX_OBSERVATION_CHARS = 80;
 
 function contentLength(messages: ChatMessage[]): number {
     return messages.reduce((sum, message) => sum + message.content.length, 0);
 }
 
 function clipText(value: string, maxChars: number): string {
+    if (maxChars <= 0) {
+        return '';
+    }
     if (value.length <= maxChars) {
         return value;
     }
+    if (maxChars <= 3) {
+        return value.slice(0, maxChars);
+    }
     return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+function maskDispatchObservation(content: string, maxChars: number): { masked: string; maskedChars: number } {
+    const beginMarker = 'BEGIN_DISPATCH_RESULT';
+    const endMarker = 'END_DISPATCH_RESULT';
+
+    const beginIndex = content.indexOf(beginMarker);
+    const endIndex = beginIndex >= 0
+        ? content.indexOf(endMarker, beginIndex + beginMarker.length)
+        : -1;
+
+    if (beginIndex < 0 || endIndex < 0 || endIndex < beginIndex) {
+        const standard = clipText(
+            `[observation masked — ${content.length} chars]`,
+            Math.max(1, Math.min(maxChars, content.length))
+        );
+        return {
+            masked: standard,
+            maskedChars: Math.max(0, content.length - standard.length),
+        };
+    }
+
+    const blockEnd = endIndex + endMarker.length;
+    const preservedBlock = content.slice(beginIndex, blockEnd);
+    const outsideLength = beginIndex + (content.length - blockEnd);
+    if (outsideLength <= 0) {
+        return {
+            masked: preservedBlock,
+            maskedChars: Math.max(0, content.length - preservedBlock.length),
+        };
+    }
+
+    const placeholder = clipText(
+        `[dispatch output masked — ${outsideLength} chars]`,
+        Math.max(1, Math.min(maxChars, outsideLength))
+    );
+    const withPlaceholder = `${placeholder}\n${preservedBlock}`;
+    const masked = withPlaceholder.length < content.length
+        ? withPlaceholder
+        : preservedBlock;
+
+    return {
+        masked,
+        maskedChars: Math.max(0, content.length - masked.length),
+    };
+}
+
+function maskStandardObservation(content: string, maxChars: number): { masked: string; maskedChars: number } {
+    const masked = clipText(
+        `[observation masked — ${content.length} chars]`,
+        Math.max(1, Math.min(maxChars, content.length))
+    );
+    return {
+        masked,
+        maskedChars: Math.max(0, content.length - masked.length),
+    };
+}
+
+function maskObservations(
+    messages: ChatMessage[],
+    keepIndices: Set<number>,
+    options: { maxObservationChars: number }
+): { messages: ChatMessage[]; maskedCount: number; maskedChars: number } {
+    let maskedCount = 0;
+    let maskedChars = 0;
+
+    const nextMessages = messages.map((message, index) => {
+        if (keepIndices.has(index) || message.pairRole !== 'result' || message.role !== 'tool') {
+            return { ...message };
+        }
+
+        const hasDispatchMarkers = message.content.includes('BEGIN_DISPATCH_RESULT')
+            && message.content.includes('END_DISPATCH_RESULT');
+        const masked = hasDispatchMarkers
+            ? maskDispatchObservation(message.content, options.maxObservationChars)
+            : maskStandardObservation(message.content, options.maxObservationChars);
+        if (masked.masked === message.content) {
+            return { ...message };
+        }
+
+        maskedCount += 1;
+        maskedChars += masked.maskedChars;
+
+        return {
+            ...message,
+            content: masked.masked,
+        };
+    });
+
+    return {
+        messages: nextMessages,
+        maskedCount,
+        maskedChars,
+    };
 }
 
 function uniqueLines(lines: string[]): string[] {
@@ -176,6 +280,8 @@ export class HistoryReducer {
 
         const preserveRecentRawTurns = options.preserveRecentRawTurns ?? DEFAULT_PRESERVE_RECENT;
         const summaryMaxChars = options.summaryMaxChars ?? DEFAULT_SUMMARY_MAX_CHARS;
+        const observationMasking = options.observationMasking ?? true;
+        const maxObservationChars = options.maxObservationChars ?? DEFAULT_MAX_OBSERVATION_CHARS;
         const pairGroups = collectPairGroups(messages);
         const keep = new Set<number>();
 
@@ -196,7 +302,36 @@ export class HistoryReducer {
 
         includePairMates(keep, pairGroups);
 
-        const summarySource = messages.filter((_, index) => !keep.has(index));
+        const stageOne = observationMasking
+            ? maskObservations(messages, keep, { maxObservationChars })
+            : { messages: messages.map(message => ({ ...message })), maskedCount: 0, maskedChars: 0 };
+        const stageOneMessages = stageOne.messages;
+
+        if (observationMasking && hasPairInvariantViolation(stageOneMessages)) {
+            const fallback = truncationFallback(stageOneMessages, preserveRecentRawTurns);
+            return {
+                ...fallback,
+                maskedCount: stageOne.maskedCount,
+                maskedChars: stageOne.maskedChars,
+                reductionStage: 'fallback',
+            };
+        }
+
+        if (observationMasking && contentLength(stageOneMessages) <= options.maxInputChars) {
+            return {
+                messages: stageOneMessages,
+                reduced: stageOne.maskedCount > 0,
+                droppedCount: 0,
+                invariantStatus: 'ok',
+                maskedCount: stageOne.maskedCount,
+                maskedChars: stageOne.maskedChars,
+                reductionStage: 'masking',
+            };
+        }
+
+        const summarySource = stageOneMessages.filter(
+            (message, index) => !keep.has(index) && message.role !== 'system'
+        );
         const summaryNeeded = summarySource.length > 0;
         const summaryMessage = summaryNeeded
             ? {
@@ -205,22 +340,27 @@ export class HistoryReducer {
               }
             : null;
 
-        const reducedMessages = messages.filter((_, index) => keep.has(index));
+        const reducedMessages = stageOneMessages.filter((_, index) => keep.has(index));
         const withSummary = summaryMessage ? [summaryMessage, ...reducedMessages] : reducedMessages;
 
-        if (hasPairInvariantViolation(withSummary)) {
-            return truncationFallback(messages, preserveRecentRawTurns);
+        if (!hasPairInvariantViolation(withSummary) && contentLength(withSummary) <= options.maxInputChars) {
+            return {
+                messages: withSummary,
+                reduced: true,
+                droppedCount: stageOneMessages.length - reducedMessages.length,
+                invariantStatus: 'ok',
+                maskedCount: stageOne.maskedCount,
+                maskedChars: stageOne.maskedChars,
+                reductionStage: 'summarization',
+            };
         }
 
-        if (contentLength(withSummary) > options.maxInputChars) {
-            return truncationFallback(messages, preserveRecentRawTurns);
-        }
-
+        const fallback = truncationFallback(stageOneMessages, preserveRecentRawTurns);
         return {
-            messages: withSummary,
-            reduced: true,
-            droppedCount: messages.length - reducedMessages.length,
-            invariantStatus: 'ok',
+            ...fallback,
+            maskedCount: stageOne.maskedCount,
+            maskedChars: stageOne.maskedChars,
+            reductionStage: 'fallback',
         };
     }
 }

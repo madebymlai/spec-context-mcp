@@ -623,7 +623,6 @@ Before implementing, use search tools to discover existing patterns:
 **Search Strategies:**
 - \`search\` with type="regex" for exact patterns (function names, imports)
 - \`search\` with type="semantic" for concepts ("error handling", "validation")
-- \`code_research\` for architectural understanding across files
 
 **Examples:**
 - Find existing helpers: search regex "export function" in utils/
