@@ -23,7 +23,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **The problem:** The orchestrator's context grows across dispatch cycles as tool results, subprocess output, and state accumulate. This is the single largest token consumer.
 
-### Start here: Observation Masking (Sliding Window) — P0
+### Start here: Observation Masking (Sliding Window) — P0 [OK]
 
 **What:** Mask/truncate old environment observations (tool outputs, file contents, subprocess stdout) while preserving the agent's full action and reasoning history. JetBrains Research showed this halves per-instance cost while matching LLM-summarization solve rates on SWE-bench Verified.
 
@@ -33,7 +33,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **Maps to our system:** Refine `HistoryReducer` in `src/core/llm/history-reducer.ts` to apply observation-only masking — keep all agent action/reasoning turns but aggressively truncate old `pairRole === 'result'` messages. The `preserveRecentRawTurns` knob already exists. For CLI dispatch, mask verbose subprocess stdout before the structured `BEGIN_DISPATCH_RESULT` block is extracted.
 
-### Then evaluate: Tool-Result Offloading to Filesystem — P0
+### Then evaluate: Tool-Result Offloading to Filesystem — P0 [OK]
 
 **What:** When a tool result exceeds a size threshold (e.g., 20K chars), write it to a temporary file and replace in context with a file-path reference plus a short preview (~10 lines). Prevents a single large result from consuming the entire context window.
 
@@ -57,7 +57,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **Relationship to observation masking:** ACON subsumes observation masking. If you implement ACON fully, observation masking becomes redundant. Start with masking (simple, proven, free); graduate to ACON only if the orchestrator handles long-horizon tasks (15+ dispatch cycles) where masking alone loses important context.
 
-### Later if needed: Context Compaction (Pre-Dispatch) — P1
+### Later if needed: Context Compaction (Pre-Dispatch) — P1 [OK]
 
 **What:** Summarize orchestrator context into compact form before dispatching to subagent. Key insight: aggressive early compaction preserves more working memory than late compaction. Prevents subagents from losing orchestrator-injected rules during their own internal compaction.
 
@@ -101,7 +101,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **Maps to our system:** The spec's `tasks.md` with `[ ]/[-]/[x]` markers is already a progress ledger. `StateSnapshotFact` entries are a task ledger. Gap: the orchestrator re-reads full spec files on each dispatch. Formalize fact/progress extraction so dispatches work from compact ledger state, not raw file content.
 
-### Then: Selective Tool Provision — P1
+### Then: Selective Tool Provision — P1 [OK]
 
 **What:** Expose only relevant MCP tools for the current workflow phase instead of all tools on every call. Fewer tool schemas = smaller host agent prompt. The "Less-is-More" paper shows this also improves accuracy.
 
