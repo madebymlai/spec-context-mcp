@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { resetRegistry, getSessionMode, getVisibilityTier, escalateTier } from './tools/registry.js';
+import { resetRegistry, getSessionMode, getVisibilityTier } from './tools/registry.js';
 
 const handlerMap = new Map<unknown, (request: any) => Promise<any>>();
 const sendToolListChangedMock = vi.fn().mockResolvedValue(undefined);
@@ -109,7 +109,11 @@ describe('SpecContextServer tool visibility gate', () => {
     const callHandler = createServerAndCallHandler();
     handleToolCallMock.mockImplementation(async (name: string) => {
       if (name === 'spec-status') {
-        escalateTier();
+        return {
+          success: true,
+          message: 'ok',
+          meta: { minVisibilityTier: 2 },
+        };
       }
       return { success: true, message: 'ok' };
     });

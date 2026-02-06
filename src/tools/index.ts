@@ -2,6 +2,7 @@ import type { ToolContext as WorkflowToolContext, ToolResponse } from '../workfl
 import { getChunkHoundBridge, SearchArgs, CodeResearchArgs } from '../bridge/chunkhound-bridge.js';
 import { resolveDashboardUrl } from '../core/workflow/dashboard-url.js';
 import { filterVisibleTools } from './registry.js';
+import { TOOL_CATALOG_ORDER, type ToolName } from './catalog.js';
 import { mkdir, readdir, rm, stat, writeFile } from 'fs/promises';
 import { join, relative } from 'path';
 import { randomUUID } from 'crypto';
@@ -289,21 +290,21 @@ ERROR RECOVERY: If incomplete, try narrower query or use path parameter to scope
 
 /** Returns all 10 registered tools (unfiltered). */
 export function getAllTools(): Tool[] {
-    return [
-        // ChunkHound context tools
-        searchTool,
-        codeResearchTool,
-        // Workflow tools
-        specWorkflowGuideTool as Tool,
-        steeringGuideTool as Tool,
-        specStatusTool as Tool,
-        approvalsTool as Tool,
-        waitForApprovalTool as Tool,
-        getImplementerGuideTool as Tool,
-        getReviewerGuideTool as Tool,
-        getBrainstormGuideTool as Tool,
-        dispatchRuntimeTool as Tool,
-    ];
+    const toolsByName: Record<ToolName, Tool> = {
+        search: searchTool,
+        code_research: codeResearchTool,
+        'spec-workflow-guide': specWorkflowGuideTool as Tool,
+        'steering-guide': steeringGuideTool as Tool,
+        'spec-status': specStatusTool as Tool,
+        approvals: approvalsTool as Tool,
+        'wait-for-approval': waitForApprovalTool as Tool,
+        'get-implementer-guide': getImplementerGuideTool as Tool,
+        'get-reviewer-guide': getReviewerGuideTool as Tool,
+        'get-brainstorm-guide': getBrainstormGuideTool as Tool,
+        'dispatch-runtime': dispatchRuntimeTool as Tool,
+    };
+
+    return TOOL_CATALOG_ORDER.map(name => toolsByName[name]);
 }
 
 /** Returns only the tools visible in the current session mode. */

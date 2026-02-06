@@ -10,7 +10,7 @@ import {
 import type { SpecContextConfig } from './config.js';
 import type { ToolResponse, MCPToolResponse } from './workflow-types.js';
 import { getTools, handleToolCall } from './tools/index.js';
-import { processToolCall, isToolVisible, getVisibilityTier } from './tools/registry.js';
+import { processToolCall, isToolVisible, getVisibilityTier, ensureTierAtLeast } from './tools/registry.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
 import { initChunkHoundBridge, resetChunkHoundBridge } from './bridge/chunkhound-bridge.js';
 import { resolveDashboardUrl } from './core/workflow/dashboard-url.js';
@@ -76,6 +76,13 @@ export class SpecContextServer {
                     name,
                     args as Record<string, unknown>
                 );
+
+                if (isToolResponse(result) && result.success) {
+                    const minTier = parseMinVisibilityTier(result);
+                    if (minTier) {
+                        ensureTierAtLeast(minTier);
+                    }
+                }
 
                 const tierAfter = getVisibilityTier();
                 if (tierAfter !== tierBefore) {
@@ -183,6 +190,14 @@ function isToolResponse(value: unknown): value is ToolResponse {
     }
     const candidate = value as ToolResponse;
     return typeof candidate.success === 'boolean' && typeof candidate.message === 'string';
+}
+
+function parseMinVisibilityTier(response: ToolResponse): 1 | 2 | 3 | undefined {
+    const value = response.meta?.minVisibilityTier;
+    if (value === 1 || value === 2 || value === 3) {
+        return value;
+    }
+    return undefined;
 }
 
 function normalizeToolResult(result: unknown): MCPToolResponse {

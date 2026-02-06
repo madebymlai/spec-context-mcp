@@ -118,6 +118,10 @@ export interface ToolResponse {
   message: string;
   data?: any;
   nextSteps?: string[]; // Optional for backwards compatibility
+  meta?: {
+    minVisibilityTier?: 1 | 2 | 3;
+    [key: string]: unknown;
+  };
   projectContext?: {
     projectPath: string;
     workflowRoot: string;

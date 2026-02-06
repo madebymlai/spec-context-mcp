@@ -3,7 +3,6 @@ import { getImplementerGuideHandler } from './get-implementer-guide.js';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { resetRegistry, getVisibilityTier, processToolCall } from '../registry.js';
 
 describe('get-implementer-guide', () => {
   let testDir: string;
@@ -13,7 +12,6 @@ describe('get-implementer-guide', () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     delete process.env.SPEC_CONTEXT_DISCIPLINE;
-    resetRegistry();
 
     testDir = join(tmpdir(), `implementer-guide-test-${Date.now()}`);
     steeringDir = join(testDir, '.spec-context', 'steering');
@@ -22,7 +20,6 @@ describe('get-implementer-guide', () => {
 
   afterEach(() => {
     process.env = originalEnv;
-    resetRegistry();
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true });
     }
@@ -77,6 +74,7 @@ describe('get-implementer-guide', () => {
 
       expect(result.success).toBe(true);
       expect(result.data?.disciplineMode).toBe('full');
+      expect(result.meta?.minVisibilityTier).toBe(2);
     });
 
     it('includes TDD rules in full mode', async () => {
@@ -115,12 +113,14 @@ describe('get-implementer-guide', () => {
       const full = await getImplementerGuideHandler({ mode: 'full', runId: 'run-1' }, createContext());
       expect(full.success).toBe(true);
       expect(full.data?.guideMode).toBe('full');
+      expect(full.meta?.minVisibilityTier).toBe(2);
 
       const compact = await getImplementerGuideHandler({ mode: 'compact', runId: 'run-1' }, createContext());
       expect(compact.success).toBe(true);
       expect(compact.data?.guideMode).toBe('compact');
       expect(compact.data?.guide).toContain('Implementer Compact Guide');
       expect(compact.data?.guide).toContain('strict contract block');
+      expect(compact.meta).toBeUndefined();
     });
 
     it('rejects compact mode without runId', async () => {
@@ -208,49 +208,30 @@ describe('get-implementer-guide', () => {
     });
   });
 
-  describe('tier escalation', () => {
+  describe('visibility hints', () => {
     beforeEach(() => {
       process.env.SPEC_CONTEXT_DISCIPLINE = 'full';
       createSteeringDocs();
-      // Lock mode to implementer so tier starts at L1
-      processToolCall('get-implementer-guide');
     });
 
-    it('escalates tier from L1 to L2 on full guide load', async () => {
-      expect(getVisibilityTier()).toBe(1);
-
-      const result = await getImplementerGuideHandler({}, createContext());
-
+    it('adds minVisibilityTier=2 hint on successful full guide', async () => {
+      const result = await getImplementerGuideHandler({ mode: 'full' }, createContext());
       expect(result.success).toBe(true);
-      expect(getVisibilityTier()).toBe(2);
+      expect(result.meta?.minVisibilityTier).toBe(2);
     });
 
-    it('keeps tier at L2 on repeated full guide loads', async () => {
-      await getImplementerGuideHandler({}, createContext());
-      expect(getVisibilityTier()).toBe(2);
-
-      await getImplementerGuideHandler({}, createContext());
-      expect(getVisibilityTier()).toBe(2);
-    });
-
-    it('does not escalate on compact mode (no full guide built)', async () => {
-      // Load full first to seed cache
+    it('does not add visibility hint on compact guide', async () => {
       await getImplementerGuideHandler({ mode: 'full', runId: 'esc-run' }, createContext());
-      expect(getVisibilityTier()).toBe(2);
-
-      // Compact should not escalate further
       const compact = await getImplementerGuideHandler({ mode: 'compact', runId: 'esc-run' }, createContext());
       expect(compact.success).toBe(true);
-      expect(getVisibilityTier()).toBe(2);
+      expect(compact.meta).toBeUndefined();
     });
 
-    it('does not escalate when steering docs are missing (guide load fails)', async () => {
+    it('does not add visibility hint on failed guide load', async () => {
       rmSync(join(steeringDir, 'tech.md'));
-      expect(getVisibilityTier()).toBe(1);
-
-      const result = await getImplementerGuideHandler({}, createContext());
+      const result = await getImplementerGuideHandler({ mode: 'full' }, createContext());
       expect(result.success).toBe(false);
-      expect(getVisibilityTier()).toBe(1);
+      expect(result.meta).toBeUndefined();
     });
   });
 });

@@ -16,89 +16,31 @@
  */
 import type { Tool } from './index.js';
 import { isDispatchRuntimeV2Enabled } from '../config/dispatch-runtime.js';
+import { ENTRY_POINT_MODE_MAP, TOOL_TIERS_BY_MODE, type ToolName } from './catalog.js';
 
 export type SessionMode = 'undetermined' | 'orchestrator' | 'implementer' | 'reviewer';
 export type VisibilityTier = 1 | 2 | 3;
 
-// --- Tool sets ---
-
-const ALL_TOOLS: ReadonlySet<string> = new Set([
-  'search',
-  'code_research',
-  'spec-workflow-guide',
-  'steering-guide',
-  'spec-status',
-  'approvals',
-  'wait-for-approval',
-  'get-implementer-guide',
-  'get-reviewer-guide',
-  'get-brainstorm-guide',
-  'dispatch-runtime',
-]);
-
-const INITIAL_TOOLS: ReadonlySet<string> = new Set([
-  'spec-workflow-guide',
-  'steering-guide',
-  'get-brainstorm-guide',
-  'get-implementer-guide',
-  'get-reviewer-guide',
-  'spec-status',
-]);
-
-// Orchestrator: already broad, L1 = L2
-const ORCHESTRATOR_L1: ReadonlySet<string> = new Set([
-  'spec-workflow-guide',
-  'steering-guide',
-  'get-brainstorm-guide',
-  'spec-status',
-  'approvals',
-  'wait-for-approval',
-  'dispatch-runtime',
-  'search',
-  'code_research',
-]);
-
-// Implementer: L1 tight, L2 adds code_research
-const IMPLEMENTER_L1: ReadonlySet<string> = new Set([
-  'get-implementer-guide',
-  'spec-status',
-  'search',
-]);
-
-const IMPLEMENTER_L2: ReadonlySet<string> = new Set([
-  ...IMPLEMENTER_L1,
-  'code_research',
-]);
-
-// Reviewer: L1 tight, L2 adds code_research + spec-status
-const REVIEWER_L1: ReadonlySet<string> = new Set([
-  'get-reviewer-guide',
-  'search',
-]);
-
-const REVIEWER_L2: ReadonlySet<string> = new Set([
-  ...REVIEWER_L1,
-  'code_research',
-  'spec-status',
-]);
-
 type TierSets = readonly [ReadonlySet<string>, ReadonlySet<string>, ReadonlySet<string>];
+type ToolTierMap = Record<1 | 2 | 3, readonly ToolName[]>;
+
+function toTierSets(tiers: ToolTierMap): TierSets {
+  return [
+    new Set<string>(tiers[1]),
+    new Set<string>(tiers[2]),
+    new Set<string>(tiers[3]),
+  ];
+}
 
 const MODE_TIERS: Record<SessionMode, TierSets> = {
-  undetermined: [INITIAL_TOOLS, INITIAL_TOOLS, ALL_TOOLS],
-  orchestrator: [ORCHESTRATOR_L1, ORCHESTRATOR_L1, ALL_TOOLS],
-  implementer: [IMPLEMENTER_L1, IMPLEMENTER_L2, ALL_TOOLS],
-  reviewer: [REVIEWER_L1, REVIEWER_L2, ALL_TOOLS],
+  undetermined: toTierSets(TOOL_TIERS_BY_MODE.undetermined),
+  orchestrator: toTierSets(TOOL_TIERS_BY_MODE.orchestrator),
+  implementer: toTierSets(TOOL_TIERS_BY_MODE.implementer),
+  reviewer: toTierSets(TOOL_TIERS_BY_MODE.reviewer),
 };
 
 /** Maps entry-point tool names to the mode they trigger. */
-const ENTRY_POINT_MAP: Record<string, SessionMode> = {
-  'spec-workflow-guide': 'orchestrator',
-  'steering-guide': 'orchestrator',
-  'get-brainstorm-guide': 'orchestrator',
-  'get-implementer-guide': 'implementer',
-  'get-reviewer-guide': 'reviewer',
-};
+const ENTRY_POINT_MAP: Record<string, SessionMode> = ENTRY_POINT_MODE_MAP;
 
 let currentMode: SessionMode = 'undetermined';
 let currentTier: VisibilityTier = 1;

@@ -10,6 +10,7 @@ import {
   ensureTierAtLeast,
 } from './registry.js';
 import type { Tool } from './index.js';
+import { TOOL_CATALOG_ORDER } from './catalog.js';
 
 /** Minimal stubs — only name matters for filtering. */
 function stubTools(names: string[]): Tool[] {
@@ -20,21 +21,7 @@ function stubTools(names: string[]): Tool[] {
   }));
 }
 
-const ALL_TOOL_NAMES = [
-  'search',
-  'code_research',
-  'spec-workflow-guide',
-  'steering-guide',
-  'spec-status',
-  'approvals',
-  'wait-for-approval',
-  'get-implementer-guide',
-  'get-reviewer-guide',
-  'get-brainstorm-guide',
-  'dispatch-runtime',
-];
-
-const ALL_TOOLS = stubTools(ALL_TOOL_NAMES);
+const ALL_TOOLS = stubTools([...TOOL_CATALOG_ORDER]);
 
 describe('registry', () => {
   beforeEach(() => {
