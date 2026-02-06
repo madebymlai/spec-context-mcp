@@ -2,6 +2,9 @@ import type { ToolContext as WorkflowToolContext, ToolResponse } from '../workfl
 import { getChunkHoundBridge, SearchArgs, CodeResearchArgs } from '../bridge/chunkhound-bridge.js';
 import { resolveDashboardUrl } from '../core/workflow/dashboard-url.js';
 import { filterVisibleTools } from './registry.js';
+import { mkdir, readdir, rm, stat, writeFile } from 'fs/promises';
+import { join, relative } from 'path';
+import { randomUUID } from 'crypto';
 
 // Workflow tools
 import {
@@ -48,6 +51,155 @@ export interface Tool {
         type: 'object';
         properties: Record<string, unknown>;
         required?: string[];
+    };
+}
+
+interface OffloadConfig {
+    thresholdChars: number;
+    previewChars: number;
+    previewLines: number;
+    ttlMinutes: number;
+}
+
+function readOffloadConfig(): OffloadConfig {
+    const parsedThreshold = Number(process.env.SPEC_CONTEXT_TOOL_RESULT_OFFLOAD_CHARS ?? 20000);
+    const parsedPreview = Number(process.env.SPEC_CONTEXT_TOOL_RESULT_PREVIEW_CHARS ?? 1200);
+    const parsedPreviewLines = Number(process.env.SPEC_CONTEXT_TOOL_RESULT_PREVIEW_LINES ?? 10);
+    const parsedTtlMinutes = Number(process.env.SPEC_CONTEXT_TOOL_RESULT_TTL_MINUTES ?? 30);
+    return {
+        thresholdChars: Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : 20000,
+        previewChars: Number.isFinite(parsedPreview) && parsedPreview > 0 ? parsedPreview : 1200,
+        previewLines: Number.isFinite(parsedPreviewLines) && parsedPreviewLines > 0 ? parsedPreviewLines : 10,
+        ttlMinutes: Number.isFinite(parsedTtlMinutes) && parsedTtlMinutes > 0 ? parsedTtlMinutes : 30,
+    };
+}
+
+function serializeToolData(data: unknown): { serialized: string; contentType: 'text' | 'json' } | null {
+    if (typeof data === 'undefined') {
+        return null;
+    }
+    if (typeof data === 'string') {
+        return { serialized: data, contentType: 'text' };
+    }
+    try {
+        return {
+            serialized: JSON.stringify(data, null, 2),
+            contentType: 'json',
+        };
+    } catch {
+        return {
+            serialized: String(data),
+            contentType: 'text',
+        };
+    }
+}
+
+function clipPreview(value: string, maxChars: number): string {
+    if (value.length <= maxChars) {
+        return value;
+    }
+    if (maxChars <= 3) {
+        return value.slice(0, maxChars);
+    }
+    return `${value.slice(0, maxChars - 3)}...`;
+}
+
+function isMeaningfulPreviewLine(line: string): boolean {
+    const trimmed = line.trim();
+    if (!trimmed) {
+        return false;
+    }
+    return !/^[\[\]{}(),]+$/.test(trimmed);
+}
+
+function buildMeaningfulPreview(serialized: string, maxLines: number, maxChars: number): string {
+    const lines = serialized.split(/\r?\n/);
+    const selected: string[] = [];
+    for (const line of lines) {
+        if (!isMeaningfulPreviewLine(line)) {
+            continue;
+        }
+        selected.push(line.trim());
+        if (selected.length >= maxLines) {
+            break;
+        }
+    }
+
+    if (selected.length === 0) {
+        return clipPreview(serialized.trim(), maxChars);
+    }
+
+    return clipPreview(selected.join('\n'), maxChars);
+}
+
+async function cleanupExpiredOffloads(outputDir: string, ttlMinutes: number): Promise<void> {
+    const ttlMs = ttlMinutes * 60 * 1000;
+    const cutoff = Date.now() - ttlMs;
+    let entries: string[] = [];
+    try {
+        entries = await readdir(outputDir);
+    } catch {
+        return;
+    }
+
+    await Promise.all(entries.map(async entry => {
+        const entryPath = join(outputDir, entry);
+        try {
+            const fileStat = await stat(entryPath);
+            if (!fileStat.isFile()) {
+                return;
+            }
+            if (fileStat.mtimeMs < cutoff) {
+                await rm(entryPath, { force: true });
+            }
+        } catch {
+            // Best-effort cleanup only.
+        }
+    }));
+}
+
+async function maybeOffloadToolResponse(
+    toolName: string,
+    response: ToolResponse,
+    context: WorkflowToolContext
+): Promise<ToolResponse> {
+    if (!response.success) {
+        return response;
+    }
+
+    const serialized = serializeToolData(response.data);
+    if (!serialized) {
+        return response;
+    }
+
+    const config = readOffloadConfig();
+    if (serialized.serialized.length <= config.thresholdChars) {
+        return response;
+    }
+
+    const outputDir = join(context.projectPath, '.spec-context', 'tmp', 'tool-results');
+    await mkdir(outputDir, { recursive: true });
+    await cleanupExpiredOffloads(outputDir, config.ttlMinutes);
+    const extension = serialized.contentType === 'json' ? 'json' : 'txt';
+    const filename = `${toolName}-${Date.now()}-${randomUUID().slice(0, 8)}.${extension}`;
+    const absolutePath = join(outputDir, filename);
+    await writeFile(absolutePath, serialized.serialized, 'utf8');
+
+    const relativePath = relative(context.projectPath, absolutePath);
+    return {
+        ...response,
+        data: {
+            offloaded: true,
+            tool: toolName,
+            path: relativePath,
+            contentType: serialized.contentType,
+            originalSize: serialized.serialized.length,
+            preview: buildMeaningfulPreview(serialized.serialized, config.previewLines, config.previewChars),
+        },
+        nextSteps: [
+            ...(response.nextSteps ?? []),
+            `Large tool output was offloaded to ${relativePath}`,
+        ],
     };
 }
 
@@ -182,49 +334,63 @@ export async function handleToolCall(
         data,
     });
 
+    let rawResponse: ToolResponse;
     switch (name) {
         // ChunkHound context tools
         case 'search': {
             const bridge = getChunkHoundBridge(wfCtx.projectPath);
             const result = await bridge.search(args as unknown as SearchArgs);
-            return buildSuccess('Search completed', result);
+            rawResponse = buildSuccess('Search completed', result);
+            break;
         }
 
         case 'code_research': {
             const bridge = getChunkHoundBridge(wfCtx.projectPath);
             const result = await bridge.codeResearch(args as unknown as CodeResearchArgs);
-            return buildSuccess('Code research completed', result);
+            rawResponse = buildSuccess('Code research completed', result);
+            break;
         }
 
         // Workflow tools
         case 'spec-workflow-guide':
-            return specWorkflowGuideHandler(args, wfCtx);
+            rawResponse = await specWorkflowGuideHandler(args, wfCtx);
+            break;
 
         case 'steering-guide':
-            return steeringGuideHandler(args, wfCtx);
+            rawResponse = await steeringGuideHandler(args, wfCtx);
+            break;
 
         case 'spec-status':
-            return specStatusHandler(args, wfCtx);
+            rawResponse = await specStatusHandler(args, wfCtx);
+            break;
 
         case 'approvals':
-            return approvalsHandler(args as any, wfCtx);
+            rawResponse = await approvalsHandler(args as any, wfCtx);
+            break;
 
         case 'wait-for-approval':
-            return waitForApprovalHandler(args as any, wfCtx);
+            rawResponse = await waitForApprovalHandler(args as any, wfCtx);
+            break;
 
         case 'get-implementer-guide':
-            return getImplementerGuideHandler(args, wfCtx);
+            rawResponse = await getImplementerGuideHandler(args, wfCtx);
+            break;
 
         case 'get-reviewer-guide':
-            return getReviewerGuideHandler(args, wfCtx);
+            rawResponse = await getReviewerGuideHandler(args, wfCtx);
+            break;
 
         case 'get-brainstorm-guide':
-            return getBrainstormGuideHandler(args, wfCtx);
+            rawResponse = await getBrainstormGuideHandler(args, wfCtx);
+            break;
 
         case 'dispatch-runtime':
-            return dispatchRuntimeHandler(args, wfCtx);
+            rawResponse = await dispatchRuntimeHandler(args, wfCtx);
+            break;
 
         default:
             throw new Error(`Unknown tool: ${name}`);
     }
+
+    return maybeOffloadToolResponse(name, rawResponse, wfCtx);
 }

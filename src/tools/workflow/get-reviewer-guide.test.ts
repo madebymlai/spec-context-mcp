@@ -115,6 +115,30 @@ describe('get-reviewer-guide', () => {
       expect(result.data?.searchGuidance).toContain('Search');
       expect(result.data?.searchGuidance).toContain('Duplicates');
     });
+
+    it('supports compact mode after caching full guide for a run', async () => {
+      const full = await getReviewerGuideHandler({ mode: 'full', runId: 'run-r1' }, createContext());
+      expect(full.success).toBe(true);
+      expect(full.data?.guideMode).toBe('full');
+
+      const compact = await getReviewerGuideHandler({ mode: 'compact', runId: 'run-r1' }, createContext());
+      expect(compact.success).toBe(true);
+      expect(compact.data?.guideMode).toBe('compact');
+      expect(compact.data?.guide).toContain('Reviewer Compact Guide');
+      expect(compact.data?.guide).toContain('strict contract block');
+    });
+
+    it('rejects compact mode without runId', async () => {
+      const result = await getReviewerGuideHandler({ mode: 'compact' }, createContext());
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('requires runId');
+    });
+
+    it('rejects compact mode when cache is missing', async () => {
+      const result = await getReviewerGuideHandler({ mode: 'compact', runId: 'missing-review-run' }, createContext());
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Call get-reviewer-guide with mode:"full" first');
+    });
   });
 
   describe('standard mode', () => {

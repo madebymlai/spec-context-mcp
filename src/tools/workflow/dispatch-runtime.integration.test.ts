@@ -59,6 +59,8 @@ describe('dispatch-runtime integration (no mocks)', () => {
       });
       expect(compileImplementer.success).toBe(true);
       expect(compileImplementer.data?.stablePrefixHash).toHaveLength(64);
+      expect(compileImplementer.data?.guideMode).toBe('full');
+      expect(compileImplementer.data?.prompt).toContain('"mode":"full"');
 
       const implementerOutputPath = join(projectPath, 'impl.log');
       await writeFile(
@@ -92,6 +94,8 @@ END_DISPATCH_RESULT`,
       });
       expect(compileReviewer.success).toBe(true);
       expect(compileReviewer.data?.deltaPacket?.previous_implementer_summary).toBe('Parser implemented');
+      expect(compileReviewer.data?.guideMode).toBe('full');
+      expect(compileReviewer.data?.prompt).toContain('"mode":"full"');
 
       const reviewerOutputPath = join(projectPath, 'review.log');
       await writeFile(
@@ -121,6 +125,18 @@ END_DISPATCH_RESULT`,
       });
       expect(Number(telemetryAfter.data?.dispatch_count)).toBeGreaterThanOrEqual(dispatchBefore + 2);
       expect(Number(telemetryAfter.data?.approval_loops)).toBeGreaterThanOrEqual(loopsBefore + 1);
+
+      const compileImplementerAgain = await callDispatch(projectPath, {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: 'Implement parser follow-up',
+        maxOutputTokens: 500,
+      });
+      expect(compileImplementerAgain.success).toBe(true);
+      expect(compileImplementerAgain.data?.guideMode).toBe('compact');
+      expect(compileImplementerAgain.data?.prompt).toContain('"mode":"compact"');
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }

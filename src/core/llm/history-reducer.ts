@@ -8,14 +8,29 @@ export interface HistoryReductionResult {
     maskedCount?: number;
     maskedChars?: number;
     reductionStage?: 'masking' | 'summarization' | 'fallback';
+    beforeTokens?: number;
+    afterTokens?: number;
+    compressionRatio?: number;
+    stageUsed?: 'none' | 'masking' | 'summarization' | 'fallback';
 }
 
 const DEFAULT_PRESERVE_RECENT = 4;
 const DEFAULT_SUMMARY_MAX_CHARS = 1400;
 const DEFAULT_MAX_OBSERVATION_CHARS = 80;
+const DEFAULT_MIN_OBSERVATION_CHARS = 24;
+const DEFAULT_OBSERVATION_DIGEST_CHARS = 48;
+const DEFAULT_TOKEN_CHARS_PER_TOKEN = 4;
 
 function contentLength(messages: ChatMessage[]): number {
     return messages.reduce((sum, message) => sum + message.content.length, 0);
+}
+
+function estimateTokensFromChars(chars: number, charsPerToken: number): number {
+    return Math.ceil(chars / Math.max(1, charsPerToken));
+}
+
+function estimateTokens(messages: ChatMessage[], charsPerToken: number): number {
+    return estimateTokensFromChars(contentLength(messages), charsPerToken);
 }
 
 function clipText(value: string, maxChars: number): string {
@@ -31,18 +46,66 @@ function clipText(value: string, maxChars: number): string {
     return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
-function maskDispatchObservation(content: string, maxChars: number): { masked: string; maskedChars: number } {
+function normalizeInlineText(value: string): string {
+    return value.replace(/\s+/g, ' ').trim();
+}
+
+function extractObservationDigest(content: string, maxChars: number): string {
+    const normalized = normalizeInlineText(content);
+    if (!normalized) {
+        return 'empty';
+    }
+
+    const taskId = normalized.match(/"task_id"\s*:\s*"([^"]+)"/)?.[1];
+    const status = normalized.match(/"status"\s*:\s*"([^"]+)"/)?.[1];
+    const assessment = normalized.match(/"assessment"\s*:\s*"([^"]+)"/)?.[1];
+    const command = normalized.match(/"command"\s*:\s*"([^"]+)"/)?.[1];
+    const digestParts = [
+        taskId ? `task_id=${taskId}` : null,
+        status ? `status=${status}` : null,
+        assessment ? `assessment=${assessment}` : null,
+        command ? `cmd=${command}` : null,
+    ].filter(Boolean) as string[];
+
+    if (digestParts.length > 0) {
+        return clipText(digestParts.join(' '), maxChars);
+    }
+
+    return clipText(normalized, maxChars);
+}
+
+function maskDispatchObservation(
+    content: string,
+    maxChars: number,
+    digestChars: number
+): { masked: string; maskedChars: number } {
     const beginMarker = 'BEGIN_DISPATCH_RESULT';
     const endMarker = 'END_DISPATCH_RESULT';
 
-    const beginIndex = content.indexOf(beginMarker);
-    const endIndex = beginIndex >= 0
-        ? content.indexOf(endMarker, beginIndex + beginMarker.length)
-        : -1;
+    const blocks: string[] = [];
+    let outsideChars = 0;
+    let cursor = 0;
 
-    if (beginIndex < 0 || endIndex < 0 || endIndex < beginIndex) {
+    while (cursor < content.length) {
+        const beginIndex = content.indexOf(beginMarker, cursor);
+        if (beginIndex < 0) {
+            outsideChars += content.length - cursor;
+            break;
+        }
+        outsideChars += Math.max(0, beginIndex - cursor);
+        const endIndex = content.indexOf(endMarker, beginIndex + beginMarker.length);
+        if (endIndex < 0 || endIndex < beginIndex) {
+            blocks.length = 0;
+            break;
+        }
+        const blockEnd = endIndex + endMarker.length;
+        blocks.push(content.slice(beginIndex, blockEnd));
+        cursor = blockEnd;
+    }
+
+    if (blocks.length === 0) {
         const standard = clipText(
-            `[observation masked — ${content.length} chars]`,
+            `[observation masked - ${content.length} chars | digest: ${extractObservationDigest(content, digestChars)}]`,
             Math.max(1, Math.min(maxChars, content.length))
         );
         return {
@@ -51,24 +114,21 @@ function maskDispatchObservation(content: string, maxChars: number): { masked: s
         };
     }
 
-    const blockEnd = endIndex + endMarker.length;
-    const preservedBlock = content.slice(beginIndex, blockEnd);
-    const outsideLength = beginIndex + (content.length - blockEnd);
-    if (outsideLength <= 0) {
+    const preservedBlocks = blocks.join('\n');
+    if (outsideChars <= 0) {
         return {
-            masked: preservedBlock,
-            maskedChars: Math.max(0, content.length - preservedBlock.length),
+            masked: preservedBlocks,
+            maskedChars: Math.max(0, content.length - preservedBlocks.length),
         };
     }
 
+    const digest = extractObservationDigest(content, digestChars);
     const placeholder = clipText(
-        `[dispatch output masked — ${outsideLength} chars]`,
-        Math.max(1, Math.min(maxChars, outsideLength))
+        `[dispatch output masked - ${outsideChars} chars | blocks: ${blocks.length} | digest: ${digest}]`,
+        Math.max(1, Math.min(maxChars, outsideChars))
     );
-    const withPlaceholder = `${placeholder}\n${preservedBlock}`;
-    const masked = withPlaceholder.length < content.length
-        ? withPlaceholder
-        : preservedBlock;
+    const withPlaceholder = `${placeholder}\n${preservedBlocks}`;
+    const masked = withPlaceholder.length < content.length ? withPlaceholder : preservedBlocks;
 
     return {
         masked,
@@ -76,9 +136,14 @@ function maskDispatchObservation(content: string, maxChars: number): { masked: s
     };
 }
 
-function maskStandardObservation(content: string, maxChars: number): { masked: string; maskedChars: number } {
+function maskStandardObservation(
+    content: string,
+    maxChars: number,
+    digestChars: number
+): { masked: string; maskedChars: number } {
+    const digest = extractObservationDigest(content, digestChars);
     const masked = clipText(
-        `[observation masked — ${content.length} chars]`,
+        `[observation masked - ${content.length} chars | digest: ${digest}]`,
         Math.max(1, Math.min(maxChars, content.length))
     );
     return {
@@ -90,10 +155,11 @@ function maskStandardObservation(content: string, maxChars: number): { masked: s
 function maskObservations(
     messages: ChatMessage[],
     keepIndices: Set<number>,
-    options: { maxObservationChars: number }
+    options: { maxObservationChars: number; observationDigestChars?: number }
 ): { messages: ChatMessage[]; maskedCount: number; maskedChars: number } {
     let maskedCount = 0;
     let maskedChars = 0;
+    const digestChars = options.observationDigestChars ?? DEFAULT_OBSERVATION_DIGEST_CHARS;
 
     const nextMessages = messages.map((message, index) => {
         if (keepIndices.has(index) || message.pairRole !== 'result' || message.role !== 'tool') {
@@ -103,8 +169,8 @@ function maskObservations(
         const hasDispatchMarkers = message.content.includes('BEGIN_DISPATCH_RESULT')
             && message.content.includes('END_DISPATCH_RESULT');
         const masked = hasDispatchMarkers
-            ? maskDispatchObservation(message.content, options.maxObservationChars)
-            : maskStandardObservation(message.content, options.maxObservationChars);
+            ? maskDispatchObservation(message.content, options.maxObservationChars, digestChars)
+            : maskStandardObservation(message.content, options.maxObservationChars, digestChars);
         if (masked.masked === message.content) {
             return { ...message };
         }
@@ -123,6 +189,52 @@ function maskObservations(
         maskedCount,
         maskedChars,
     };
+}
+
+function resolveTokenBudget(options: HistoryReducerOptions): { maxInputTokens: number; tokenCharsPerToken: number } {
+    const tokenCharsPerToken = options.tokenCharsPerToken ?? DEFAULT_TOKEN_CHARS_PER_TOKEN;
+    const maxInputTokens = options.maxInputTokens ?? estimateTokensFromChars(
+        Math.max(1, options.maxInputChars),
+        tokenCharsPerToken
+    );
+    return {
+        maxInputTokens: Math.max(1, maxInputTokens),
+        tokenCharsPerToken: Math.max(1, tokenCharsPerToken),
+    };
+}
+
+function computeAdaptiveMaskChars(
+    messages: ChatMessage[],
+    keep: Set<number>,
+    options: {
+        baseMaxObservationChars: number;
+        minObservationChars: number;
+        maxInputTokens: number;
+        beforeTokens: number;
+    }
+): number {
+    const candidates = messages.filter(
+        (message, index) => !keep.has(index) && message.role === 'tool' && message.pairRole === 'result'
+    );
+    if (candidates.length === 0) {
+        return options.baseMaxObservationChars;
+    }
+
+    const deficit = Math.max(0, options.beforeTokens - options.maxInputTokens);
+    if (deficit <= 0) {
+        return options.baseMaxObservationChars;
+    }
+
+    const effectiveMinObservationChars = Math.min(options.minObservationChars, options.baseMaxObservationChars);
+    const pressure = Math.min(1, deficit / Math.max(1, options.maxInputTokens));
+    const scarcity = candidates.length <= 2 ? 1 : 0.75;
+    const adjusted = Math.round(
+        options.baseMaxObservationChars - (
+            (options.baseMaxObservationChars - effectiveMinObservationChars) * pressure * scarcity
+        )
+    );
+
+    return Math.max(effectiveMinObservationChars, Math.min(options.baseMaxObservationChars, adjusted));
 }
 
 function uniqueLines(lines: string[]): string[] {
@@ -259,29 +371,55 @@ function truncationFallback(
 }
 
 export class HistoryReducer {
+    private withTelemetry(
+        result: HistoryReductionResult,
+        beforeTokens: number,
+        tokenCharsPerToken: number,
+        stage: 'none' | 'masking' | 'summarization' | 'fallback',
+        maskedCount: number,
+        maskedChars: number
+    ): HistoryReductionResult {
+        const afterTokens = estimateTokens(result.messages, tokenCharsPerToken);
+        const compressionRatio = beforeTokens > 0 ? afterTokens / beforeTokens : 1;
+        return {
+            ...result,
+            maskedCount,
+            maskedChars,
+            reductionStage: stage === 'none' ? result.reductionStage : stage,
+            stageUsed: stage,
+            beforeTokens,
+            afterTokens,
+            compressionRatio,
+        };
+    }
+
     reduce(messages: ChatMessage[], options: HistoryReducerOptions): HistoryReductionResult {
-        if (!options.enabled || options.maxInputChars <= 0 || messages.length <= 2) {
-            return {
+        if (!options.enabled || messages.length <= 2) {
+            return this.withTelemetry({
                 messages,
                 reduced: false,
                 droppedCount: 0,
                 invariantStatus: 'ok',
-            };
+            }, 0, DEFAULT_TOKEN_CHARS_PER_TOKEN, 'none', 0, 0);
         }
 
-        if (contentLength(messages) <= options.maxInputChars) {
-            return {
+        const { maxInputTokens, tokenCharsPerToken } = resolveTokenBudget(options);
+        const beforeTokens = estimateTokens(messages, tokenCharsPerToken);
+
+        if (beforeTokens <= maxInputTokens) {
+            return this.withTelemetry({
                 messages,
                 reduced: false,
                 droppedCount: 0,
                 invariantStatus: 'ok',
-            };
+            }, beforeTokens, tokenCharsPerToken, 'none', 0, 0);
         }
 
         const preserveRecentRawTurns = options.preserveRecentRawTurns ?? DEFAULT_PRESERVE_RECENT;
         const summaryMaxChars = options.summaryMaxChars ?? DEFAULT_SUMMARY_MAX_CHARS;
-        const observationMasking = options.observationMasking ?? true;
-        const maxObservationChars = options.maxObservationChars ?? DEFAULT_MAX_OBSERVATION_CHARS;
+        const baseMaxObservationChars = options.maxObservationChars ?? DEFAULT_MAX_OBSERVATION_CHARS;
+        const minObservationChars = options.minObservationChars ?? DEFAULT_MIN_OBSERVATION_CHARS;
+        const observationDigestChars = options.observationDigestChars ?? DEFAULT_OBSERVATION_DIGEST_CHARS;
         const pairGroups = collectPairGroups(messages);
         const keep = new Set<number>();
 
@@ -302,31 +440,34 @@ export class HistoryReducer {
 
         includePairMates(keep, pairGroups);
 
-        const stageOne = observationMasking
-            ? maskObservations(messages, keep, { maxObservationChars })
-            : { messages: messages.map(message => ({ ...message })), maskedCount: 0, maskedChars: 0 };
+        const adaptiveMaxObservationChars = computeAdaptiveMaskChars(messages, keep, {
+            baseMaxObservationChars,
+            minObservationChars,
+            maxInputTokens,
+            beforeTokens,
+        });
+        const stageOne = maskObservations(messages, keep, {
+            maxObservationChars: adaptiveMaxObservationChars,
+            observationDigestChars,
+        });
         const stageOneMessages = stageOne.messages;
 
-        if (observationMasking && hasPairInvariantViolation(stageOneMessages)) {
+        if (hasPairInvariantViolation(stageOneMessages)) {
             const fallback = truncationFallback(stageOneMessages, preserveRecentRawTurns);
-            return {
+            return this.withTelemetry({
                 ...fallback,
-                maskedCount: stageOne.maskedCount,
-                maskedChars: stageOne.maskedChars,
                 reductionStage: 'fallback',
-            };
+            }, beforeTokens, tokenCharsPerToken, 'fallback', stageOne.maskedCount, stageOne.maskedChars);
         }
 
-        if (observationMasking && contentLength(stageOneMessages) <= options.maxInputChars) {
-            return {
+        if (estimateTokens(stageOneMessages, tokenCharsPerToken) <= maxInputTokens) {
+            return this.withTelemetry({
                 messages: stageOneMessages,
                 reduced: stageOne.maskedCount > 0,
                 droppedCount: 0,
                 invariantStatus: 'ok',
-                maskedCount: stageOne.maskedCount,
-                maskedChars: stageOne.maskedChars,
                 reductionStage: 'masking',
-            };
+            }, beforeTokens, tokenCharsPerToken, 'masking', stageOne.maskedCount, stageOne.maskedChars);
         }
 
         const summarySource = stageOneMessages.filter(
@@ -343,24 +484,20 @@ export class HistoryReducer {
         const reducedMessages = stageOneMessages.filter((_, index) => keep.has(index));
         const withSummary = summaryMessage ? [summaryMessage, ...reducedMessages] : reducedMessages;
 
-        if (!hasPairInvariantViolation(withSummary) && contentLength(withSummary) <= options.maxInputChars) {
-            return {
+        if (!hasPairInvariantViolation(withSummary) && estimateTokens(withSummary, tokenCharsPerToken) <= maxInputTokens) {
+            return this.withTelemetry({
                 messages: withSummary,
                 reduced: true,
                 droppedCount: stageOneMessages.length - reducedMessages.length,
                 invariantStatus: 'ok',
-                maskedCount: stageOne.maskedCount,
-                maskedChars: stageOne.maskedChars,
                 reductionStage: 'summarization',
-            };
+            }, beforeTokens, tokenCharsPerToken, 'summarization', stageOne.maskedCount, stageOne.maskedChars);
         }
 
         const fallback = truncationFallback(stageOneMessages, preserveRecentRawTurns);
-        return {
+        return this.withTelemetry({
             ...fallback,
-            maskedCount: stageOne.maskedCount,
-            maskedChars: stageOne.maskedChars,
             reductionStage: 'fallback',
-        };
+        }, beforeTokens, tokenCharsPerToken, 'fallback', stageOne.maskedCount, stageOne.maskedChars);
     }
 }

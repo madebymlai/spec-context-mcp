@@ -89,6 +89,34 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      - \`outputFilePath: "/tmp/spec-review.log"\`` : `
    - Runtime v2 disabled: evaluate reviewer verdict from structured final output manually`;
 
+  const implementerDispatchCommand = dispatchRuntimeV2
+    ? `${implementerCli} "{compiled implementer prompt from dispatch-runtime}" > /tmp/spec-impl.log 2>&1`
+    : `${implementerCli} "Implement the task for spec ${specName}, first call get-implementer-guide to load implementation rules then implement the task: [task prompt content from _Prompt field]." > /tmp/spec-impl.log 2>&1`;
+
+  const reviewerDispatchBlock = reviewerCli
+    ? dispatchRuntimeV2
+      ? `   - First call \`dispatch-runtime\` with:
+     - \`action: "compile_prompt"\`
+     - \`runId: "{runId from step 4}"\`
+     - \`role: "reviewer"\`
+     - \`taskId: "${taskId || '{taskId}'}"\`
+     - \`taskPrompt: "{review prompt + base SHA + diff scope}"\`
+     - \`maxOutputTokens: 1200\`
+   - Use returned \`prompt\` as the exact reviewer dispatch payload.
+   - Dispatch to reviewer agent via bash (redirect output to log):
+     \`\`\`bash
+     ${reviewerCli} "{compiled reviewer prompt from dispatch-runtime}" > /tmp/spec-review.log 2>&1
+     \`\`\`
+${reviewIngestStep}`
+      : `   - Dispatch to reviewer agent via bash (redirect output to log):
+     \`\`\`bash
+     ${reviewerCli} "Review task ${taskId || '{taskId}'} for spec ${specName}. Base SHA: {base-sha from step 2}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1
+     \`\`\`
+${reviewIngestStep}`
+    : `   - No reviewer CLI configured — review the implementation yourself
+   - Run \`git diff {base-sha}..HEAD\` to see changes
+   - Call get-reviewer-guide for review criteria`;
+
   const runtimeGuideline = dispatchRuntimeV2
     ? '- Never branch orchestration logic from raw logs — only from \`dispatch-runtime\` structured results'
     : '- Runtime v2 disabled: prefer minimal log reads and deterministic task markers';
@@ -161,7 +189,7 @@ ${dispatchRuntimeV2 ? '6.' : '5.'} **Build and Dispatch to Implementer Agent** (
    - ${dispatchRuntimeV2 ? 'Use compiled prompt from dispatch-runtime compile_prompt action' : 'Build the task prompt from the _Prompt field content'}
    - Dispatch via bash:
      \`\`\`bash
-     ${implementerCli} "Implement the task for spec ${specName}, first call get-implementer-guide to load implementation rules then implement the task: [task prompt content from _Prompt field]." > /tmp/spec-impl.log 2>&1
+     ${implementerDispatchCommand}
      \`\`\`
    - Agent output must end with strict contract markers (\`BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT\`)
    - WAIT for the command to complete — do not proceed until done
@@ -177,13 +205,7 @@ ${dispatchRuntimeV2 ? '8.' : '7.'} **Verify Completion:**
      \`\`\`
 
 ${reviewsEnabled ? `${dispatchRuntimeV2 ? '9' : '8'}. **Dispatch Review:**` : `${dispatchRuntimeV2 ? '9' : '8'}. **Skip Review (minimal mode):**`}
-${reviewerCli ? `   - Dispatch to reviewer agent via bash (redirect output to log):
-     \`\`\`bash
-     ${reviewerCli} "Review task ${taskId || '{taskId}'} for spec ${specName}. Base SHA: {base-sha from step 2}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1
-     \`\`\`
-${reviewIngestStep}` : `   - No reviewer CLI configured — review the implementation yourself
-   - Run \`git diff {base-sha}..HEAD\` to see changes
-   - Call get-reviewer-guide for review criteria`}
+${reviewerDispatchBlock}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: this task is done
 

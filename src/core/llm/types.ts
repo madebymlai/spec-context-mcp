@@ -177,13 +177,22 @@ export interface ChatInterceptionReport {
 
 export interface HistoryReducerOptions {
     enabled?: boolean;
+    /** Character budget input used to derive token budget when maxInputTokens is not provided. */
     maxInputChars: number;
+    /** Preferred budget control; reducer decisions are token-based. */
+    maxInputTokens?: number;
     preserveRecentRawTurns?: number;
     summaryMaxChars?: number;
     /** Defaults to true when history reduction is enabled. */
     observationMasking?: boolean;
     /** Defaults to 80 when observation masking is enabled. */
     maxObservationChars?: number;
+    /** Lower bound for adaptive masking strength. Defaults to 24. */
+    minObservationChars?: number;
+    /** Optional one-line digest length embedded in masked observation placeholders. Defaults to 48. */
+    observationDigestChars?: number;
+    /** Approximate chars per token for budget estimation. Defaults to 4. */
+    tokenCharsPerToken?: number;
 }
 
 export interface ChatRuntimeOptions {

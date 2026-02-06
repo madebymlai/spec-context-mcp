@@ -301,7 +301,7 @@ ${dispatchRuntimeV2 ? `4. **Initialize runtime state for this task**:
    - Save \`runId\` for subsequent ingest calls.` : `4. **Runtime v2 disabled**:
    - Use legacy dispatch flow with minimal log inspection.`}
 5. **Dispatch to implementer agent via bash** (redirect output to log):
-${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
+   ${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
      - \`action: "compile_prompt"\`
      - \`runId: "{runId}"\`
      - \`role: "implementer"\`
@@ -310,7 +310,9 @@ ${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
      - \`maxOutputTokens: 1200\`
    - Use returned \`prompt\` for dispatch.` : ''}
    \`\`\`bash
-   ${implementerCli} "Implement the task for spec {spec-name}, first call get-implementer-guide to load implementation rules then implement the task: {task prompt content}." > /tmp/spec-impl.log 2>&1
+   ${dispatchRuntimeV2
+     ? `${implementerCli} "{compiled implementer prompt from dispatch-runtime}" > /tmp/spec-impl.log 2>&1`
+     : `${implementerCli} "Implement the task for spec {spec-name}, first call get-implementer-guide to load implementation rules then implement the task: {task prompt content}." > /tmp/spec-impl.log 2>&1`}
    \`\`\`
    - Implementer LAST output must be strict contract markers \`BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT\`
    - Wait for the command to complete before proceeding
@@ -331,8 +333,18 @@ ${dispatchRuntimeV2 ? `6. **Ingest implementer output (no raw-log orchestration)
      git diff {base-sha}..HEAD
      \`\`\`
 8. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
-${reviewerCli ? `   \`\`\`bash
-   ${reviewerCli} "Review task {taskId} for spec {spec-name}. Base SHA: {base-sha}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1
+${reviewerCli ? `${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
+     - \`action: "compile_prompt"\`
+     - \`runId: "{runId}"\`
+     - \`role: "reviewer"\`
+     - \`taskId: "{taskId}"\`
+     - \`taskPrompt: "{review prompt + base SHA + diff scope}"\`
+     - \`maxOutputTokens: 1200\`
+   - Use returned \`prompt\` for reviewer dispatch.` : ''}
+   \`\`\`bash
+   ${dispatchRuntimeV2
+     ? `${reviewerCli} "{compiled reviewer prompt from dispatch-runtime}" > /tmp/spec-review.log 2>&1`
+     : `${reviewerCli} "Review task {taskId} for spec {spec-name}. Base SHA: {base-sha}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1`}
    \`\`\`
 ${dispatchRuntimeV2 ? `   - Call \`dispatch-runtime\` with:
      - \`action: "ingest_output"\`
@@ -379,6 +391,7 @@ Reviews are disabled in minimal mode. Focus on verification before completion.
 
 For EACH task:
 1. **Implement**: Dispatch to \`${implementerCli}\` via bash — agent calls \`get-implementer-guide\`, follows ${disciplineMode === 'full' ? 'TDD' : 'verification'} rules, marks [x]
+   - Guide policy: call \`get-implementer-guide\` in \`mode:"full"\` once per run, then \`mode:"compact"\` on later tasks
 2. **Review**: ${reviewerCli ? `Dispatch to \`${reviewerCli}\` via bash` : 'Review directly (using loaded `get-reviewer-guide`)'} — check spec compliance, code quality, principles
 3. **Handle feedback:**
    - If issues found: dispatch implementer again to fix, re-verify, ${reviewerCli ? 'dispatch reviewer again' : 're-review'}

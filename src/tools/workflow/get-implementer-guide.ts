@@ -8,6 +8,17 @@ import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getDisciplineMode } from '../../config/discipline.js';
 import { getSteeringDocs, getMissingSteeringDocs } from './steering-loader.js';
 
+type GuideMode = 'full' | 'compact';
+
+interface ImplementerGuideCacheEntry {
+  guide: string;
+  disciplineMode: 'full' | 'standard' | 'minimal';
+  steering: Record<string, string>;
+  cachedAt: string;
+}
+
+const implementerGuideCache = new Map<string, ImplementerGuideCacheEntry>();
+
 export const getImplementerGuideTool: Tool = {
   name: 'get-implementer-guide',
   description: `Load implementation rules for a dispatched implementer agent. FOR IMPLEMENTER SUB-AGENTS ONLY.
@@ -24,16 +35,69 @@ Returns (based on discipline mode):
 Fails if required steering docs (tech.md, principles.md) are missing.`,
   inputSchema: {
     type: 'object',
-    properties: {},
+    properties: {
+      mode: {
+        type: 'string',
+        enum: ['full', 'compact'],
+        description: 'Guide mode. Use "full" on first dispatch for a run, then "compact" for subsequent tasks in the same run.',
+      },
+      runId: {
+        type: 'string',
+        description: 'Required for compact mode. Stable dispatch runtime runId used for guide cache lookup.',
+      },
+    },
     additionalProperties: false
   }
 };
 
 export async function getImplementerGuideHandler(
-  _args: unknown,
+  args: unknown,
   context: ToolContext
 ): Promise<ToolResponse> {
-  const mode = getDisciplineMode();
+  const input = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
+  const guideMode = String(input.mode ?? 'full').trim() as GuideMode;
+  const runId = String(input.runId ?? '').trim();
+  if (guideMode !== 'full' && guideMode !== 'compact') {
+    return {
+      success: false,
+      message: 'mode must be one of: full, compact',
+    };
+  }
+
+  const cacheKey = runId ? buildGuideCacheKey(runId) : '';
+  if (guideMode === 'compact') {
+    if (!runId) {
+      return {
+        success: false,
+        message: 'compact mode requires runId',
+      };
+    }
+    const cached = implementerGuideCache.get(cacheKey);
+    if (!cached) {
+      return {
+        success: false,
+        message: `No cached implementer guide found for runId "${runId}". Call get-implementer-guide with mode:"full" first.`,
+      };
+    }
+
+    return {
+      success: true,
+      message: `Implementer compact guide loaded (run: ${runId})`,
+      data: {
+        guide: buildCompactImplementerGuide(cached),
+        disciplineMode: cached.disciplineMode,
+        guideMode: 'compact',
+        guideCacheKey: cacheKey,
+        searchGuidance: getSearchGuidance(),
+      },
+      nextSteps: [
+        'Follow the compact guide and reuse previously loaded full rules',
+        'Call mode:"full" only if discipline mode or steering docs changed',
+      ],
+    };
+  }
+
+  const disciplineMode = getDisciplineMode();
 
   // Check for required steering docs
   const missing = getMissingSteeringDocs(context.projectPath, ['tech', 'principles']);
@@ -47,15 +111,17 @@ export async function getImplementerGuideHandler(
   // Load steering docs
   const steering = getSteeringDocs(context.projectPath, ['tech', 'principles']);
 
-  const guide = buildImplementerGuide(mode);
+  const guide = buildImplementerGuide(disciplineMode);
 
-  return {
+  const response: ToolResponse = {
     success: true,
-    message: `Implementer guide loaded (discipline: ${mode})`,
+    message: `Implementer guide loaded (discipline: ${disciplineMode})`,
     data: {
       guide,
       steering,
-      disciplineMode: mode,
+      disciplineMode,
+      guideMode: 'full',
+      guideCacheKey: runId ? cacheKey : undefined,
       searchGuidance: getSearchGuidance(),
     },
     nextSteps: [
@@ -65,6 +131,17 @@ export async function getImplementerGuideHandler(
       'Mark task complete when done'
     ]
   };
+
+  if (runId) {
+    implementerGuideCache.set(cacheKey, {
+      guide,
+      disciplineMode,
+      steering: steering ?? {},
+      cachedAt: new Date().toISOString(),
+    });
+  }
+
+  return response;
 }
 
 function buildImplementerGuide(mode: 'full' | 'standard' | 'minimal'): string {
@@ -628,5 +705,49 @@ Before implementing, use search tools to discover existing patterns:
 - Find existing helpers: search regex "export function" in utils/
 - Check import patterns: search regex "import.*from" for package
 - Understand error handling: search semantic "error handling patterns"
+`;
+}
+
+function buildGuideCacheKey(runId: string): string {
+  return `implementer:${runId}`;
+}
+
+function clipSnippet(value: string, maxChars: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'none';
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  if (maxChars <= 3) {
+    return normalized.slice(0, maxChars);
+  }
+  return `${normalized.slice(0, maxChars - 3)}...`;
+}
+
+function buildCompactImplementerGuide(entry: ImplementerGuideCacheEntry): string {
+  const tddRule = entry.disciplineMode === 'full'
+    ? '- TDD is mandatory: Red -> Green -> Refactor on every code change.'
+    : '- TDD is optional, but verification evidence is still mandatory.';
+  const feedbackRule = entry.disciplineMode === 'minimal'
+    ? '- Reviews are disabled in minimal mode; still verify all completion claims.'
+    : '- Handle review feedback technically: clarify unclear items and fix one issue at a time.';
+
+  return `# Implementer Compact Guide
+
+Guide cache: ${entry.cachedAt}
+Discipline mode: ${entry.disciplineMode}
+
+## Non-negotiable Rules
+- Output MUST end with a strict contract block: BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT
+- No prose outside the final contract block.
+${tddRule}
+- Before claiming completion, run and report fresh verification commands with pass/fail evidence.
+${feedbackRule}
+
+## Steering Digest
+- Tech: ${clipSnippet(entry.steering.tech ?? '', 240)}
+- Principles: ${clipSnippet(entry.steering.principles ?? '', 240)}
 `;
 }

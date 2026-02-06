@@ -32,23 +32,35 @@ function extractFunctionSource(source: string, functionName: string): string {
 type MaskObservations = (
     messages: ChatMessage[],
     keepIndices: Set<number>,
-    options: { maxObservationChars: number }
+    options: { maxObservationChars: number; observationDigestChars?: number }
 ) => { messages: ChatMessage[]; maskedCount: number; maskedChars: number };
 
 type MaskDispatchObservation = (
     content: string,
-    maxChars: number
+    maxChars: number,
+    digestChars: number
 ) => { masked: string; maskedChars: number };
 
 async function loadMaskObservations(): Promise<MaskObservations> {
     const sourcePath = new URL('./history-reducer.ts', import.meta.url);
     const source = readFileSync(sourcePath, 'utf8');
+    const normalizeInlineTextFn = extractFunctionSource(source, 'normalizeInlineText');
+    const extractObservationDigestFn = extractFunctionSource(source, 'extractObservationDigest');
     const clipTextFn = extractFunctionSource(source, 'clipText');
     const maskDispatchObservationFn = extractFunctionSource(source, 'maskDispatchObservation');
     const maskStandardObservationFn = extractFunctionSource(source, 'maskStandardObservation');
     const maskObservationsFn = extractFunctionSource(source, 'maskObservations');
     const compiled = ts.transpileModule(
-        `${clipTextFn}\n${maskDispatchObservationFn}\n${maskStandardObservationFn}\n${maskObservationsFn}\nexport { maskObservations };`,
+        [
+            'const DEFAULT_OBSERVATION_DIGEST_CHARS = 48;',
+            clipTextFn,
+            normalizeInlineTextFn,
+            extractObservationDigestFn,
+            maskDispatchObservationFn,
+            maskStandardObservationFn,
+            maskObservationsFn,
+            'export { maskObservations };',
+        ].join('\n'),
         {
             compilerOptions: {
                 target: ts.ScriptTarget.ES2022,
@@ -85,9 +97,11 @@ async function loadMaskDispatchObservation(): Promise<MaskDispatchObservation> {
     const sourcePath = new URL('./history-reducer.ts', import.meta.url);
     const source = readFileSync(sourcePath, 'utf8');
     const clipTextFn = extractFunctionSource(source, 'clipText');
+    const normalizeInlineTextFn = extractFunctionSource(source, 'normalizeInlineText');
+    const extractObservationDigestFn = extractFunctionSource(source, 'extractObservationDigest');
     const maskDispatchObservationFn = extractFunctionSource(source, 'maskDispatchObservation');
     const compiled = ts.transpileModule(
-        `${clipTextFn}\n${maskDispatchObservationFn}\nexport { maskDispatchObservation };`,
+        `${clipTextFn}\n${normalizeInlineTextFn}\n${extractObservationDigestFn}\n${maskDispatchObservationFn}\nexport { maskDispatchObservation };`,
         {
             compilerOptions: {
                 target: ts.ScriptTarget.ES2022,
@@ -98,6 +112,20 @@ async function loadMaskDispatchObservation(): Promise<MaskDispatchObservation> {
 
     const module = await import(`data:text/javascript,${encodeURIComponent(compiled)}`);
     return module.maskDispatchObservation as MaskDispatchObservation;
+}
+
+function extractNextAction(messages: ChatMessage[]): string | null {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
+        if (!message || message.role !== 'assistant') {
+            continue;
+        }
+        const match = message.content.match(/NEXT_ACTION=([a-z_]+)/i);
+        if (match && match[1]) {
+            return match[1].toLowerCase();
+        }
+    }
+    return null;
 }
 
 describe('HistoryReducer', () => {
@@ -174,8 +202,11 @@ describe('HistoryReducer', () => {
         const options = {
             enabled: true,
             maxInputChars: 1000,
+            maxInputTokens: 250,
             observationMasking: true,
             maxObservationChars: 80,
+            minObservationChars: 24,
+            observationDigestChars: 48,
         } satisfies HistoryReducerOptions;
 
         const reduction: HistoryReductionResult = {
@@ -186,13 +217,20 @@ describe('HistoryReducer', () => {
             maskedCount: 1,
             maskedChars: 42,
             reductionStage: 'masking',
+            beforeTokens: 100,
+            afterTokens: 40,
+            compressionRatio: 0.4,
+            stageUsed: 'masking',
         };
 
         expect(options.observationMasking).toBe(true);
+        expect(options.maxInputTokens).toBe(250);
         expect(options.maxObservationChars).toBe(80);
         expect(reduction.reductionStage).toBe('masking');
         expect(reduction.maskedCount).toBe(1);
         expect(reduction.maskedChars).toBe(42);
+        expect(reduction.compressionRatio).toBe(0.4);
+        expect(reduction.stageUsed).toBe('masking');
     });
 });
 
@@ -230,7 +268,7 @@ describe('HistoryReducer observation masking pipeline', () => {
         expect(oldMaskedResult?.toolCallId).toBe('old');
     });
 
-    it('skips masking when observationMasking is false', () => {
+    it('does not keep a legacy no-masking branch when observationMasking is false', () => {
         const reducer = new HistoryReducer();
         const result = reducer.reduce(
             [
@@ -248,10 +286,9 @@ describe('HistoryReducer observation masking pipeline', () => {
             }
         );
 
-        expect(result.maskedCount).toBe(0);
-        expect(result.maskedChars).toBe(0);
-        expect(result.messages.some(message => message.content.includes('[observation masked'))).toBe(false);
-        expect(['summarization', 'fallback']).toContain(result.reductionStage);
+        expect(result.maskedCount).toBeGreaterThan(0);
+        expect(result.messages.some(message => message.content.includes('[observation masked'))).toBe(true);
+        expect(result.stageUsed).toBeDefined();
     });
 
     it('falls through to summarization when masking is insufficient', () => {
@@ -378,6 +415,173 @@ describe('HistoryReducer observation masking pipeline', () => {
         expect(result.maskedCount).toBe(1);
         expect(result.maskedChars).toBeGreaterThan(0);
     });
+
+    it('uses maxInputTokens as the reduction trigger budget', () => {
+        const reducer = new HistoryReducer();
+        const result = reducer.reduce(
+            [
+                { role: 'system', content: 'rules' },
+                { role: 'assistant', content: 'call old', pairId: 'p1', pairRole: 'call' },
+                { role: 'tool', content: 'A'.repeat(500), pairId: 'p1', pairRole: 'result', toolCallId: 'p1' },
+                { role: 'assistant', content: 'decision: dispatch_reviewer' },
+                { role: 'user', content: 'latest' },
+            ],
+            {
+                enabled: true,
+                maxInputChars: 99999,
+                maxInputTokens: 60,
+                preserveRecentRawTurns: 1,
+                maxObservationChars: 60,
+            }
+        );
+
+        expect(result.reduced).toBe(true);
+        expect(result.beforeTokens).toBeGreaterThan(60);
+        expect(result.afterTokens).toBeLessThanOrEqual(60);
+    });
+
+    it('adapts masking strength under tighter deficit', () => {
+        const reducer = new HistoryReducer();
+        const baseMessages: ChatMessage[] = [
+            { role: 'system', content: 'rules' },
+            { role: 'assistant', content: 'call old', pairId: 'p1', pairRole: 'call' },
+            { role: 'tool', content: 'A'.repeat(800), pairId: 'p1', pairRole: 'result', toolCallId: 'p1' },
+            { role: 'assistant', content: 'call old 2', pairId: 'p2', pairRole: 'call' },
+            { role: 'tool', content: 'B'.repeat(800), pairId: 'p2', pairRole: 'result', toolCallId: 'p2' },
+            { role: 'user', content: 'latest' },
+        ];
+
+        const relaxed = reducer.reduce(baseMessages, {
+            enabled: true,
+            maxInputChars: 99999,
+            maxInputTokens: 220,
+            preserveRecentRawTurns: 1,
+            maxObservationChars: 80,
+            minObservationChars: 16,
+        });
+        const strict = reducer.reduce(baseMessages, {
+            enabled: true,
+            maxInputChars: 99999,
+            maxInputTokens: 80,
+            preserveRecentRawTurns: 1,
+            maxObservationChars: 80,
+            minObservationChars: 16,
+        });
+
+        const relaxedMasked = relaxed.messages.find(message => message.pairId === 'p1' && message.pairRole === 'result');
+        const strictMasked = strict.messages.find(message => message.pairId === 'p1' && message.pairRole === 'result');
+        expect(relaxedMasked).toBeDefined();
+        expect(strictMasked).toBeDefined();
+        expect(strictMasked!.content.length).toBeLessThanOrEqual(relaxedMasked!.content.length);
+    });
+
+    it('keeps decision cues stable under aggressive masking (guardrail replay)', () => {
+        const reducer = new HistoryReducer();
+        const trace: ChatMessage[] = [
+            { role: 'system', content: 'rules' },
+            { role: 'assistant', content: 'called tool alpha', pairId: 'p1', pairRole: 'call' },
+            { role: 'tool', content: 'very large output '.repeat(140), pairId: 'p1', pairRole: 'result', toolCallId: 'p1' },
+            { role: 'assistant', content: 'NEXT_ACTION=dispatch_reviewer because implementation completed' },
+            { role: 'user', content: 'continue' },
+        ];
+
+        const moderate = reducer.reduce(trace, {
+            enabled: true,
+            maxInputChars: 99999,
+            maxInputTokens: 180,
+            preserveRecentRawTurns: 1,
+            maxObservationChars: 90,
+            minObservationChars: 24,
+        });
+        const aggressive = reducer.reduce(trace, {
+            enabled: true,
+            maxInputChars: 99999,
+            maxInputTokens: 80,
+            preserveRecentRawTurns: 1,
+            maxObservationChars: 40,
+            minObservationChars: 12,
+        });
+
+        const moderateDecision = moderate.messages.find(m => m.role === 'assistant' && m.content.includes('NEXT_ACTION='));
+        const aggressiveDecision = aggressive.messages.find(m => m.role === 'assistant' && m.content.includes('NEXT_ACTION='));
+        expect(moderateDecision?.content).toContain('NEXT_ACTION=dispatch_reviewer');
+        expect(aggressiveDecision?.content).toContain('NEXT_ACTION=dispatch_reviewer');
+    });
+
+    it('quality guardrail replay keeps next-action stable with masking on/off', () => {
+        const reducer = new HistoryReducer();
+        const traces: Array<{ name: string; expectedNextAction: string; messages: ChatMessage[] }> = [
+            {
+                name: 'implementation completed',
+                expectedNextAction: 'dispatch_reviewer',
+                messages: [
+                    { role: 'system', content: 'rules' },
+                    { role: 'assistant', content: 'call implementer', pairId: 'p1', pairRole: 'call' },
+                    { role: 'tool', content: 'very large output '.repeat(120), pairId: 'p1', pairRole: 'result', toolCallId: 'p1' },
+                    { role: 'assistant', content: 'NEXT_ACTION=dispatch_reviewer because implementation completed' },
+                    { role: 'user', content: 'continue' },
+                ],
+            },
+            {
+                name: 'implementation blocked',
+                expectedNextAction: 'retry_implementer_with_constraints',
+                messages: [
+                    { role: 'system', content: 'rules' },
+                    { role: 'assistant', content: 'call implementer', pairId: 'p2', pairRole: 'call' },
+                    { role: 'tool', content: 'stderr dump '.repeat(140), pairId: 'p2', pairRole: 'result', toolCallId: 'p2' },
+                    { role: 'assistant', content: 'NEXT_ACTION=retry_implementer_with_constraints waiting on missing dependency' },
+                    { role: 'user', content: 'continue' },
+                ],
+            },
+            {
+                name: 'reviewer blocked',
+                expectedNextAction: 'halt_and_escalate',
+                messages: [
+                    { role: 'system', content: 'rules' },
+                    { role: 'assistant', content: 'call reviewer', pairId: 'p3', pairRole: 'call' },
+                    { role: 'tool', content: 'review logs '.repeat(150), pairId: 'p3', pairRole: 'result', toolCallId: 'p3' },
+                    { role: 'assistant', content: 'NEXT_ACTION=halt_and_escalate review policy violation' },
+                    { role: 'user', content: 'continue' },
+                ],
+            },
+        ];
+
+        for (const trace of traces) {
+            const baseline = reducer.reduce(trace.messages, {
+                enabled: false,
+                maxInputChars: 99999,
+            });
+            const maskingOn = reducer.reduce(trace.messages, {
+                enabled: true,
+                maxInputChars: 99999,
+                maxInputTokens: 120,
+                preserveRecentRawTurns: 1,
+                observationMasking: true,
+                maxObservationChars: 48,
+                minObservationChars: 12,
+            });
+            const maskingOff = reducer.reduce(trace.messages, {
+                enabled: true,
+                maxInputChars: 99999,
+                maxInputTokens: 120,
+                preserveRecentRawTurns: 1,
+                observationMasking: false,
+                maxObservationChars: 48,
+                minObservationChars: 12,
+            });
+
+            const baselineAction = extractNextAction(baseline.messages);
+            const maskingOnAction = extractNextAction(maskingOn.messages);
+            const maskingOffAction = extractNextAction(maskingOff.messages);
+
+            expect(baselineAction, `${trace.name} baseline`).toBe(trace.expectedNextAction);
+            expect(maskingOnAction, `${trace.name} masking on`).toBe(trace.expectedNextAction);
+            expect(maskingOffAction, `${trace.name} masking off`).toBe(trace.expectedNextAction);
+            expect(maskingOnAction, `${trace.name} on/off parity`).toBe(maskingOffAction);
+            expect(maskingOn.beforeTokens, `${trace.name} token accounting`).toBeGreaterThan(120);
+            expect(maskingOn.afterTokens, `${trace.name} masked token reduction`).toBeLessThan(maskingOn.beforeTokens ?? Number.MAX_SAFE_INTEGER);
+        }
+    });
 });
 
 describe('maskObservations (internal)', () => {
@@ -409,20 +613,17 @@ describe('maskObservations (internal)', () => {
         ];
         const before = structuredClone(messages);
 
-        const result = maskObservations(messages, new Set([3]), { maxObservationChars: 120 });
-        const placeholder = `[observation masked — ${oldObservation.length} chars]`;
+        const result = maskObservations(messages, new Set([3]), { maxObservationChars: 120, observationDigestChars: 48 });
+        const placeholderPrefix = `[observation masked - ${oldObservation.length} chars`;
 
         expect(result.messages).not.toBe(messages);
         expect(messages).toEqual(before);
         expect(result.messages[0]).toEqual(messages[0]);
         expect(result.messages[1]).toEqual(messages[1]);
-        expect(result.messages[2]).toEqual({
-            ...messages[2],
-            content: placeholder,
-        });
+        expect(result.messages[2]?.content).toContain(placeholderPrefix);
         expect(result.messages[3]).toEqual(messages[3]);
         expect(result.maskedCount).toBe(1);
-        expect(result.maskedChars).toBe(oldObservation.length - placeholder.length);
+        expect(result.maskedChars).toBeGreaterThan(0);
     });
 
     it('never masks assistant/user/system messages', async () => {
@@ -434,7 +635,7 @@ describe('maskObservations (internal)', () => {
             { role: 'tool', content: 'tool output', pairId: 'p1', pairRole: 'result' },
         ];
 
-        const result = maskObservations(messages, new Set([3]), { maxObservationChars: 120 });
+        const result = maskObservations(messages, new Set([3]), { maxObservationChars: 120, observationDigestChars: 48 });
 
         expect(result.messages).toEqual(messages);
         expect(result.maskedCount).toBe(0);
@@ -446,13 +647,10 @@ describe('maskObservations (internal)', () => {
         const original = 'X'.repeat(120);
         const messages: ChatMessage[] = [{ role: 'tool', content: original, pairId: 'p1', pairRole: 'result' }];
 
-        const result = maskObservations(messages, new Set<number>(), { maxObservationChars: 24 });
-        const unclipped = `[observation masked — ${original.length} chars]`;
-        const expected = `${unclipped.slice(0, 21)}...`;
-
-        expect(result.messages[0]?.content).toBe(expected);
+        const result = maskObservations(messages, new Set<number>(), { maxObservationChars: 24, observationDigestChars: 48 });
+        expect(result.messages[0]?.content.length).toBeLessThanOrEqual(24);
         expect(result.maskedCount).toBe(1);
-        expect(result.maskedChars).toBe(original.length - expected.length);
+        expect(result.maskedChars).toBeGreaterThan(0);
     });
 });
 
@@ -467,7 +665,7 @@ describe('maskDispatchObservation (internal)', () => {
             'suffix logs',
         ].join('\n');
 
-        const result = maskDispatchObservation(content, 40);
+        const result = maskDispatchObservation(content, 40, 48);
 
         expect(result.masked).toContain('BEGIN_DISPATCH_RESULT');
         expect(result.masked).toContain('END_DISPATCH_RESULT');
@@ -481,10 +679,34 @@ describe('maskDispatchObservation (internal)', () => {
         const maskDispatchObservation = await loadMaskDispatchObservation();
         const content = `plain tool output ${'X'.repeat(120)}`;
 
-        const result = maskDispatchObservation(content, 80);
+        const result = maskDispatchObservation(content, 80, 48);
 
         expect(result.masked).toContain('[observation masked');
         expect(result.masked).not.toContain('BEGIN_DISPATCH_RESULT');
+        expect(result.maskedChars).toBeGreaterThan(0);
+    });
+
+    it('preserves multiple dispatch result blocks and masks all prose outside', async () => {
+        const maskDispatchObservation = await loadMaskDispatchObservation();
+        const content = [
+            'prose prelude',
+            'BEGIN_DISPATCH_RESULT',
+            '{"task_id":"1.1","status":"completed"}',
+            'END_DISPATCH_RESULT',
+            'middle prose',
+            'BEGIN_DISPATCH_RESULT',
+            '{"task_id":"1.2","status":"blocked"}',
+            'END_DISPATCH_RESULT',
+            'epilogue prose',
+        ].join('\n');
+
+        const result = maskDispatchObservation(content, 60, 48);
+
+        expect(result.masked).toContain('"task_id":"1.1"');
+        expect(result.masked).toContain('"task_id":"1.2"');
+        expect(result.masked).not.toContain('prose prelude');
+        expect(result.masked).not.toContain('middle prose');
+        expect(result.masked).not.toContain('epilogue prose');
         expect(result.maskedChars).toBeGreaterThan(0);
     });
 });

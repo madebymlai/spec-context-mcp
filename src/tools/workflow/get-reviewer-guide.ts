@@ -8,6 +8,17 @@ import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getDisciplineMode } from '../../config/discipline.js';
 import { getSteeringDocs, getMissingSteeringDocs } from './steering-loader.js';
 
+type GuideMode = 'full' | 'compact';
+
+interface ReviewerGuideCacheEntry {
+  guide: string;
+  disciplineMode: 'full' | 'standard';
+  steering: Record<string, string>;
+  cachedAt: string;
+}
+
+const reviewerGuideCache = new Map<string, ReviewerGuideCacheEntry>();
+
 export const getReviewerGuideTool: Tool = {
   name: 'get-reviewer-guide',
   description: `Load code review checklist for a dispatched reviewer agent. FOR REVIEWER SUB-AGENTS ONLY.
@@ -25,16 +36,68 @@ Only active in full and standard modes. Returns error in minimal mode.
 Fails if required steering docs (tech.md, principles.md) are missing.`,
   inputSchema: {
     type: 'object',
-    properties: {},
+    properties: {
+      mode: {
+        type: 'string',
+        enum: ['full', 'compact'],
+        description: 'Guide mode. Use "full" once per run, then "compact" for subsequent review dispatches.',
+      },
+      runId: {
+        type: 'string',
+        description: 'Required for compact mode. Stable dispatch runtime runId used for guide cache lookup.',
+      },
+    },
     additionalProperties: false
   }
 };
 
 export async function getReviewerGuideHandler(
-  _args: unknown,
+  args: unknown,
   context: ToolContext
 ): Promise<ToolResponse> {
+  const input = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
+  const guideMode = String(input.mode ?? 'full').trim() as GuideMode;
+  const runId = String(input.runId ?? '').trim();
+  if (guideMode !== 'full' && guideMode !== 'compact') {
+    return {
+      success: false,
+      message: 'mode must be one of: full, compact',
+    };
+  }
+
   const mode = getDisciplineMode();
+  const cacheKey = runId ? buildGuideCacheKey(runId) : '';
+
+  if (guideMode === 'compact') {
+    if (!runId) {
+      return {
+        success: false,
+        message: 'compact mode requires runId',
+      };
+    }
+    const cached = reviewerGuideCache.get(cacheKey);
+    if (!cached) {
+      return {
+        success: false,
+        message: `No cached reviewer guide found for runId "${runId}". Call get-reviewer-guide with mode:"full" first.`,
+      };
+    }
+    return {
+      success: true,
+      message: `Reviewer compact guide loaded (run: ${runId})`,
+      data: {
+        guide: buildCompactReviewerGuide(cached),
+        disciplineMode: cached.disciplineMode,
+        guideMode: 'compact',
+        guideCacheKey: cacheKey,
+        searchGuidance: getSearchGuidance(),
+      },
+      nextSteps: [
+        'Review against compact checklist and cached full criteria',
+        'Call mode:"full" only when steering docs or discipline mode changes',
+      ],
+    };
+  }
 
   // Reviews not active in minimal mode
   if (mode === 'minimal') {
@@ -58,12 +121,14 @@ export async function getReviewerGuideHandler(
 
   const guide = buildReviewerGuide(mode, steering ?? {});
 
-  return {
+  const response: ToolResponse = {
     success: true,
     message: `Reviewer guide loaded (discipline: ${mode})`,
     data: {
       guide,
       disciplineMode: mode,
+      guideMode: 'full',
+      guideCacheKey: runId ? cacheKey : undefined,
       searchGuidance: getSearchGuidance(),
     },
     nextSteps: [
@@ -73,6 +138,17 @@ export async function getReviewerGuideHandler(
       'Provide feedback with severity levels'
     ]
   };
+
+  if (runId && (mode === 'full' || mode === 'standard')) {
+    reviewerGuideCache.set(cacheKey, {
+      guide,
+      disciplineMode: mode,
+      steering: steering ?? {},
+      cachedAt: new Date().toISOString(),
+    });
+  }
+
+  return response;
 }
 
 function buildReviewerGuide(mode: string, steering: Record<string, string>): string {
@@ -286,5 +362,48 @@ Use search tools to verify implementation quality:
 - Check for duplicate: search regex "function.*validate"
 - Find similar patterns: search semantic "error handling in API"
 - Verify convention: search regex "export (async )?function"
+`;
+}
+
+function buildGuideCacheKey(runId: string): string {
+  return `reviewer:${runId}`;
+}
+
+function clipSnippet(value: string, maxChars: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'none';
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  if (maxChars <= 3) {
+    return normalized.slice(0, maxChars);
+  }
+  return `${normalized.slice(0, maxChars - 3)}...`;
+}
+
+function buildCompactReviewerGuide(entry: ReviewerGuideCacheEntry): string {
+  return `# Reviewer Compact Guide
+
+Guide cache: ${entry.cachedAt}
+Discipline mode: ${entry.disciplineMode}
+
+## Review Contract
+- Use severity levels: critical, important, minor.
+- Validate task scope, spec compliance, tests, and architectural fit.
+- If unclear requirement exists, block and request clarification.
+- Final output MUST be strict contract block: BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT
+- No prose outside the final contract block.
+
+## Compact Checklist
+- Spec compliance: requirements met, no scope creep.
+- Code quality: clear structure, no avoidable duplication, robust error handling.
+- Testing: meaningful coverage and passing verification evidence.
+- Security: no obvious exposure, injection, or auth regressions.
+
+## Steering Digest
+- Tech: ${clipSnippet(entry.steering.tech ?? '', 240)}
+- Principles: ${clipSnippet(entry.steering.principles ?? '', 240)}
 `;
 }

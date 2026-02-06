@@ -260,16 +260,25 @@ ${DISPATCH_RESULT_END}`,
   }
 
   compile(input: {
+    runId: string;
     role: DispatchRole;
     taskPrompt: string;
     taskId: string;
     maxOutputTokens: number;
     deltaPacket: Record<string, unknown>;
+    guideMode: 'full' | 'compact';
+    guideCacheKey: string;
   }) {
     const templateId = input.role === 'implementer' ? 'dispatch_implementer' : 'dispatch_reviewer';
+    const guideToolName = input.role === 'implementer' ? 'get-implementer-guide' : 'get-reviewer-guide';
+    const guideInstruction = input.guideMode === 'full'
+      ? `Guide policy: first dispatch for this role in run ${input.runId}. Call ${guideToolName} with {"mode":"full","runId":"${input.runId}"} exactly once before coding/reviewing.`
+      : `Guide policy: guide already loaded in this run. Do not reload full guide. Reuse cached rules and call ${guideToolName} with {"mode":"compact","runId":"${input.runId}"} if you need a reminder.`;
     const dynamicTail = `Task ID: ${input.taskId}
 Max output tokens: ${input.maxOutputTokens}
 Delta context: ${JSON.stringify(input.deltaPacket)}
+Guide cache key: ${input.guideCacheKey}
+${guideInstruction}
 Task prompt:
 ${input.taskPrompt}`;
 
@@ -290,6 +299,8 @@ ${input.taskPrompt}`;
       fullPromptHash: prefixCompile.cacheKey,
       deltaPacket: input.deltaPacket,
       maxOutputTokens: input.maxOutputTokens,
+      guideMode: input.guideMode,
+      guideCacheKey: input.guideCacheKey,
     };
   }
 }
@@ -301,6 +312,7 @@ class DispatchRuntimeManager {
   private readonly stateProjector = new StateProjector();
   private readonly eventBus = new InMemoryEventBusAdapter<RuntimeEventEnvelope>();
   private readonly promptCompiler = new DispatchPromptCompiler();
+  private readonly guidePromptCounts = new Map<string, number>();
   private telemetry: DispatchTelemetrySnapshot = {
     dispatch_count: 0,
     total_output_tokens: 0,
@@ -314,6 +326,8 @@ class DispatchRuntimeManager {
   }
 
   async initRun(runId: string, specName: string, taskId: string): Promise<StateSnapshot> {
+    this.guidePromptCounts.delete(`${runId}:implementer`);
+    this.guidePromptCounts.delete(`${runId}:reviewer`);
     const initEvent = await this.publishEvent({
       partition_key: runId,
       run_id: runId,
@@ -373,6 +387,7 @@ class DispatchRuntimeManager {
     nextAction: string;
     outputTokens: number;
   }> {
+    await this.assertRunBinding(args.runId, args.taskId);
     const parsed = extractStructuredJson(args.outputContent);
     const outputTokens = estimateTokensFromChars(args.outputContent);
     if (typeof args.maxOutputTokens === 'number' && outputTokens > args.maxOutputTokens) {
@@ -460,22 +475,31 @@ class DispatchRuntimeManager {
     fullPromptHash: string;
     deltaPacket: Record<string, unknown>;
     maxOutputTokens: number;
+    guideMode: 'full' | 'compact';
+    guideCacheKey: string;
   }> {
-    const snapshot = await this.snapshotStore.get(args.runId);
+    const snapshot = await this.assertRunBinding(args.runId, args.taskId);
     const facts = new Map((snapshot?.facts ?? []).map(fact => [fact.k, fact.v]));
+    const guideMode = this.nextGuideMode(args.runId, args.role);
+    const guideCacheKey = `${args.role}:${args.runId}`;
     const deltaPacket = {
       task_id: args.taskId,
       previous_implementer_summary: facts.get('implementer_summary') ?? null,
       previous_reviewer_assessment: facts.get('reviewer_assessment') ?? null,
       previous_reviewer_issue_count: facts.get('reviewer_issue_count') ?? null,
+      guide_mode: guideMode,
+      guide_cache_key: guideCacheKey,
     };
 
     return this.promptCompiler.compile({
+      runId: args.runId,
       role: args.role,
       taskPrompt: args.taskPrompt,
       taskId: args.taskId,
       maxOutputTokens: args.maxOutputTokens,
       deltaPacket,
+      guideMode,
+      guideCacheKey,
     });
   }
 
@@ -581,6 +605,33 @@ class DispatchRuntimeManager {
     }
   }
 
+  private nextGuideMode(runId: string, role: DispatchRole): 'full' | 'compact' {
+    const key = `${runId}:${role}`;
+    const count = this.guidePromptCounts.get(key) ?? 0;
+    this.guidePromptCounts.set(key, count + 1);
+    return count === 0 ? 'full' : 'compact';
+  }
+
+  private async assertRunBinding(runId: string, taskId: string): Promise<StateSnapshot> {
+    const snapshot = await this.snapshotStore.get(runId);
+    if (!snapshot) {
+      throw new Error(`run_not_initialized: runId ${runId} is not initialized; call init_run first`);
+    }
+
+    const boundTaskId = snapshot.facts.find(fact => fact.k === 'task_id')?.v;
+    if (!boundTaskId) {
+      throw new Error(`run_not_initialized: runId ${runId} is missing task binding; call init_run first`);
+    }
+
+    if (boundTaskId !== taskId) {
+      throw new Error(
+        `run_task_mismatch: runId ${runId} is bound to task_id ${boundTaskId} but received taskId ${taskId}`
+      );
+    }
+
+    return snapshot;
+  }
+
   private mergeFacts(existing: StateSnapshotFact[], incoming: StateSnapshotFact[]): StateSnapshotFact[] {
     const map = new Map<string, StateSnapshotFact>();
     for (const fact of existing) {
@@ -617,6 +668,16 @@ class DispatchRuntimeManager {
 }
 
 const dispatchRuntimeManager = new DispatchRuntimeManager();
+
+function errorCodeFromMessage(message: string): 'run_not_initialized' | 'run_task_mismatch' | null {
+  if (message.startsWith('run_not_initialized:')) {
+    return 'run_not_initialized';
+  }
+  if (message.startsWith('run_task_mismatch:')) {
+    return 'run_task_mismatch';
+  }
+  return null;
+}
 
 export const dispatchRuntimeTool: Tool = {
   name: 'dispatch-runtime',
@@ -764,23 +825,38 @@ export async function dispatchRuntimeHandler(
       };
     }
 
-    const compiled = await dispatchRuntimeManager.compilePrompt({
-      runId,
-      role,
-      taskId,
-      taskPrompt,
-      maxOutputTokens,
-    });
-    return {
-      success: true,
-      message: 'Dispatch prompt compiled',
-      data: {
+    try {
+      const compiled = await dispatchRuntimeManager.compilePrompt({
         runId,
         role,
         taskId,
-        ...compiled,
-      },
-    };
+        taskPrompt,
+        maxOutputTokens,
+      });
+      return {
+        success: true,
+        message: 'Dispatch prompt compiled',
+        data: {
+          runId,
+          role,
+          taskId,
+          ...compiled,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const errorCode = errorCodeFromMessage(message);
+      return {
+        success: false,
+        message,
+        data: {
+          runId,
+          role,
+          taskId,
+          errorCode,
+        },
+      };
+    }
   }
 
   let outputContent = String(args.outputContent || '').trim();
@@ -837,6 +913,7 @@ export async function dispatchRuntimeHandler(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const errorCode = errorCodeFromMessage(message);
     const isSchemaInvalid =
       message.includes('Schema validation failed') ||
       message.includes('Dispatch result') ||
@@ -888,6 +965,7 @@ export async function dispatchRuntimeHandler(
         runId,
         role,
         taskId,
+        errorCode,
       },
     };
   }

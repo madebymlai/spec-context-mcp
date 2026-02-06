@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getImplementerGuideHandler } from './get-implementer-guide.js';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -106,6 +106,30 @@ describe('get-implementer-guide', () => {
       const result = await getImplementerGuideHandler({}, createContext());
 
       expect(result.data?.searchGuidance).toContain('Search');
+    });
+
+    it('supports compact mode after caching full guide for a run', async () => {
+      const full = await getImplementerGuideHandler({ mode: 'full', runId: 'run-1' }, createContext());
+      expect(full.success).toBe(true);
+      expect(full.data?.guideMode).toBe('full');
+
+      const compact = await getImplementerGuideHandler({ mode: 'compact', runId: 'run-1' }, createContext());
+      expect(compact.success).toBe(true);
+      expect(compact.data?.guideMode).toBe('compact');
+      expect(compact.data?.guide).toContain('Implementer Compact Guide');
+      expect(compact.data?.guide).toContain('strict contract block');
+    });
+
+    it('rejects compact mode without runId', async () => {
+      const result = await getImplementerGuideHandler({ mode: 'compact' }, createContext());
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('requires runId');
+    });
+
+    it('rejects compact mode when cache is missing', async () => {
+      const result = await getImplementerGuideHandler({ mode: 'compact', runId: 'missing-run' }, createContext());
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Call get-implementer-guide with mode:"full" first');
     });
   });
 
