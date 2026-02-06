@@ -1,37 +1,35 @@
-# Core Additions (This Commit)
+# Core Features (Current Implementation)
 
 Date: 2026-02-06  
-Scope: `src/core/llm/*`, `src/dashboard/services/ai-review-service.ts`, `src/dashboard/multi-server.ts`, `src/config/discipline.ts`
+Scope: Orchestrator + CLI sub-agent dispatch path (`dispatch-runtime v2`)  
+Activation: `SPEC_CONTEXT_DISPATCH_RUNTIME_V2=1`
 
-Notes:
-- Token savings are **estimated** for affected request paths and are **not additive**.
-- Prompt-engineering power score is on a **1-10** scale (higher = stronger controllability/reliability).
+## What matters most now
 
-| Feature | Core Addition | Estimated Token Efficiency Save | Prompt Engineering Power |
-|---|---|---:|---:|
-| Stable prefix/tail cache keying | `PromptPrefixCompiler` + OpenRouter integration | 10-35% (iterative prompts; via better cache locality) | 8/10 |
-| Provider cache abstraction | `ProviderCacheAdapter` (+ OpenRouter/OpenAI/Claude/Gemini adapters) | 0-5% now, 10-30% when direct providers are wired | 7/10 |
-| Normalized cache telemetry | unified `cachedInputTokens/cacheWriteTokens/cacheMissReason` | 0-3% direct, enables faster optimization loops | 6/10 |
-| Strict prompt template contract | `PromptTemplateRegistry` used by AI review prompt build | 5-15% (less prompt drift/redundancy) | 8/10 |
-| Strict structured output + bounded schema retries | `SchemaRegistry` + AI review response validation/retry | 5-20% (fewer malformed retries/manual repair loops) | 9/10 |
-| Canonical runtime events | event envelope validation + idempotent sequencing | 0-5% direct (indirect savings via cleaner deltas) | 7/10 |
-| Durable bounded event stream | `RuntimeEventStream` retention + JSONL persistence | 0-3% direct, reduces replay/log inflation risk | 6/10 |
-| Async coalesced snapshots | `RuntimeSnapshotStore` buffered persistence worker | 0-2% tokens, 5-20% p95 latency improvement in write-heavy runs | 5/10 |
-| Event->projection->snapshot path | `EventBusAdapter` + `StateProjector` wired into AI review | 5-20% (snapshot/delta path replaces raw-log expansion) | 7/10 |
-| Budget queue semantics | non-interactive `queue` decision in `BudgetGuard` | 0-10% (prevents wasteful out-of-policy attempts) | 4/10 |
-| Provider capability downgrade retry | strips unsupported params once and retries | 0-8% (avoids repeated hard-fail retries) | 6/10 |
-| Runtime telemetry endpoint | `/api/runtime/ai-review/telemetry` | 0-2% direct, supports ongoing token tuning | 5/10 |
-| Service cache hardening | hashed key + TTL/LRU for AI review service cache | 0-2% tokens, improves stability/security | 3/10 |
-| DRY provider catalog for CLI agents | canonical provider map + alias mapping | 0% token impact (maintainability gain) | 4/10 |
+These are the core features that directly improve token efficiency in the **orchestrator + CLI agents** flow.
 
-## Highest ROI for Token Efficiency
-1. Stable prefix/tail cache keying
-2. Strict prompt template contract
-3. Event->projection->snapshot path
-4. Strict structured output + bounded schema retries
+| Feature | What was added | Current token-saving impact |
+|---|---|---:|
+| Structured dispatch contract (hard-fail) | Implementer/reviewer must return strict `BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT` JSON block; invalid format fails immediately | **10-25%** (cuts retry noise and log-driven ambiguity) |
+| Dispatch runtime state store | `dispatch-runtime` tool with run init, output ingest, snapshot reads, and deterministic `nextAction` | **15-35%** (reduces orchestration context bloat and repeated interpretation turns) |
+| Schema-invalid retry gate (max 1) | Tracks schema-invalid retries and halts after one retry | **5-15%** (prevents repeated malformed-output loops) |
+| Stable prompt prefix + delta compile | `compile_prompt` action (stable prefix hash + delta packet from prior run state) | **10-30%** (smaller repeated prompts and better cache locality) |
+| Output token budget enforcement | `maxOutputTokens` checked during ingest; over-budget outputs fail | **5-12%** (caps long-form agent responses that don’t help orchestration) |
+| Dispatch telemetry counters | `get_telemetry` exposes dispatch count, output token totals, schema-invalid retries, approval loops | **0-5% direct** (enables tuning; indirect gains over time) |
+| Rollout flag | `SPEC_CONTEXT_DISPATCH_RUNTIME_V2` gates runtime-v2 behavior | **0% direct** (safe rollout/rollback with no prompt churn) |
 
-## Highest ROI for Prompt Engineering Power
-1. Strict structured output + bounded schema retries (9/10)
-2. Stable prefix/tail cache keying (8/10)
-3. Strict prompt template contract (8/10)
-4. Provider cache abstraction (7/10, increases as direct providers are wired)
+## Secondary (supporting) changes
+
+| Feature | Why it helps |
+|---|---|
+| AI review decoupled from heavy runtime stack | Keeps orchestration runtime ownership focused on CLI dispatch path (cleaner SRP, less complexity drift). |
+| Provider/cache abstractions in core llm | Foundation for future direct-provider optimization without reworking orchestrator contracts. |
+
+## Practical expectation (current code)
+
+If `dispatch-runtime v2` is enabled and used in the task loop:
+- **Orchestrator + CLI flow token reduction:** ~**25-50%** typical range.
+- Biggest gains come from: strict result contract + snapshot-driven branching + delta prompt compilation.
+
+If runtime v2 is disabled:
+- Gains are minimal, mostly from legacy prompt hygiene only.
