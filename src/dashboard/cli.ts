@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { MultiProjectDashboardServer } from './multi-server.js';
+
+// Load .env from the server's own directory, not the user's project cwd
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenv.config({ path: resolve(__dirname, '..', '..', '.env') });
 import { DashboardSessionManager } from '../core/workflow/dashboard-session.js';
 import { DEFAULT_DASHBOARD_PORT } from '../core/workflow/constants.js';
 

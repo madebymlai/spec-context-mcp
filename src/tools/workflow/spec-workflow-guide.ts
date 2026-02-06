@@ -1,8 +1,7 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getSteeringDocs } from './steering-loader.js';
-import { getDisciplineMode } from '../../config/discipline.js';
-import { getDispatchCli } from '../../config/discipline.js';
+import { getDisciplineMode, getDispatchCli } from '../../config/discipline.js';
 
 export const specWorkflowGuideTool: Tool = {
   name: 'spec-workflow-guide',
@@ -225,7 +224,7 @@ flowchart TD
    - _Requirements: requirements that the task implements
    - Success: specific completion criteria
    - Instructions: "Mark this ONE task as [-] in tasks.md before starting. Follow the loaded implementer guide rules (${disciplineMode === 'full' ? 'TDD required' : 'verification required'}). When done, mark [x] in tasks.md.${disciplineMode !== 'minimal' ? ' Then perform code review using the loaded reviewer guide.' : ''} Do NOT start the next task until ${disciplineMode !== 'minimal' ? 'review is approved' : 'verification passes'}."
-   - Start the prompt with "Implement the task for spec {spec-name}, first run spec-workflow-guide to get the workflow guide then implement the task:"
+   - Start the prompt with "Implement the task for spec {spec-name}, first call get-implementer-guide to load implementation rules then implement the task:"
 6. Create \`tasks.md\` at \`.spec-context/specs/{spec-name}/tasks.md\`
 7. Request approval using approvals tool with action:'request'
 8. Call wait-for-approval with the approvalId - this blocks until user responds and auto-deletes
@@ -238,7 +237,7 @@ flowchart TD
 ${!implementerCli ? `
 **⛔ BLOCKED: SPEC_CONTEXT_IMPLEMENTER is not set.**
 
-Implementation requires a dispatch CLI. Set the \`SPEC_CONTEXT_IMPLEMENTER\` environment variable to the CLI command for your implementer agent (e.g., \`claude\`, \`codex\`).
+Implementation requires a dispatch CLI. Set the \`SPEC_CONTEXT_IMPLEMENTER\` environment variable to the CLI command for your implementer agent (supported shortcuts: \`claude\`, \`codex\`, \`gemini\`, \`opencode\`).
 
 Example: \`SPEC_CONTEXT_IMPLEMENTER=claude\`
 
@@ -253,7 +252,7 @@ ${reviewerCli ? `- Reviewer CLI: \`${reviewerCli}\`` : '- Reviewer CLI: not conf
 ${reviewerCli ? '- You DISPATCH reviews to the reviewer agent via bash.' : '- You review directly (call `get-reviewer-guide` once before first review).'}
 
 **File Operations**:
-- Read specs: \`.spec-context/specs/{spec-name}/*.md\` (if returning to work)
+- Read tasks.md to check status and pick next task
 - Edit tasks.md to update status:
   - \`- [ ]\` = Pending task
   - \`- [-]\` = In-progress task (ONLY ONE at a time)
@@ -278,32 +277,42 @@ ${reviewerCli ? `- Bash: Dispatch reviews to reviewer agent (\`${reviewerCli}\`)
 
 **Process:**
 
-**The implementer agent calls \`get-implementer-guide\` itself — you do NOT call it.**
-${reviewerCli ? '**The reviewer agent calls `get-reviewer-guide` itself — you do NOT call it.**' : '**Before first review:** Call `get-reviewer-guide` once to load review checklist (you review directly).'}
-
 **Repeat for EACH task, sequentially:**
 
 1. **Pick ONE task**: Check spec-status, read tasks.md, identify the next pending \`[ ]\` task
-2. **Build the task prompt**: Read the _Prompt field. Combine with:
+2. **Capture base SHA** (for reviewer later):
+   \`\`\`bash
+   git rev-parse HEAD
+   \`\`\`
+   Save this SHA — you'll pass it to the reviewer.
+3. **Build the task prompt**: Read the _Prompt field. Combine with:
    - The spec name and task ID
    - File paths from _Leverage fields
    - Requirements from _Requirements fields
    - Instructions to mark [-] before starting and [x] when done
-3. **Dispatch to implementer agent via bash**:
+4. **Dispatch to implementer agent via bash** (redirect output to log):
    \`\`\`bash
-   ${implementerCli} "Implement the task for spec {spec-name}, first run spec-workflow-guide to get the workflow guide then implement the task: {task prompt content}"
+   ${implementerCli} "Implement the task for spec {spec-name}, first call get-implementer-guide to load implementation rules then implement the task: {task prompt content}." > /tmp/spec-impl.log 2>&1
    \`\`\`
-   - The implementer agent will: mark task [-], call get-implementer-guide, implement with ${disciplineMode === 'full' ? 'TDD' : 'verification'}, verify, mark [x]
-   - Wait for the agent to complete before proceeding
-4. **Verify task completion**: Check tasks.md — task should now be [x]. If still [-], the agent failed.
-5. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
+   - Full output goes to log file — do NOT read the full log
+   - Wait for the command to complete before proceeding
+5. **Verify task completion**:
+   - Check tasks.md — task should now be [x]. If still [-], check \`tail -n 30 /tmp/spec-impl.log\` for errors.
+   - Get the diff (this is all you need to see):
+     \`\`\`bash
+     git diff {base-sha}..HEAD
+     \`\`\`
+6. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
 ${reviewerCli ? `   \`\`\`bash
-   ${reviewerCli} "Review the implementation of task {taskId} for spec {spec-name}. Call get-reviewer-guide for review criteria. Review the git diff, check spec compliance, code quality, and principles."
+   ${reviewerCli} "Review task {taskId} for spec {spec-name}. Base SHA: {base-sha}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be ONLY the Review Outcome block (Strengths/Issues/Assessment)." > /tmp/spec-review.log 2>&1
    \`\`\`
-   - Wait for review agent to complete` : '   - Review the implementation yourself using loaded reviewer guide'}
+   - Full output goes to log file — read only the verdict:
+     \`\`\`bash
+     tail -n 40 /tmp/spec-review.log
+     \`\`\`` : '   - Review the implementation yourself using loaded reviewer guide\n   - Run `git diff {base-sha}..HEAD` to see changes'}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: proceed to next task
-6. **Repeat from step 1** for the next pending task
+7. **Repeat from step 1** for the next pending task
 
 **CRITICAL rules:**
 - NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`
@@ -326,10 +335,8 @@ ${reviewerCli ? `   \`\`\`bash
 - NEVER proceed on user saying "approved" - use wait-for-approval tool
 - Steering docs are optional - only create when explicitly requested
 - **CRITICAL: ONE task at a time during implementation — never batch, never parallelize**
-- **CRITICAL: NEVER call \`get-implementer-guide\` yourself — the implementer agent calls it**
 - **CRITICAL: NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`**
-${reviewerCli ? `- **CRITICAL: NEVER call \`get-reviewer-guide\` yourself — the reviewer agent calls it**
-- **CRITICAL: NEVER review tasks yourself — always dispatch to \`${reviewerCli}\`**` : '- **CRITICAL: Call `get-reviewer-guide` once before your first review (you review directly)**'}
+${reviewerCli ? `- **CRITICAL: NEVER review tasks yourself — always dispatch to \`${reviewerCli}\`**` : ''}
 
 ## Implementation Review Workflow
 ${disciplineMode === 'minimal' ? `

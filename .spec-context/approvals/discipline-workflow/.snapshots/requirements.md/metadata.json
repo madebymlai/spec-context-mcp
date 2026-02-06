@@ -1,0 +1,22 @@
+{
+  "filePath": ".spec-context/specs/discipline-workflow/requirements.md",
+  "currentVersion": 2,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2026-02-05T18:14:00.444Z",
+      "trigger": "initial",
+      "approvalId": "approval_1770315240443_yhk0h20gh",
+      "approvalTitle": "Requirements: Discipline Workflow Enhancement"
+    },
+    {
+      "version": 2,
+      "filename": "snapshot-002.json",
+      "timestamp": "2026-02-05T18:15:35.807Z",
+      "trigger": "approved",
+      "approvalId": "approval_1770315240443_yhk0h20gh",
+      "approvalTitle": "Requirements: Discipline Workflow Enhancement"
+    }
+  ]
+}

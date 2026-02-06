@@ -56,14 +56,13 @@ export async function getReviewerGuideHandler(
   // Load steering docs
   const steering = getSteeringDocs(context.projectPath, ['tech', 'principles']);
 
-  const guide = buildReviewerGuide();
+  const guide = buildReviewerGuide(mode, steering ?? {});
 
   return {
     success: true,
     message: `Reviewer guide loaded (discipline: ${mode})`,
     data: {
       guide,
-      steering,
       disciplineMode: mode,
       searchGuidance: getSearchGuidance(),
     },
@@ -76,33 +75,27 @@ export async function getReviewerGuideHandler(
   };
 }
 
-function buildReviewerGuide(): string {
+function buildReviewerGuide(mode: string, steering: Record<string, string>): string {
   return `# Code Review Guide
 
 **Core principle:** Review early, review often. Catch issues before they cascade.
 
-## When to Review
-
-**Mandatory:**
-- After each task in implementation
-- After completing major feature
-- Before merge to main
-
-**Optional but valuable:**
-- When implementer is stuck (fresh perspective)
-- Before refactoring (baseline check)
-- After fixing complex bug
-
 ## Review Process
 
 1. **Get Context**
-   - Read the task description and _Prompt field
-   - Review the spec (requirements.md, design.md)
-   - Understand what was supposed to be implemented
+   - Read the task description and _Prompt field (contains role, requirements, success criteria)
+   - The _Prompt has everything you need — do NOT read requirements.md or design.md
+   - Understand what was supposed to be implemented from the _Prompt
 
 2. **Get the Diff**
+   The orchestrator should provide a base SHA in the dispatch prompt.
    \`\`\`bash
-   git diff BASE_SHA..HEAD_SHA
+   git diff <base-sha>..HEAD
+   \`\`\`
+   If no base SHA was provided, use:
+   \`\`\`bash
+   git log --oneline -5    # find the commit before the task
+   git diff HEAD~1          # or diff against parent
    \`\`\`
 
 3. **Review Changes**
@@ -113,6 +106,7 @@ function buildReviewerGuide(): string {
 4. **Apply Checklist**
    - Go through each category below
    - Assign severity to issues found
+   - **Cross-reference against project principles below**
 
 5. **Provide Feedback**
    - Be specific and actionable
@@ -156,27 +150,36 @@ function buildReviewerGuide(): string {
 
 ### Principles Compliance (Important)
 
-Review against the project's principles.md:
-- [ ] Follows SOLID principles
+${steering.principles ? `**Project Principles (from principles.md):**
+\`\`\`
+${steering.principles}
+\`\`\`
+
+Review EACH change against the principles above:` : 'No principles.md found — review against general best practices:'}
 - [ ] Adheres to project-specific rules
 - [ ] Matches established patterns
 - [ ] YAGNI - no unused features
 
-### Testing (Critical in full mode, Important otherwise)
+### Tech Stack Compliance (Important)
+
+${steering.tech ? `**Project Tech Stack (from tech.md):**
+\`\`\`
+${steering.tech}
+\`\`\`
+
+Review against the tech stack above:` : 'No tech.md found — review against general conventions:'}
+- [ ] Uses approved technologies/patterns
+- [ ] Follows project conventions
+- [ ] Dependencies are appropriate
+- [ ] No unnecessary new dependencies
+
+### Testing (${mode === 'full' ? 'Critical' : 'Important'})
 
 - [ ] Tests exist for new functionality
 - [ ] Tests cover edge cases and error paths
 - [ ] Tests are meaningful (not just coverage)
 - [ ] All tests pass
-- [ ] TDD evidence (if full mode): test commit before implementation
-
-### Technical Stack (Important)
-
-Review against the project's tech.md:
-- [ ] Uses approved technologies/patterns
-- [ ] Follows project conventions
-- [ ] Dependencies are appropriate
-- [ ] No unnecessary new dependencies
+${mode === 'full' ? '- [ ] TDD evidence: test commit before implementation' : ''}
 
 ### Security (Critical)
 

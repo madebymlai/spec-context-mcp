@@ -103,7 +103,7 @@ Add to your Claude Code config (`.mcp.json` in project root):
 | `CHUNKHOUND_FILE_QUEUE_MAXSIZE` | No | Max realtime file queue size (default: `2000`, 0 = unbounded) |
 | `CHUNKHOUND_FILE_QUEUE_DRAIN_SECONDS` | No | Interval to drain overflowed file queue entries (default: `1.0`) |
 | `SPEC_CONTEXT_DISCIPLINE` | No | Discipline mode: `full` (TDD+reviews), `standard` (reviews), `minimal` (verification only). Default: `full` |
-| `SPEC_CONTEXT_IMPLEMENTER` | No | CLI command for implementer dispatch (e.g., `claude`, `codex`) |
+| `SPEC_CONTEXT_IMPLEMENTER` | No | CLI command for implementer dispatch (shortcuts: `claude`, `codex`, `gemini`, `opencode`) |
 | `SPEC_CONTEXT_REVIEWER` | No | CLI command for reviewer dispatch |
 
 ### Discipline Modes

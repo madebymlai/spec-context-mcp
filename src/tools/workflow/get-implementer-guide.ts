@@ -10,14 +10,14 @@ import { getSteeringDocs, getMissingSteeringDocs } from './steering-loader.js';
 
 export const getImplementerGuideTool: Tool = {
   name: 'get-implementer-guide',
-  description: `Load TDD and verification rules for a dispatched implementer agent. FOR IMPLEMENTER SUB-AGENTS ONLY.
+  description: `Load implementation rules for a dispatched implementer agent. FOR IMPLEMENTER SUB-AGENTS ONLY.
 
 DO NOT call this tool unless you are an implementer agent dispatched via SPEC_CONTEXT_IMPLEMENTER to work on a specific spec task. If you are the orchestrator managing the spec workflow, do NOT call this tool — dispatch it to the implementer agent instead.
 
-Returns:
+Returns (based on discipline mode):
 - TDD rules (full mode only)
 - Verification rules (all modes)
-- Code review feedback handling (all modes)
+- Code review feedback handling (full/standard only)
 - Project tech stack and principles
 - Search tool guidance
 
@@ -77,7 +77,10 @@ function buildImplementerGuide(mode: 'full' | 'standard' | 'minimal'): string {
   }
 
   sections.push(getVerificationRules());
-  sections.push(getFeedbackHandling());
+
+  if (mode !== 'minimal') {
+    sections.push(getFeedbackHandling());
+  }
 
   return sections.join('\n');
 }

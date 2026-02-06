@@ -15,14 +15,27 @@ const ENV_VARS: Record<DispatchRole, string> = {
 };
 
 /**
- * Non-interactive CLI flags per agent per role.
- * Maps short agent names to their headless invocation.
- * If the env var value isn't a known agent, it's used as-is (custom command).
+ * MCP tools each role is allowed to call.
+ * Used for --allowedTools (Claude) and prompt-level restriction (others).
  */
-const AGENT_FLAGS: Record<string, Record<DispatchRole, string>> = {
+const ROLE_TOOLS: Record<DispatchRole, string[]> = {
+  implementer: ['get-implementer-guide', 'search', 'code_research', 'spec-status'],
+  reviewer: ['get-reviewer-guide', 'search', 'code_research'],
+};
+
+const CLAUDE_ALLOWED_TOOLS = {
+  implementer: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', ...ROLE_TOOLS.implementer.map(t => `mcp__*__${t}`)].join(' '),
+  reviewer: ['Bash', 'Read', 'Glob', 'Grep', ...ROLE_TOOLS.reviewer.map(t => `mcp__*__${t}`)].join(' '),
+} as const;
+
+/**
+ * Non-interactive CLI flags per agent per role.
+ * Canonical agents map to per-role invocation templates.
+ */
+export const PROVIDER_CATALOG = {
   claude: {
-    implementer: 'claude -p --dangerously-skip-permissions',
-    reviewer: 'claude -p',
+    implementer: `claude -p --dangerously-skip-permissions --allowedTools "${CLAUDE_ALLOWED_TOOLS.implementer}"`,
+    reviewer: `claude -p --allowedTools "${CLAUDE_ALLOWED_TOOLS.reviewer}"`,
   },
   codex: {
     implementer: 'codex exec --full-auto',
@@ -32,7 +45,33 @@ const AGENT_FLAGS: Record<string, Record<DispatchRole, string>> = {
     implementer: 'gemini --yolo',
     reviewer: 'gemini --plan',
   },
-};
+  opencode: {
+    implementer: 'opencode run',
+    reviewer: 'opencode run',
+  },
+} as const satisfies Record<string, Record<DispatchRole, string>>;
+
+const PROVIDER_ALIASES = {
+  'claude-code': 'claude',
+  'claude-code-cli': 'claude',
+  'codex-cli': 'codex',
+  'gemini-cli': 'gemini',
+  'opencode-cli': 'opencode',
+} as const;
+
+type CanonicalProvider = keyof typeof PROVIDER_CATALOG;
+
+function resolveCanonicalProvider(value: string): CanonicalProvider | null {
+  const key = value.trim().toLowerCase();
+  if (key in PROVIDER_CATALOG) {
+    return key as CanonicalProvider;
+  }
+  const alias = PROVIDER_ALIASES[key as keyof typeof PROVIDER_ALIASES];
+  if (!alias) {
+    return null;
+  }
+  return alias as CanonicalProvider;
+}
 
 /**
  * Get the current discipline mode from environment.
@@ -58,12 +97,15 @@ export function getDisciplineMode(): DisciplineMode {
 
 /**
  * Resolve an env var value to a full CLI command for the given role.
- * Known agent names (claude, codex, gemini) get mapped to proper flags.
+ * Known agent names (claude, codex, gemini, opencode) get mapped to proper flags.
  * Anything else is returned as-is (custom command).
  */
 export function resolveAgentCli(value: string, role: DispatchRole): string {
-  const key = value.trim().toLowerCase();
-  return AGENT_FLAGS[key]?.[role] ?? value.trim();
+  const canonicalProvider = resolveCanonicalProvider(value);
+  if (!canonicalProvider) {
+    return value.trim();
+  }
+  return PROVIDER_CATALOG[canonicalProvider][role];
 }
 
 /**
@@ -82,4 +124,7 @@ export function getDispatchCli(role: DispatchRole): string | null {
 }
 
 /** Supported agent names for documentation/validation */
-export const KNOWN_AGENTS = Object.keys(AGENT_FLAGS);
+export const KNOWN_AGENTS = [
+  ...Object.keys(PROVIDER_CATALOG),
+  ...Object.keys(PROVIDER_ALIASES),
+];

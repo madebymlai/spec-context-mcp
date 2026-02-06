@@ -61,11 +61,15 @@ describe('discipline config', () => {
 
   describe('resolveAgentCli', () => {
     it('resolves claude implementer', () => {
-      expect(resolveAgentCli('claude', 'implementer')).toBe('claude -p --dangerously-skip-permissions');
+      expect(resolveAgentCli('claude', 'implementer')).toBe(
+        'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__code_research mcp__*__spec-status"'
+      );
     });
 
     it('resolves claude reviewer', () => {
-      expect(resolveAgentCli('claude', 'reviewer')).toBe('claude -p');
+      expect(resolveAgentCli('claude', 'reviewer')).toBe(
+        'claude -p --allowedTools "Bash Read Glob Grep mcp__*__get-reviewer-guide mcp__*__search mcp__*__code_research"'
+      );
     });
 
     it('resolves codex implementer', () => {
@@ -84,9 +88,29 @@ describe('discipline config', () => {
       expect(resolveAgentCli('gemini', 'reviewer')).toBe('gemini --plan');
     });
 
+    it('resolves opencode implementer', () => {
+      expect(resolveAgentCli('opencode', 'implementer')).toBe('opencode run');
+    });
+
+    it('resolves opencode reviewer', () => {
+      expect(resolveAgentCli('opencode', 'reviewer')).toBe('opencode run');
+    });
+
+    it('resolves known aliases', () => {
+      expect(resolveAgentCli('claude-code', 'reviewer')).toBe(
+        'claude -p --allowedTools "Bash Read Glob Grep mcp__*__get-reviewer-guide mcp__*__search mcp__*__code_research"'
+      );
+      expect(resolveAgentCli('codex-cli', 'implementer')).toBe('codex exec --full-auto');
+      expect(resolveAgentCli('gemini-cli', 'reviewer')).toBe('gemini --plan');
+      expect(resolveAgentCli('opencode-cli', 'implementer')).toBe('opencode run');
+    });
+
     it('is case-insensitive', () => {
-      expect(resolveAgentCli('Claude', 'implementer')).toBe('claude -p --dangerously-skip-permissions');
+      expect(resolveAgentCli('Claude', 'implementer')).toBe(
+        'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__code_research mcp__*__spec-status"'
+      );
       expect(resolveAgentCli('CODEX', 'reviewer')).toBe('codex exec --sandbox read-only');
+      expect(resolveAgentCli('OpEnCoDe', 'reviewer')).toBe('opencode run');
     });
 
     it('passes through unknown values as-is', () => {
@@ -94,7 +118,9 @@ describe('discipline config', () => {
     });
 
     it('trims whitespace', () => {
-      expect(resolveAgentCli('  claude  ', 'reviewer')).toBe('claude -p');
+      expect(resolveAgentCli('  claude  ', 'reviewer')).toBe(
+        'claude -p --allowedTools "Bash Read Glob Grep mcp__*__get-reviewer-guide mcp__*__search mcp__*__code_research"'
+      );
     });
   });
 
@@ -109,7 +135,9 @@ describe('discipline config', () => {
 
     it('resolves known agent for implementer', () => {
       process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-      expect(getDispatchCli('implementer')).toBe('claude -p --dangerously-skip-permissions');
+      expect(getDispatchCli('implementer')).toBe(
+        'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__code_research mcp__*__spec-status"'
+      );
     });
 
     it('resolves known agent for reviewer', () => {
@@ -138,6 +166,7 @@ describe('discipline config', () => {
       expect(KNOWN_AGENTS).toContain('claude');
       expect(KNOWN_AGENTS).toContain('codex');
       expect(KNOWN_AGENTS).toContain('gemini');
+      expect(KNOWN_AGENTS).toContain('opencode');
     });
   });
 });

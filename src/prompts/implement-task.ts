@@ -60,7 +60,7 @@ ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 ${!implementerCli ? `
 ⛔ **BLOCKED: SPEC_CONTEXT_IMPLEMENTER is not set.**
 
-Implementation requires a dispatch CLI. Set the \`SPEC_CONTEXT_IMPLEMENTER\` environment variable to the CLI command for your implementer agent (e.g., \`claude\`, \`codex\`).
+Implementation requires a dispatch CLI. Set the \`SPEC_CONTEXT_IMPLEMENTER\` environment variable to the CLI command for your implementer agent (supported shortcuts: \`claude\`, \`codex\`, \`gemini\`, \`opencode\`).
 
 Example: \`SPEC_CONTEXT_IMPLEMENTER=claude\`
 
@@ -90,34 +90,48 @@ Do NOT implement tasks yourself. STOP and ask the user to configure the env var.
    - Identify ${taskId ? `task ${taskId}` : 'the next pending task marked with [ ]'}
    - Verify NO other task is currently marked [-] (only one in-progress allowed)
 
-2. **Read Task Guidance:**
+2. **Capture base SHA** (for reviewer later):
+   \`\`\`bash
+   git rev-parse HEAD
+   \`\`\`
+   Save this SHA — you'll pass it to the reviewer.
+
+3. **Read Task Guidance:**
    - Read the _Prompt field from the task
    - Note _Leverage fields, _Requirements fields, and success criteria
 
-3. **Build and Dispatch to Implementer Agent:**
+4. **Build and Dispatch to Implementer Agent** (redirect output to log):
    - Build the task prompt from the _Prompt field content
    - Dispatch via bash:
      \`\`\`bash
-     ${implementerCli} "Implement the task for spec ${specName}, first run spec-workflow-guide to get the workflow guide then implement the task: [task prompt content from _Prompt field]"
+     ${implementerCli} "Implement the task for spec ${specName}, first call get-implementer-guide to load implementation rules then implement the task: [task prompt content from _Prompt field]." > /tmp/spec-impl.log 2>&1
      \`\`\`
-   - The implementer agent will: mark task [-], call get-implementer-guide, implement with ${isFull ? 'TDD' : 'verification'}, mark [x]
-   - WAIT for the agent to complete — do not proceed until done
+   - Full output goes to log file — do NOT read the full log
+   - WAIT for the command to complete — do not proceed until done
 
-4. **Verify Completion:**
+5. **Verify Completion:**
    - Check tasks.md — the task should now be marked [x]
-   - If still [-], the implementer agent failed — investigate and re-dispatch
-
-${reviewsEnabled ? '5. **Dispatch Review:**' : '5. **Skip Review (minimal mode):**'}
-${reviewerCli ? `   - Dispatch to reviewer agent via bash:
+   - If still [-], check \`tail -n 30 /tmp/spec-impl.log\` for errors, then re-dispatch
+   - Get the diff (this is all you need to see):
      \`\`\`bash
-     ${reviewerCli} "Review the implementation of task ${taskId || '{taskId}'} for spec ${specName}. Call get-reviewer-guide for review criteria. Review the git diff, check spec compliance, code quality, and principles."
+     git diff {base-sha from step 2}..HEAD
      \`\`\`
-   - WAIT for review to complete` : `   - No reviewer CLI configured — review the implementation yourself
+
+${reviewsEnabled ? '6. **Dispatch Review:**' : '6. **Skip Review (minimal mode):**'}
+${reviewerCli ? `   - Dispatch to reviewer agent via bash (redirect output to log):
+     \`\`\`bash
+     ${reviewerCli} "Review task ${taskId || '{taskId}'} for spec ${specName}. Base SHA: {base-sha from step 2}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be ONLY the Review Outcome block (Strengths/Issues/Assessment)." > /tmp/spec-review.log 2>&1
+     \`\`\`
+   - Full output goes to log — read only the verdict:
+     \`\`\`bash
+     tail -n 40 /tmp/spec-review.log
+     \`\`\`` : `   - No reviewer CLI configured — review the implementation yourself
+   - Run \`git diff {base-sha}..HEAD\` to see changes
    - Call get-reviewer-guide for review criteria`}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: this task is done
 
-6. **STOP** — do NOT proceed to the next task in this same session
+7. **STOP** — do NOT proceed to the next task in this same session
 
 **Important Guidelines:**
 - You are the ORCHESTRATOR — NEVER implement tasks yourself

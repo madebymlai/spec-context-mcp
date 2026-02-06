@@ -6,6 +6,7 @@ import { join, dirname, basename, resolve } from 'path';
 import { readFile } from 'fs/promises';
 import { promises as fs } from 'fs';
 import { fileURLToPath } from 'url';
+import { createHash, randomUUID } from 'crypto';
 import open from 'open';
 import { WebSocket } from 'ws';
 import { validateAndCheckPort, DASHBOARD_HEALTH_MESSAGE } from './utils.js';
@@ -24,6 +25,7 @@ import {
 } from '../core/workflow/security-utils.js';
 import { SecurityConfig } from '../workflow-types.js';
 import { AiReviewService, AiReviewModel, AI_REVIEW_MODELS, SpecDocsContext } from './services/ai-review-service.js';
+import { RuntimeEventStream, RuntimeSnapshotStore } from '../core/llm/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -61,6 +63,12 @@ export class MultiProjectDashboardServer {
   // Debounce spec broadcasts to coalesce rapid updates
   private pendingSpecBroadcasts: Map<string, NodeJS.Timeout> = new Map();
   private readonly SPEC_BROADCAST_DEBOUNCE_MS = 300;
+  private readonly aiReviewEventStream = new RuntimeEventStream();
+  private readonly aiReviewSnapshotStore = new RuntimeSnapshotStore();
+  private readonly aiReviewServicesByApiKeyHash = new Map<string, { service: AiReviewService; lastAccessAt: number }>();
+  private readonly aiReviewServiceCacheSalt = randomUUID();
+  private readonly AI_REVIEW_SERVICE_TTL_MS = 30 * 60 * 1000;
+  private readonly AI_REVIEW_SERVICE_MAX_ENTRIES = 8;
 
   constructor(options: MultiDashboardOptions = {}) {
     this.options = options;
@@ -322,6 +330,88 @@ export class MultiProjectDashboardServer {
     }
 
     return dashboardUrl;
+  }
+
+  private getAiReviewService(apiKey: string): AiReviewService {
+    this.evictStaleAiReviewServices();
+    const keyHash = this.hashApiKey(apiKey);
+    const existing = this.aiReviewServicesByApiKeyHash.get(keyHash);
+    if (existing) {
+      existing.lastAccessAt = Date.now();
+      return existing.service;
+    }
+    const service = new AiReviewService(apiKey, {
+      eventStream: this.aiReviewEventStream,
+      snapshotStore: this.aiReviewSnapshotStore,
+    });
+    this.aiReviewServicesByApiKeyHash.set(keyHash, {
+      service,
+      lastAccessAt: Date.now(),
+    });
+    this.evictStaleAiReviewServices();
+    return service;
+  }
+
+  private hashApiKey(apiKey: string): string {
+    return createHash('sha256')
+      .update(`${this.aiReviewServiceCacheSalt}:${apiKey}`)
+      .digest('hex');
+  }
+
+  private evictStaleAiReviewServices(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.aiReviewServicesByApiKeyHash.entries()) {
+      if (now - entry.lastAccessAt > this.AI_REVIEW_SERVICE_TTL_MS) {
+        this.aiReviewServicesByApiKeyHash.delete(key);
+      }
+    }
+
+    if (this.aiReviewServicesByApiKeyHash.size <= this.AI_REVIEW_SERVICE_MAX_ENTRIES) {
+      return;
+    }
+
+    const ordered = [...this.aiReviewServicesByApiKeyHash.entries()]
+      .sort((a, b) => a[1].lastAccessAt - b[1].lastAccessAt);
+    const removeCount = this.aiReviewServicesByApiKeyHash.size - this.AI_REVIEW_SERVICE_MAX_ENTRIES;
+    for (let i = 0; i < removeCount; i += 1) {
+      const item = ordered[i];
+      if (!item) {
+        break;
+      }
+      this.aiReviewServicesByApiKeyHash.delete(item[0]);
+    }
+  }
+
+  private getAiReviewTelemetrySnapshot() {
+    let requests = 0;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalCachedInputTokens = 0;
+    let totalCacheWriteTokens = 0;
+    let totalCostUsd = 0;
+    let totalLatencyWeighted = 0;
+
+    for (const { service } of this.aiReviewServicesByApiKeyHash.values()) {
+      const snapshot = service.getTelemetrySnapshot();
+      requests += snapshot.requests;
+      totalInputTokens += snapshot.totalInputTokens;
+      totalOutputTokens += snapshot.totalOutputTokens;
+      totalCachedInputTokens += snapshot.totalCachedInputTokens;
+      totalCacheWriteTokens += snapshot.totalCacheWriteTokens;
+      totalCostUsd += snapshot.totalCostUsd;
+      totalLatencyWeighted += snapshot.avgLatencyMs * snapshot.requests;
+    }
+
+    return {
+      requests,
+      totalInputTokens,
+      totalOutputTokens,
+      totalCachedInputTokens,
+      totalCacheWriteTokens,
+      totalCostUsd: Number(totalCostUsd.toFixed(6)),
+      avgLatencyMs: requests > 0 ? totalLatencyWeighted / requests : 0,
+      activeServiceInstances: this.aiReviewServicesByApiKeyHash.size,
+    };
   }
 
   private setupProjectManagerEvents() {
@@ -1103,19 +1193,56 @@ export class MultiProjectDashboardServer {
           }
         }
 
-        // Call AI review service with steering context and spec docs
-        const reviewService = new AiReviewService(apiKey);
-        const suggestions = await reviewService.reviewDocument(content, selectedModel, steeringDocs, specDocsContext);
+        // Call AI review service with shared runtime event/snapshot state
+        const reviewService = this.getAiReviewService(apiKey);
+        const reviewResult = await reviewService.reviewDocument(
+          content,
+          selectedModel,
+          steeringDocs,
+          specDocsContext,
+          {
+            runId: `${projectId}:${id}`,
+            interactive: true,
+          }
+        );
 
         return {
           success: true,
           model: selectedModel,
-          suggestions
+          modelUsed: reviewResult.modelUsed,
+          budgetDecision: reviewResult.budgetDecision,
+          snapshotRevision: reviewResult.snapshotRevision,
+          contextStats: reviewResult.contextStats,
+          usage: reviewResult.usage,
+          suggestions: reviewResult.suggestions
         };
       } catch (error: any) {
         console.error('AI review failed:', error);
+        const isBudgetError =
+          error?.code === '429_budget_exceeded' ||
+          (typeof error?.message === 'string' && error.message.includes('429_budget_exceeded'));
+        if (isBudgetError) {
+          const retryAfter = error?.budgetDecision?.retry_after_s ?? 3600;
+          reply.header('Retry-After', String(retryAfter));
+          return reply.code(429).send({
+            error: '429_budget_exceeded',
+            reason_codes: error?.budgetDecision?.reason_codes ?? ['provider_budget_exceeded'],
+            retry_after_s: retryAfter,
+          });
+        }
+
         return reply.code(500).send({
-          error: `AI review failed: ${error.message}`
+          error: `AI review failed: ${error?.message ?? String(error)}`
+        });
+      }
+    });
+
+    this.app.get('/api/runtime/ai-review/telemetry', async (_request, reply) => {
+      try {
+        return this.getAiReviewTelemetrySnapshot();
+      } catch (error: any) {
+        return reply.code(500).send({
+          error: `Failed to get AI review telemetry: ${error?.message ?? String(error)}`
         });
       }
     });
@@ -1569,6 +1696,13 @@ export class MultiProjectDashboardServer {
 
     // Stop project manager
     await this.projectManager.stop();
+
+    // Flush runtime telemetry/state before shutdown
+    await this.aiReviewEventStream.flush();
+    await this.aiReviewSnapshotStore.flush();
+    for (const { service } of this.aiReviewServicesByApiKeyHash.values()) {
+      await service.flushRuntimeState();
+    }
 
     // Close the Fastify server
     await this.app.close();

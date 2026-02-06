@@ -102,11 +102,11 @@ describe('get-reviewer-guide', () => {
       expect(result.data?.guide).toContain('Minor');
     });
 
-    it('includes steering docs', async () => {
+    it('inlines steering docs in guide', async () => {
       const result = await getReviewerGuideHandler({}, createContext());
 
-      expect(result.data?.steering?.tech).toContain('TypeScript');
-      expect(result.data?.steering?.principles).toContain('SOLID');
+      expect(result.data?.guide).toContain('TypeScript');
+      expect(result.data?.guide).toContain('SOLID');
     });
 
     it('includes search guidance', async () => {
