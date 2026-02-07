@@ -59,7 +59,17 @@ import {
   formatSessionFacts,
 } from '../../core/session/index.js';
 
-type DispatchAction = 'init_run' | 'ingest_output' | 'get_snapshot' | 'compile_prompt' | 'get_telemetry';
+const DISPATCH_ACTIONS = ['init_run', 'ingest_output', 'get_snapshot', 'compile_prompt', 'get_telemetry'] as const;
+type DispatchAction = typeof DISPATCH_ACTIONS[number];
+const DISPATCH_ROLES = ['implementer', 'reviewer'] as const;
+
+function isDispatchAction(value: string): value is DispatchAction {
+  return (DISPATCH_ACTIONS as readonly string[]).includes(value);
+}
+
+function isDispatchRole(value: string): value is DispatchRole {
+  return (DISPATCH_ROLES as readonly string[]).includes(value);
+}
 
 const DISPATCH_CLASSIFICATION_FACT_KEYS = {
   level: 'classification_level',
@@ -463,6 +473,58 @@ type DispatchTelemetrySnapshot =
   & DispatchLedgerTelemetry
   & DispatchSchemaTelemetry;
 
+type SnapshotStoreUpsertInput = Parameters<RuntimeSnapshotStore['upsert']>[0];
+type StateProjectorApplyInput = Parameters<StateProjector['apply']>[0];
+type StateProjectorApplyOutput = ReturnType<StateProjector['apply']>;
+
+interface DispatchRuntimeEventStream {
+  publish(draft: RuntimeEventDraft): RuntimeEventEnvelope;
+}
+
+interface DispatchRuntimeSnapshotStore {
+  get(runId: string): Promise<StateSnapshot | null>;
+  upsert(update: SnapshotStoreUpsertInput): Promise<StateSnapshot>;
+}
+
+interface DispatchRuntimeSchemaRegistry {
+  register<T>(type: string, schemaId: string, schemaVersion: string, validate: (payload: unknown) => payload is T): void;
+  assert(type: string, payload: unknown, schemaVersion?: string): void;
+}
+
+interface DispatchRuntimeStateProjector {
+  apply(input: StateProjectorApplyInput): StateProjectorApplyOutput;
+}
+
+interface DispatchRuntimeEventBus {
+  publish(event: RuntimeEventEnvelope): Promise<void>;
+}
+
+interface DispatchRuntimePromptCompiler {
+  compile(input: {
+    runId: string;
+    role: DispatchRole;
+    taskPrompt: string;
+    taskId: string;
+    maxOutputTokens: number;
+    deltaPacket: Record<string, unknown>;
+    guideMode: 'full' | 'compact';
+    guideCacheKey: string;
+    sessionContext?: string;
+    tokenCharsPerToken?: number;
+  }): CompiledDispatchPrompt;
+}
+
+interface DispatchRuntimeManagerDependencies {
+  eventStream: DispatchRuntimeEventStream;
+  snapshotStore: DispatchRuntimeSnapshotStore;
+  schemaRegistry: DispatchRuntimeSchemaRegistry;
+  stateProjector: DispatchRuntimeStateProjector;
+  eventBus: DispatchRuntimeEventBus;
+  promptCompiler: DispatchRuntimePromptCompiler;
+  compactionPolicy: DispatchCompactionPolicy;
+  stalledThreshold: number;
+}
+
 function buildDispatchGuideInstruction(input: {
   role: DispatchRole;
   guideMode: 'full' | 'compact';
@@ -584,19 +646,42 @@ ${DISPATCH_RESULT_END}`,
   }
 }
 
+function createDefaultDispatchRuntimeManagerDependencies(): DispatchRuntimeManagerDependencies {
+  return {
+    eventStream: new RuntimeEventStream({ storage: new NodeRuntimeEventStorage() }),
+    snapshotStore: new RuntimeSnapshotStore(),
+    schemaRegistry: new SchemaRegistry(),
+    stateProjector: new StateProjector(),
+    eventBus: new InMemoryEventBusAdapter<RuntimeEventEnvelope>(),
+    promptCompiler: new DispatchPromptCompiler(),
+    compactionPolicy: resolveDispatchCompactionPolicy(),
+    stalledThreshold: intFromEnv(
+      process.env.SPEC_CONTEXT_DISPATCH_STALLED_THRESHOLD,
+      DEFAULT_STALLED_THRESHOLD
+    ),
+  };
+}
+
+function resolveDispatchRuntimeManagerDependencies(
+  overrides?: Partial<DispatchRuntimeManagerDependencies>,
+): DispatchRuntimeManagerDependencies {
+  const defaults = createDefaultDispatchRuntimeManagerDependencies();
+  return {
+    ...defaults,
+    ...overrides,
+  };
+}
+
 export class DispatchRuntimeManager {
-  private readonly eventStream = new RuntimeEventStream({ storage: new NodeRuntimeEventStorage() });
-  private readonly snapshotStore = new RuntimeSnapshotStore();
-  private readonly schemaRegistry = new SchemaRegistry();
-  private readonly stateProjector = new StateProjector();
-  private readonly eventBus = new InMemoryEventBusAdapter<RuntimeEventEnvelope>();
-  private readonly promptCompiler = new DispatchPromptCompiler();
+  private readonly eventStream: DispatchRuntimeEventStream;
+  private readonly snapshotStore: DispatchRuntimeSnapshotStore;
+  private readonly schemaRegistry: DispatchRuntimeSchemaRegistry;
+  private readonly stateProjector: DispatchRuntimeStateProjector;
+  private readonly eventBus: DispatchRuntimeEventBus;
+  private readonly promptCompiler: DispatchRuntimePromptCompiler;
   private readonly guidePromptCounts = new Map<string, number>();
-  private readonly compactionPolicy = resolveDispatchCompactionPolicy();
-  private readonly stalledThreshold = intFromEnv(
-    process.env.SPEC_CONTEXT_DISPATCH_STALLED_THRESHOLD,
-    DEFAULT_STALLED_THRESHOLD
-  );
+  private readonly compactionPolicy: DispatchCompactionPolicy;
+  private readonly stalledThreshold: number;
   private telemetry: DispatchTelemetrySnapshot = {
     dispatch_count: 0,
     total_output_tokens: 0,
@@ -635,7 +720,17 @@ export class DispatchRuntimeManager {
     private readonly factStore: ISessionFactStore,
     private readonly factExtractor: IFactExtractor,
     private readonly factRetriever: IFactRetriever,
+    dependencies?: Partial<DispatchRuntimeManagerDependencies>,
   ) {
+    const resolvedDependencies = resolveDispatchRuntimeManagerDependencies(dependencies);
+    this.eventStream = resolvedDependencies.eventStream;
+    this.snapshotStore = resolvedDependencies.snapshotStore;
+    this.schemaRegistry = resolvedDependencies.schemaRegistry;
+    this.stateProjector = resolvedDependencies.stateProjector;
+    this.eventBus = resolvedDependencies.eventBus;
+    this.promptCompiler = resolvedDependencies.promptCompiler;
+    this.compactionPolicy = resolvedDependencies.compactionPolicy;
+    this.stalledThreshold = resolvedDependencies.stalledThreshold;
     this.registerSchemas();
   }
 
@@ -1401,14 +1496,71 @@ export class DispatchRuntimeManager {
     registerDispatchContractSchemas(this.schemaRegistry);
   }
 }
-const factStore = new InMemorySessionFactStore();
-const dispatchRuntimeManager = new DispatchRuntimeManager(
-  new HeuristicComplexityClassifier(),
-  RoutingTable.fromEnvOrDefault(),
-  factStore,
-  new RuleBasedFactExtractor(),
-  new KeywordFactRetriever(factStore),
-);
+interface DispatchRunIdFactory {
+  create(specName: string, taskId: string): string;
+}
+
+interface DispatchOutputResolver {
+  resolve(args: {
+    outputContent: unknown;
+    outputFilePath: unknown;
+    projectPath: string;
+  }): Promise<string>;
+}
+
+interface DispatchRuntimeHandlerDependencies {
+  runtimeManager: DispatchRuntimeManager;
+  runIdFactory: DispatchRunIdFactory;
+  outputResolver: DispatchOutputResolver;
+  fileContentCacheTelemetry: () => ReturnType<typeof getSharedFileContentCacheTelemetry>;
+}
+
+class UuidDispatchRunIdFactory implements DispatchRunIdFactory {
+  create(specName: string, taskId: string): string {
+    return `${specName}:${taskId}:${randomUUID()}`;
+  }
+}
+
+class NodeDispatchOutputResolver implements DispatchOutputResolver {
+  async resolve(args: {
+    outputContent: unknown;
+    outputFilePath: unknown;
+    projectPath: string;
+  }): Promise<string> {
+    const inlineOutput = String(args.outputContent || '').trim();
+    if (inlineOutput) {
+      return inlineOutput;
+    }
+
+    const outputFilePath = String(args.outputFilePath || '').trim();
+    if (!outputFilePath) {
+      return '';
+    }
+
+    const filePath = outputFilePath.startsWith('/')
+      ? outputFilePath
+      : resolve(args.projectPath, outputFilePath);
+    return fs.readFile(filePath, 'utf-8');
+  }
+}
+
+function createDefaultDispatchRuntimeHandlerDependencies(): DispatchRuntimeHandlerDependencies {
+  const factStore = new InMemorySessionFactStore();
+  return {
+    runtimeManager: new DispatchRuntimeManager(
+      new HeuristicComplexityClassifier(),
+      RoutingTable.fromEnvOrDefault(),
+      factStore,
+      new RuleBasedFactExtractor(),
+      new KeywordFactRetriever(factStore),
+    ),
+    runIdFactory: new UuidDispatchRunIdFactory(),
+    outputResolver: new NodeDispatchOutputResolver(),
+    fileContentCacheTelemetry: getSharedFileContentCacheTelemetry,
+  };
+}
+
+const dispatchRuntimeDependencies = createDefaultDispatchRuntimeHandlerDependencies();
 
 type DispatchToolErrorCode =
   | DispatchRuntimeErrorCode
@@ -1428,6 +1580,464 @@ function toDispatchToolErrorCode(error: unknown): DispatchToolErrorCode | null {
     return error.code;
   }
   return null;
+}
+
+function failure(message: string, data?: Record<string, unknown>): ToolResponse {
+  return { success: false, message, ...(data ? { data } : {}) };
+}
+
+type InitRunCommand = {
+  action: 'init_run';
+  runId: string;
+  specName: string;
+  taskId: string;
+  projectPath: string;
+};
+
+type GetSnapshotCommand = {
+  action: 'get_snapshot';
+  runId: string;
+};
+
+type GetTelemetryCommand = {
+  action: 'get_telemetry';
+};
+
+type CompilePromptCommand = {
+  action: 'compile_prompt';
+  runId: string;
+  role: DispatchRole;
+  taskId: string;
+  projectPath: string;
+  taskPrompt?: string;
+  maxOutputTokens: number;
+  compactionContext?: string[];
+  compactionPromptOverride?: string;
+  compactionAuto?: boolean;
+};
+
+type IngestOutputCommand = {
+  action: 'ingest_output';
+  runId: string;
+  role: DispatchRole;
+  taskId: string;
+  outputContent: string;
+  maxOutputTokens?: number;
+};
+
+type DispatchToolCommand =
+  | InitRunCommand
+  | GetSnapshotCommand
+  | GetTelemetryCommand
+  | CompilePromptCommand
+  | IngestOutputCommand;
+
+type DispatchCommandParseResult =
+  | { ok: true; command: DispatchToolCommand }
+  | { ok: false; response: ToolResponse };
+
+function parseRunId(args: Record<string, unknown>): string {
+  return String(args.runId || '').trim();
+}
+
+function parseRoleTask(
+  action: DispatchAction,
+  args: Record<string, unknown>,
+): { ok: true; role: DispatchRole; taskId: string } | { ok: false; response: ToolResponse } {
+  const roleRaw = String(args.role || '').trim();
+  const taskId = String(args.taskId || '').trim();
+  if (!isDispatchRole(roleRaw) || !taskId) {
+    return {
+      ok: false,
+      response: failure(`${action} requires role (implementer|reviewer) and taskId`),
+    };
+  }
+  return {
+    ok: true,
+    role: roleRaw,
+    taskId,
+  };
+}
+
+function parseCompactionAuto(value: unknown): { ok: true; value?: boolean } | { ok: false; response: ToolResponse } {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (typeof value === 'boolean') {
+    return { ok: true, value };
+  }
+  if (typeof value !== 'string') {
+    return {
+      ok: false,
+      response: failure('compile_prompt compactionAuto must be boolean-like'),
+    };
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return { ok: true, value: true };
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return { ok: true, value: false };
+  }
+  return {
+    ok: false,
+    response: failure('compile_prompt compactionAuto must be boolean-like'),
+  };
+}
+
+async function parseInitRunCommand(
+  args: Record<string, unknown>,
+  context: ToolContext,
+  dependencies: DispatchRuntimeHandlerDependencies,
+): Promise<DispatchCommandParseResult> {
+  const specName = String(args.specName || '').trim();
+  const taskId = String(args.taskId || '').trim();
+  if (!specName || !taskId) {
+    return { ok: false, response: failure('init_run requires specName and taskId') };
+  }
+
+  const runId = parseRunId(args) || dependencies.runIdFactory.create(specName, taskId);
+  return {
+    ok: true,
+    command: {
+      action: 'init_run',
+      runId,
+      specName,
+      taskId,
+      projectPath: context.projectPath,
+    },
+  };
+}
+
+function parseGetSnapshotCommand(args: Record<string, unknown>): DispatchCommandParseResult {
+  const runId = parseRunId(args);
+  if (!runId) {
+    return { ok: false, response: failure('get_snapshot requires runId') };
+  }
+  return {
+    ok: true,
+    command: {
+      action: 'get_snapshot',
+      runId,
+    },
+  };
+}
+
+async function parseCompilePromptCommand(
+  args: Record<string, unknown>,
+  context: ToolContext,
+): Promise<DispatchCommandParseResult> {
+  const runId = parseRunId(args);
+  if (!runId) {
+    return { ok: false, response: failure('compile_prompt requires runId') };
+  }
+
+  const roleTask = parseRoleTask('compile_prompt', args);
+  if (!roleTask.ok) {
+    return roleTask;
+  }
+
+  const maxOutputTokens = Number(args.maxOutputTokens ?? 1200);
+  if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
+    return { ok: false, response: failure('compile_prompt requires positive maxOutputTokens') };
+  }
+
+  const compactionAuto = parseCompactionAuto(args.compactionAuto);
+  if (!compactionAuto.ok) {
+    return compactionAuto;
+  }
+
+  return {
+    ok: true,
+    command: {
+      action: 'compile_prompt',
+      runId,
+      role: roleTask.role,
+      taskId: roleTask.taskId,
+      projectPath: context.projectPath,
+      taskPrompt: typeof args.taskPrompt === 'string' ? args.taskPrompt.trim() : undefined,
+      maxOutputTokens,
+      compactionContext: Array.isArray(args.compactionContext)
+        ? args.compactionContext
+          .filter(item => typeof item === 'string')
+          .map(item => item.trim())
+          .filter(Boolean)
+        : undefined,
+      compactionPromptOverride: typeof args.compactionPromptOverride === 'string'
+        ? args.compactionPromptOverride.trim()
+        : undefined,
+      compactionAuto: compactionAuto.value,
+    },
+  };
+}
+
+async function parseIngestOutputCommand(
+  args: Record<string, unknown>,
+  context: ToolContext,
+  dependencies: DispatchRuntimeHandlerDependencies,
+): Promise<DispatchCommandParseResult> {
+  const runId = parseRunId(args);
+  if (!runId) {
+    return { ok: false, response: failure('ingest_output requires runId') };
+  }
+
+  const roleTask = parseRoleTask('ingest_output', args);
+  if (!roleTask.ok) {
+    return roleTask;
+  }
+
+  const outputContent = await dependencies.outputResolver.resolve({
+    outputContent: args.outputContent,
+    outputFilePath: args.outputFilePath,
+    projectPath: context.projectPath,
+  });
+  if (!outputContent) {
+    return { ok: false, response: failure('ingest_output requires outputContent or outputFilePath') };
+  }
+
+  const maxOutputTokens = args.maxOutputTokens === undefined
+    ? undefined
+    : Number(args.maxOutputTokens);
+  if (args.maxOutputTokens !== undefined && (!Number.isFinite(maxOutputTokens) || (maxOutputTokens as number) <= 0)) {
+    return { ok: false, response: failure('ingest_output maxOutputTokens must be a positive number') };
+  }
+
+  return {
+    ok: true,
+    command: {
+      action: 'ingest_output',
+      runId,
+      role: roleTask.role,
+      taskId: roleTask.taskId,
+      outputContent,
+      maxOutputTokens,
+    },
+  };
+}
+
+type DispatchCommandParser = (
+  args: Record<string, unknown>,
+  context: ToolContext,
+  dependencies: DispatchRuntimeHandlerDependencies,
+) => Promise<DispatchCommandParseResult>;
+
+const DISPATCH_COMMAND_PARSERS: Record<DispatchAction, DispatchCommandParser> = {
+  init_run: parseInitRunCommand,
+  get_snapshot: async args => parseGetSnapshotCommand(args),
+  get_telemetry: async () => ({
+    ok: true,
+    command: { action: 'get_telemetry' },
+  }),
+  compile_prompt: async (args, context) => parseCompilePromptCommand(args, context),
+  ingest_output: parseIngestOutputCommand,
+};
+
+type DispatchCommandExecutor<K extends DispatchToolCommand['action']> = (
+  command: Extract<DispatchToolCommand, { action: K }>,
+  dependencies: DispatchRuntimeHandlerDependencies,
+) => Promise<ToolResponse>;
+
+type DispatchCommandExecutorMap = {
+  [K in DispatchToolCommand['action']]: DispatchCommandExecutor<K>;
+};
+
+const DISPATCH_COMMAND_EXECUTORS: DispatchCommandExecutorMap = {
+  async init_run(command, dependencies) {
+    try {
+      const snapshot = await dependencies.runtimeManager.initRun(
+        command.runId,
+        command.specName,
+        command.taskId,
+        command.projectPath
+      );
+      return {
+        success: true,
+        message: 'Dispatch runtime initialized',
+        data: {
+          runId: command.runId,
+          snapshot,
+          selected_provider: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider),
+          classification_level: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.level),
+          dispatch_cli: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.dispatchCli),
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const errorCode = toDispatchToolErrorCode(error);
+      return {
+        success: false,
+        message,
+        data: {
+          runId: command.runId,
+          taskId: command.taskId,
+          errorCode,
+        },
+      };
+    }
+  },
+
+  async get_snapshot(command, dependencies) {
+    const snapshot = await dependencies.runtimeManager.getSnapshot(command.runId);
+    if (!snapshot) {
+      return {
+        success: false,
+        message: `No snapshot found for runId: ${command.runId}`,
+      };
+    }
+    return {
+      success: true,
+      message: 'Snapshot loaded',
+      data: {
+        runId: command.runId,
+        snapshot,
+      },
+    };
+  },
+
+  async get_telemetry(_command, dependencies) {
+    return {
+      success: true,
+      message: 'Dispatch runtime telemetry loaded',
+      data: {
+        ...dependencies.runtimeManager.getTelemetrySnapshot(),
+        file_content_cache: dependencies.fileContentCacheTelemetry(),
+      },
+    };
+  },
+
+  async compile_prompt(command, dependencies) {
+    try {
+      const compiled = await dependencies.runtimeManager.compilePrompt({
+        runId: command.runId,
+        role: command.role,
+        taskId: command.taskId,
+        projectPath: command.projectPath,
+        taskPrompt: command.taskPrompt,
+        maxOutputTokens: command.maxOutputTokens,
+        compactionContext: command.compactionContext,
+        compactionPromptOverride: command.compactionPromptOverride,
+        compactionAuto: command.compactionAuto,
+      });
+      return {
+        success: true,
+        message: 'Dispatch prompt compiled',
+        data: {
+          runId: command.runId,
+          role: command.role,
+          taskId: command.taskId,
+          ...compiled,
+          dispatch_cli: compiled.dispatchCli,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const errorCode = toDispatchToolErrorCode(error);
+      return {
+        success: false,
+        message,
+        data: {
+          runId: command.runId,
+          role: command.role,
+          taskId: command.taskId,
+          errorCode,
+        },
+      };
+    }
+  },
+
+  async ingest_output(command, dependencies) {
+    try {
+      const result = await dependencies.runtimeManager.ingestOutput({
+        runId: command.runId,
+        role: command.role,
+        taskId: command.taskId,
+        outputContent: command.outputContent,
+        maxOutputTokens: command.maxOutputTokens,
+      });
+
+      return {
+        success: true,
+        message: 'Dispatch output ingested and validated',
+        data: {
+          runId: command.runId,
+          role: command.role,
+          nextAction: result.nextAction,
+          result: result.result,
+          snapshot: result.snapshot,
+          outputTokens: result.outputTokens,
+          telemetry: dependencies.runtimeManager.getTelemetrySnapshot(),
+        },
+        nextSteps: [
+          `Follow next action: ${result.nextAction}`,
+          'Use get_snapshot for latest runtime status before dispatching next agent call',
+        ],
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof DispatchContractError) {
+        const snapshot = await dependencies.runtimeManager.recordTerminalContractFailure({
+          runId: command.runId,
+          role: command.role,
+          taskId: command.taskId,
+          errorCode: error.code,
+          errorMessage: message,
+        });
+        return {
+          success: false,
+          message,
+          data: {
+            runId: command.runId,
+            role: command.role,
+            taskId: command.taskId,
+            errorCode: error.code,
+            nextAction: 'halt_schema_invalid_terminal',
+            snapshot,
+            telemetry: dependencies.runtimeManager.getTelemetrySnapshot(),
+          },
+        };
+      }
+
+      const errorCode = toDispatchToolErrorCode(error);
+      return {
+        success: false,
+        message,
+        data: {
+          runId: command.runId,
+          role: command.role,
+          taskId: command.taskId,
+          errorCode,
+        },
+      };
+    }
+  },
+};
+
+async function parseDispatchCommand(
+  args: Record<string, unknown>,
+  context: ToolContext,
+  dependencies: DispatchRuntimeHandlerDependencies,
+): Promise<DispatchCommandParseResult> {
+  const actionRaw = String(args.action || '').trim();
+  if (!isDispatchAction(actionRaw)) {
+    return {
+      ok: false,
+      response: failure('action must be one of: init_run, ingest_output, get_snapshot, compile_prompt, get_telemetry'),
+    };
+  }
+  const parser = DISPATCH_COMMAND_PARSERS[actionRaw];
+  return parser(args, context, dependencies);
+}
+
+async function executeDispatchCommand(
+  command: DispatchToolCommand,
+  dependencies: DispatchRuntimeHandlerDependencies,
+): Promise<ToolResponse> {
+  const executor = DISPATCH_COMMAND_EXECUTORS[command.action] as (
+    command: DispatchToolCommand,
+    dependencies: DispatchRuntimeHandlerDependencies,
+  ) => Promise<ToolResponse>;
+  return executor(command, dependencies);
 }
 
 export const dispatchRuntimeTool: Tool = {
@@ -1498,272 +2108,12 @@ updates runtime events/snapshots, enforces output token budgets, and returns det
 
 export async function dispatchRuntimeHandler(
   args: Record<string, unknown>,
-  context: ToolContext
+  context: ToolContext,
+  dependencies: DispatchRuntimeHandlerDependencies = dispatchRuntimeDependencies,
 ): Promise<ToolResponse> {
-  const action = String(args.action || '') as DispatchAction;
-
-  if (!['init_run', 'ingest_output', 'get_snapshot', 'compile_prompt', 'get_telemetry'].includes(action)) {
-    return {
-      success: false,
-      message: 'action must be one of: init_run, ingest_output, get_snapshot, compile_prompt, get_telemetry',
-    };
+  const parsed = await parseDispatchCommand(args, context, dependencies);
+  if (!parsed.ok) {
+    return parsed.response;
   }
-
-  if (action === 'init_run') {
-    const specName = String(args.specName || '').trim();
-    const taskId = String(args.taskId || '').trim();
-    if (!specName || !taskId) {
-      return {
-        success: false,
-        message: 'init_run requires specName and taskId',
-      };
-    }
-    const runId = String(args.runId || '').trim() || `${specName}:${taskId}:${randomUUID()}`;
-    try {
-      const snapshot = await dispatchRuntimeManager.initRun(runId, specName, taskId, context.projectPath);
-      return {
-        success: true,
-        message: 'Dispatch runtime initialized',
-        data: {
-          runId,
-          snapshot,
-          selected_provider: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider),
-          classification_level: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.level),
-          dispatch_cli: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.dispatchCli),
-        },
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const errorCode = toDispatchToolErrorCode(error);
-      return {
-        success: false,
-        message,
-        data: {
-          runId,
-          taskId,
-          errorCode,
-        },
-      };
-    }
-  }
-
-  const runId = String(args.runId || '').trim();
-  if (!runId) {
-    return {
-      success: false,
-      message: `${action} requires runId`,
-    };
-  }
-
-  if (action === 'get_snapshot') {
-    const snapshot = await dispatchRuntimeManager.getSnapshot(runId);
-    if (!snapshot) {
-      return {
-        success: false,
-        message: `No snapshot found for runId: ${runId}`,
-      };
-    }
-    return {
-      success: true,
-      message: 'Snapshot loaded',
-      data: {
-        runId,
-        snapshot,
-      },
-    };
-  }
-
-  if (action === 'get_telemetry') {
-    return {
-      success: true,
-      message: 'Dispatch runtime telemetry loaded',
-      data: {
-        ...dispatchRuntimeManager.getTelemetrySnapshot(),
-        file_content_cache: getSharedFileContentCacheTelemetry(),
-      },
-    };
-  }
-
-  const role = String(args.role || '').trim() as DispatchRole;
-  const taskId = String(args.taskId || '').trim();
-  if (!['implementer', 'reviewer'].includes(role) || !taskId) {
-    return {
-      success: false,
-      message: `${action} requires role (implementer|reviewer) and taskId`,
-    };
-  }
-
-  if (action === 'compile_prompt') {
-    const taskPrompt = typeof args.taskPrompt === 'string'
-      ? args.taskPrompt.trim()
-      : undefined;
-    const maxOutputTokens = Number(args.maxOutputTokens ?? 1200);
-    const compactionContext = Array.isArray(args.compactionContext)
-      ? args.compactionContext
-        .filter(item => typeof item === 'string')
-        .map(item => item.trim())
-        .filter(Boolean)
-      : undefined;
-    const compactionPromptOverride = typeof args.compactionPromptOverride === 'string'
-      ? args.compactionPromptOverride.trim()
-      : undefined;
-    let compactionAuto: boolean | undefined;
-    if (args.compactionAuto !== undefined) {
-      if (typeof args.compactionAuto === 'boolean') {
-        compactionAuto = args.compactionAuto;
-      } else if (typeof args.compactionAuto === 'string') {
-        const normalized = args.compactionAuto.trim().toLowerCase();
-        if (['1', 'true', 'yes', 'on'].includes(normalized)) {
-          compactionAuto = true;
-        } else if (['0', 'false', 'no', 'off'].includes(normalized)) {
-          compactionAuto = false;
-        } else {
-          return {
-            success: false,
-            message: 'compile_prompt compactionAuto must be boolean-like',
-          };
-        }
-      } else {
-        return {
-          success: false,
-          message: 'compile_prompt compactionAuto must be boolean-like',
-        };
-      }
-    }
-
-    if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
-      return {
-        success: false,
-        message: 'compile_prompt requires positive maxOutputTokens',
-      };
-    }
-
-    try {
-      const compiled = await dispatchRuntimeManager.compilePrompt({
-        runId,
-        role,
-        taskId,
-        projectPath: context.projectPath,
-        taskPrompt,
-        maxOutputTokens,
-        compactionContext,
-        compactionPromptOverride,
-        compactionAuto,
-      });
-      return {
-        success: true,
-        message: 'Dispatch prompt compiled',
-        data: {
-          runId,
-          role,
-          taskId,
-          ...compiled,
-          dispatch_cli: compiled.dispatchCli,
-        },
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const errorCode = toDispatchToolErrorCode(error);
-      return {
-        success: false,
-        message,
-        data: {
-          runId,
-          role,
-          taskId,
-          errorCode,
-        },
-      };
-    }
-  }
-
-  let outputContent = String(args.outputContent || '').trim();
-  const outputFilePath = String(args.outputFilePath || '').trim();
-  if (!outputContent && outputFilePath) {
-    const resolved = outputFilePath.startsWith('/')
-      ? outputFilePath
-      : resolve(context.projectPath, outputFilePath);
-    outputContent = await fs.readFile(resolved, 'utf-8');
-  }
-
-  if (!outputContent) {
-    return {
-      success: false,
-      message: 'ingest_output requires outputContent or outputFilePath',
-    };
-  }
-
-  const maxOutputTokens = args.maxOutputTokens === undefined
-    ? undefined
-    : Number(args.maxOutputTokens);
-  if (args.maxOutputTokens !== undefined && (!Number.isFinite(maxOutputTokens) || (maxOutputTokens as number) <= 0)) {
-    return {
-      success: false,
-      message: 'ingest_output maxOutputTokens must be a positive number',
-    };
-  }
-
-  try {
-    const result = await dispatchRuntimeManager.ingestOutput({
-      runId,
-      role,
-      taskId,
-      outputContent,
-      maxOutputTokens,
-    });
-
-    return {
-      success: true,
-      message: 'Dispatch output ingested and validated',
-      data: {
-        runId,
-        role,
-        nextAction: result.nextAction,
-        result: result.result,
-        snapshot: result.snapshot,
-        outputTokens: result.outputTokens,
-        telemetry: dispatchRuntimeManager.getTelemetrySnapshot(),
-      },
-      nextSteps: [
-        `Follow next action: ${result.nextAction}`,
-        'Use get_snapshot for latest runtime status before dispatching next agent call',
-      ],
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (error instanceof DispatchContractError) {
-      const snapshot = await dispatchRuntimeManager.recordTerminalContractFailure({
-        runId,
-        role,
-        taskId,
-        errorCode: error.code,
-        errorMessage: message,
-      });
-      return {
-        success: false,
-        message,
-        data: {
-          runId,
-          role,
-          taskId,
-          errorCode: error.code,
-          nextAction: 'halt_schema_invalid_terminal',
-          snapshot,
-          telemetry: dispatchRuntimeManager.getTelemetrySnapshot(),
-        },
-      };
-    }
-
-    const errorCode = toDispatchToolErrorCode(error);
-    return {
-      success: false,
-      message,
-      data: {
-        runId,
-        role,
-        taskId,
-        errorCode,
-      },
-    };
-  }
+  return executeDispatchCommand(parsed.command, dependencies);
 }

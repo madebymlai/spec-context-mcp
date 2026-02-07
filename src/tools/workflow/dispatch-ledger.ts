@@ -103,15 +103,17 @@ export function resolveTasksFilePath(projectPath: string, specName: string): str
   return resolve(projectPath, '.spec-context', 'specs', specName, 'tasks.md');
 }
 
-function parseJsonValue<T>(value: string | undefined): T | undefined {
+function parseJsonValue<T>(factKey: string, value: string | undefined): T | undefined {
   if (!value) {
     return undefined;
   }
   try {
     return JSON.parse(value) as T;
   } catch (error) {
-    console.warn('[dispatch-ledger] Failed to parse persisted JSON value', error);
-    return undefined;
+    throw new DispatchLedgerError(
+      'progress_ledger_incomplete',
+      `Invalid JSON in fact "${factKey}": ${String(error)}`
+    );
   }
 }
 
@@ -243,10 +245,17 @@ export function progressLedgerFromFacts(facts: StateSnapshotFact[]): ProgressLed
   const taskId = factMap.get(DISPATCH_LEDGER_FACT_KEYS.progressTaskId);
   const sourcePath = factMap.get(DISPATCH_LEDGER_FACT_KEYS.progressSourcePath);
   const sourceFingerprint = parseJsonValue<SourceFingerprint>(
+    DISPATCH_LEDGER_FACT_KEYS.progressSourceFingerprint,
     factMap.get(DISPATCH_LEDGER_FACT_KEYS.progressSourceFingerprint)
   );
-  const totals = parseJsonValue<ProgressLedger['totals']>(factMap.get(DISPATCH_LEDGER_FACT_KEYS.progressTotals));
-  const currentTask = parseJsonValue<ProgressLedgerTask>(factMap.get(DISPATCH_LEDGER_FACT_KEYS.progressCurrentTask));
+  const totals = parseJsonValue<ProgressLedger['totals']>(
+    DISPATCH_LEDGER_FACT_KEYS.progressTotals,
+    factMap.get(DISPATCH_LEDGER_FACT_KEYS.progressTotals)
+  );
+  const currentTask = parseJsonValue<ProgressLedgerTask>(
+    DISPATCH_LEDGER_FACT_KEYS.progressCurrentTask,
+    factMap.get(DISPATCH_LEDGER_FACT_KEYS.progressCurrentTask)
+  );
 
   if (!specName || !taskId || !sourcePath || !sourceFingerprint || !totals) {
     return null;
@@ -294,9 +303,18 @@ export function taskLedgerFromFacts(args: {
     reviewerAssessment: factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskReviewerAssessment) as
       | TaskLedger['reviewerAssessment']
       | undefined,
-    reviewerIssues: parseJsonValue<TaskLedgerIssue[]>(factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskReviewerIssues)) ?? [],
-    blockers: parseJsonValue<string[]>(factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskBlockers)) ?? [],
-    requiredFixes: parseJsonValue<string[]>(factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskRequiredFixes)) ?? [],
+    reviewerIssues: parseJsonValue<TaskLedgerIssue[]>(
+      DISPATCH_LEDGER_FACT_KEYS.taskReviewerIssues,
+      factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskReviewerIssues)
+    ) ?? [],
+    blockers: parseJsonValue<string[]>(
+      DISPATCH_LEDGER_FACT_KEYS.taskBlockers,
+      factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskBlockers)
+    ) ?? [],
+    requiredFixes: parseJsonValue<string[]>(
+      DISPATCH_LEDGER_FACT_KEYS.taskRequiredFixes,
+      factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskRequiredFixes)
+    ) ?? [],
     stalled: {
       consecutiveNonProgress: parseNumberValue(factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskStalledCount), 0),
       threshold: parseNumberValue(
