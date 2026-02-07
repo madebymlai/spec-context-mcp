@@ -81,7 +81,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **The problem:** Each dispatch compiles a prompt containing steering docs, spec content, tool schemas, and task instructions. Much of this is redundant across dispatches or unnecessarily verbose.
 
-### Start here: Provider-Aware Prompt Ordering — P0
+### Start here: Provider-Aware Prompt Ordering — P0 
 
 **What:** Structure compiled prompts so stable content (steering docs, spec content) always comes first and task-specific instructions come last. The subagent forwards this to its LLM provider, where a stable prefix maximizes provider-side KV-cache hits. Not a size reduction — a reordering that makes every other technique more effective.
 
@@ -91,7 +91,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **Maps to our system:** Audit `compile_prompt` to ensure: (1) steering docs and spec content always first, no per-dispatch dynamic data (timestamps, run IDs) in the prefix; (2) task-specific instructions always last. The `PromptPrefixCompiler` with `stablePrefixHash`/`dynamicTailHash` split is the right pattern. Zero implementation cost — just an ordering audit.
 
-### Then: Magentic-One Task Ledger Pattern — P1
+### Then: Magentic-One Task Ledger Pattern — P1 [OK]
 
 **What:** Maintain two compact ledgers — Task Ledger (facts, decisions, plan) and Progress Ledger (completion status per task) — instead of replaying full spec files on each dispatch. The orchestrator consults these ledgers to assemble focused dispatch prompts.
 

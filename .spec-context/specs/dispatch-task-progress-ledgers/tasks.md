@@ -2,7 +2,7 @@
 
 > Tasks follow TDD: write or adjust tests as part of each task.
 
-- [ ] 1. Create dispatch ledger module and types
+- [x] 1. Create dispatch ledger module and types
   - File: `src/tools/workflow/dispatch-ledger.ts` (new)
   - Add `ProgressLedger` and `TaskLedger` interfaces
   - Add helpers for extracting/serializing ledger data from `StateSnapshotFact[]`
@@ -29,7 +29,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 2. Implement progress ledger extraction from tasks.md with fingerprinting
+- [x] 2. Implement progress ledger extraction from tasks.md with fingerprinting
   - File: `src/tools/workflow/dispatch-ledger.ts`
   - Parse tasks using `parseTasksFromMarkdown`
   - Build compact progress ledger (totals, activeTaskId, current task details)
@@ -57,7 +57,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 3. Add stalled-progress detector and replan hint generation
+- [x] 3. Add stalled-progress detector and replan hint generation
   - File: `src/tools/workflow/dispatch-ledger.ts`
   - Track consecutive non-progress outcomes per task
   - Flag stalled tasks after threshold and emit replan hint fact payload
@@ -85,7 +85,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 4. Integrate ledgers into dispatch-runtime init/ingest paths
+- [x] 4. Integrate ledgers into dispatch-runtime init/ingest paths
   - File: `src/tools/workflow/dispatch-runtime.ts`
   - On `init_run`, build/persist progress ledger facts
   - On `ingest_output`, update task-ledger facts and stalled counters
@@ -113,7 +113,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 5. Switch compile_prompt to ledger-first delta packet with targeted fallback
+- [x] 5. Switch compile_prompt to ledger-first delta packet with targeted fallback
   - File: `src/tools/workflow/dispatch-runtime.ts`
   - Build `deltaPacket` from ledger values by default
   - Inject fallback context only for missing required fields
@@ -141,7 +141,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 6. Add ledger telemetry fields and runtime reporting
+- [x] 6. Add ledger telemetry fields and runtime reporting
   - File: `src/tools/workflow/dispatch-runtime.ts`
   - Add counters/fields: ledger mode usage, fallback reasons, ledger rebuild count
   - Expose in `get_telemetry` response
@@ -168,7 +168,7 @@
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 7. Add comprehensive test coverage for ledger lifecycle
+- [x] 7. Add comprehensive test coverage for ledger lifecycle
   - File: `src/tools/workflow/dispatch-ledger.test.ts` (new), `src/tools/workflow/dispatch-runtime.test.ts`, `src/tools/workflow/dispatch-runtime.integration.test.ts`
   - Cover extraction, invalidation, stalled detection, compile fallback, telemetry updates
   - Purpose: Prevent prompt-quality regressions and ledger drift bugs

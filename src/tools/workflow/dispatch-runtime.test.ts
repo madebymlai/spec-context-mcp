@@ -7,6 +7,21 @@ const context = {
 };
 
 describe('dispatch-runtime tool', () => {
+  it('returns typed error when init_run cannot find tasks.md', async () => {
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-missing-tasks',
+        specName: 'spec-that-does-not-exist',
+        taskId: '1',
+      },
+      context
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.data?.errorCode).toBe('progress_ledger_missing_tasks');
+  });
+
   it('rejects compile_prompt when run is not initialized', async () => {
     const result = await dispatchRuntimeHandler(
       {
@@ -49,7 +64,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-mismatch-compile',
-        specName: 'feature-mismatch',
+        specName: 'dispatch-task-progress-ledgers',
         taskId: '10.1',
       },
       context
@@ -77,7 +92,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-mismatch-ingest',
-        specName: 'feature-mismatch',
+        specName: 'dispatch-task-progress-ledgers',
         taskId: '11.1',
       },
       context
@@ -106,7 +121,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-init',
-        specName: 'feature-a',
+        specName: 'dispatch-task-progress-ledgers',
         taskId: '1.1',
       },
       context
@@ -122,7 +137,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-implementer',
-        specName: 'feature-b',
+        specName: 'dispatch-task-progress-ledgers',
         taskId: '2.1',
       },
       context
@@ -147,12 +162,75 @@ END_DISPATCH_RESULT`,
     expect(result.data?.result?.status).toBe('completed');
   });
 
+  it('tracks stalled counters and resets after progress', async () => {
+    const runId = 'test-run-stalled-counters';
+    const taskId = '2.9';
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId,
+        specName: 'dispatch-task-progress-ledgers',
+        taskId,
+      },
+      context
+    );
+
+    const blockedOnce = await dispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId,
+        role: 'implementer',
+        taskId,
+        outputContent: `BEGIN_DISPATCH_RESULT
+{"task_id":"${taskId}","status":"blocked","summary":"Need dependency","files_changed":[],"tests":[{"command":"npm test --run","passed":false}],"follow_up_actions":["wait for dependency"]}
+END_DISPATCH_RESULT`,
+      },
+      context
+    );
+    const blockedFacts = (blockedOnce.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
+    expect(blockedFacts.find(fact => fact.k === 'ledger.task.stalled_count')?.v).toBe('1');
+    expect(blockedFacts.find(fact => fact.k === 'ledger.task.stalled_flagged')?.v).toBe('false');
+
+    const blockedTwice = await dispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId,
+        role: 'reviewer',
+        taskId,
+        outputContent: `BEGIN_DISPATCH_RESULT
+{"task_id":"${taskId}","assessment":"blocked","strengths":[],"issues":[{"severity":"important","message":"Still blocked","fix":"Resolve dependency"}],"required_fixes":["Resolve dependency"]}
+END_DISPATCH_RESULT`,
+      },
+      context
+    );
+    const blockedTwiceFacts = (blockedTwice.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
+    expect(blockedTwiceFacts.find(fact => fact.k === 'ledger.task.stalled_count')?.v).toBe('2');
+    expect(blockedTwiceFacts.find(fact => fact.k === 'ledger.task.stalled_flagged')?.v).toBe('true');
+    expect(blockedTwiceFacts.find(fact => fact.k === 'ledger.task.replan_hint')?.v).toContain('Stalled');
+
+    const recovered = await dispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId,
+        role: 'implementer',
+        taskId,
+        outputContent: `BEGIN_DISPATCH_RESULT
+{"task_id":"${taskId}","status":"completed","summary":"Dependency fixed","files_changed":[],"tests":[{"command":"npm test --run","passed":true}],"follow_up_actions":[]}
+END_DISPATCH_RESULT`,
+      },
+      context
+    );
+    const recoveredFacts = (recovered.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
+    expect(recoveredFacts.find(fact => fact.k === 'ledger.task.stalled_count')?.v).toBe('0');
+    expect(recoveredFacts.find(fact => fact.k === 'ledger.task.stalled_flagged')?.v).toBe('false');
+  });
+
   it('rejects invalid reviewer schema', async () => {
     await dispatchRuntimeHandler(
       {
         action: 'init_run',
         runId: 'test-run-reviewer-invalid',
-        specName: 'feature-c',
+        specName: 'dispatch-task-progress-ledgers',
         taskId: '3.1',
       },
       context
@@ -180,7 +258,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-schema-terminal',
-        specName: 'feature-e',
+        specName: 'dispatch-task-progress-ledgers',
         taskId: '5.1',
       },
       context
@@ -222,7 +300,7 @@ END_DISPATCH_RESULT`;
       {
         action: 'init_run',
         runId: 'test-run-prose-reject',
-        specName: 'feature-g',
+        specName: 'dispatch-task-progress-ledgers',
         taskId: '7.1',
       },
       context
@@ -251,8 +329,8 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-compile',
-        specName: 'feature-f',
-        taskId: '6.1',
+        specName: 'dispatch-task-progress-ledgers',
+        taskId: '1',
       },
       context
     );
@@ -262,7 +340,7 @@ END_DISPATCH_RESULT`,
         action: 'compile_prompt',
         runId: 'test-run-compile',
         role: 'implementer',
-        taskId: '6.1',
+        taskId: '1',
         taskPrompt: 'Implement parser changes',
         maxOutputTokens: 800,
       },
@@ -282,7 +360,7 @@ END_DISPATCH_RESULT`,
         action: 'compile_prompt',
         runId: 'test-run-compile',
         role: 'implementer',
-        taskId: '6.1',
+        taskId: '1',
         taskPrompt: 'Implement parser changes again',
         maxOutputTokens: 800,
       },
@@ -293,14 +371,14 @@ END_DISPATCH_RESULT`,
     expect(second.data?.deltaPacket?.guide_mode).toBe('compact');
   });
 
-  it('keeps stable prefix hash constant when dynamic tail changes and keeps task prompt last', async () => {
+  it('keeps stable prefix hash constant and preserves explicit task prompt override', async () => {
     const runId = 'test-run-stable-hash-dynamic-tail';
-    const taskId = '6.2';
+    const taskId = '1';
     await dispatchRuntimeHandler(
       {
         action: 'init_run',
         runId,
-        specName: 'feature-prefix-stability',
+        specName: 'dispatch-task-progress-ledgers',
         taskId,
       },
       context
@@ -344,12 +422,12 @@ END_DISPATCH_RESULT`,
 
   it('changes stable prefix hash when dispatch role changes', async () => {
     const runId = 'test-run-stable-hash-role-switch';
-    const taskId = '6.3';
+    const taskId = '1';
     await dispatchRuntimeHandler(
       {
         action: 'init_run',
         runId,
-        specName: 'feature-prefix-stability',
+        specName: 'dispatch-task-progress-ledgers',
         taskId,
       },
       context
@@ -385,12 +463,12 @@ END_DISPATCH_RESULT`,
 
   it('compacts overflowed prompts when auto compaction is enabled', async () => {
     const runId = 'test-run-compaction-auto';
-    const taskId = '8.1';
+    const taskId = '1';
     await dispatchRuntimeHandler(
       {
         action: 'init_run',
         runId,
-        specName: 'feature-compaction',
+        specName: 'dispatch-task-progress-ledgers',
         taskId,
       },
       context
@@ -441,12 +519,12 @@ END_DISPATCH_RESULT`,
 
   it('returns terminal overflow error when auto compaction is disabled', async () => {
     const runId = 'test-run-compaction-terminal';
-    const taskId = '8.2';
+    const taskId = '1';
     await dispatchRuntimeHandler(
       {
         action: 'init_run',
         runId,
-        specName: 'feature-compaction',
+        specName: 'dispatch-task-progress-ledgers',
         taskId,
       },
       context
@@ -476,7 +554,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-snapshot',
-        specName: 'feature-d',
+        specName: 'dispatch-task-progress-ledgers',
         taskId: '4.1',
       },
       context

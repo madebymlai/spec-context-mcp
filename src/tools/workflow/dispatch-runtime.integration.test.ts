@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +8,20 @@ import type { ToolResponse } from '../../workflow-types.js';
 
 async function createTempProject(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'dispatch-runtime-int-'));
+}
+
+async function ensureSpecTasks(
+  projectPath: string,
+  specName: string,
+  taskId: string
+): Promise<void> {
+  const specDir = join(projectPath, '.spec-context', 'specs', specName);
+  await mkdir(specDir, { recursive: true });
+  await writeFile(
+    join(specDir, 'tasks.md'),
+    `# Tasks\n\n- [-] ${taskId}. Integration task for ${specName}\n  - _Requirements: 1_\n  - _Prompt: Role: TypeScript Developer | Task: Implement ${taskId}_\n- [ ] ${taskId}.1 Follow-up`,
+    'utf8'
+  );
 }
 
 async function callDispatch(
@@ -41,6 +55,7 @@ describe('dispatch-runtime integration (no mocks)', () => {
       const dispatchBefore = Number(telemetryBefore.data?.dispatch_count ?? 0);
       const loopsBefore = Number(telemetryBefore.data?.approval_loops ?? 0);
 
+      await ensureSpecTasks(projectPath, 'feature-integration', taskId);
       const init = await callDispatch(projectPath, {
         action: 'init_run',
         runId,
@@ -48,6 +63,7 @@ describe('dispatch-runtime integration (no mocks)', () => {
         taskId,
       });
       expect(init.success).toBe(true);
+      expect(findFact(init, 'ledger.progress.active_task_id')).toBe(taskId);
 
       const compileImplementer = await callDispatch(projectPath, {
         action: 'compile_prompt',
@@ -125,6 +141,7 @@ END_DISPATCH_RESULT`,
       });
       expect(Number(telemetryAfter.data?.dispatch_count)).toBeGreaterThanOrEqual(dispatchBefore + 2);
       expect(Number(telemetryAfter.data?.approval_loops)).toBeGreaterThanOrEqual(loopsBefore + 1);
+      expect(Number(telemetryAfter.data?.ledger_mode_usage?.ledger_only ?? 0)).toBeGreaterThanOrEqual(2);
 
       const compileImplementerAgain = await callDispatch(projectPath, {
         action: 'compile_prompt',
@@ -147,6 +164,7 @@ END_DISPATCH_RESULT`,
     try {
       const runId = `int-budget-${randomUUID()}`;
       const taskId = '2.1';
+      await ensureSpecTasks(projectPath, 'feature-budget', taskId);
       await callDispatch(projectPath, {
         action: 'init_run',
         runId,
@@ -192,6 +210,7 @@ END_DISPATCH_RESULT`,
     try {
       const runId = `int-schema-${randomUUID()}`;
       const taskId = '3.1';
+      await ensureSpecTasks(projectPath, 'feature-schema', taskId);
       await callDispatch(projectPath, {
         action: 'init_run',
         runId,
@@ -240,6 +259,7 @@ END_DISPATCH_RESULT`,
     try {
       const blockedRunId = `int-blocked-${randomUUID()}`;
       const taskId = '4.1';
+      await ensureSpecTasks(projectPath, 'feature-status', taskId);
       await callDispatch(projectPath, {
         action: 'init_run',
         runId: blockedRunId,
@@ -261,6 +281,7 @@ END_DISPATCH_RESULT`,
       expect(findFact(blocked, 'implementer_status')).toBe('blocked');
 
       const failedRunId = `int-failed-${randomUUID()}`;
+      await ensureSpecTasks(projectPath, 'feature-status', taskId);
       await callDispatch(projectPath, {
         action: 'init_run',
         runId: failedRunId,
@@ -290,6 +311,7 @@ END_DISPATCH_RESULT`,
     try {
       const runId = `int-prefix-${randomUUID()}`;
       const taskId = '5.1';
+      await ensureSpecTasks(projectPath, 'feature-prefix-stability', taskId);
       await callDispatch(projectPath, {
         action: 'init_run',
         runId,
@@ -336,6 +358,7 @@ END_DISPATCH_RESULT`,
     try {
       const runId = `int-compaction-${randomUUID()}`;
       const taskId = '5.1';
+      await ensureSpecTasks(projectPath, 'feature-compaction', taskId);
       await callDispatch(projectPath, {
         action: 'init_run',
         runId,

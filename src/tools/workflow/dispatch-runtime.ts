@@ -18,6 +18,21 @@ import type {
   StateSnapshotFact,
 } from '../../core/llm/index.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
+import {
+  type LedgerMode,
+  DispatchLedgerError,
+  applyOutcomeToTaskLedger,
+  assertCompleteProgressLedger,
+  buildLedgerDeltaPacket,
+  buildLedgerTaskPrompt,
+  extractProgressLedger,
+  isProgressLedgerStale,
+  progressLedgerFromFacts,
+  progressLedgerToFacts,
+  resolveTasksFilePath,
+  taskLedgerFromFacts,
+  taskLedgerToFacts,
+} from './dispatch-ledger.js';
 
 type DispatchAction = 'init_run' | 'ingest_output' | 'get_snapshot' | 'compile_prompt' | 'get_telemetry';
 type DispatchRole = 'implementer' | 'reviewer';
@@ -217,6 +232,7 @@ function estimateTokensFromChars(value: string, charsPerToken = 4): number {
 const DEFAULT_MAX_INPUT_TOKENS_IMPLEMENTER = 4800;
 const DEFAULT_MAX_INPUT_TOKENS_REVIEWER = 4000;
 const DEFAULT_TOKEN_CHARS_PER_TOKEN = 4;
+const DEFAULT_STALLED_THRESHOLD = 2;
 const MAX_DELTA_VALUE_CHARS = 240;
 const STAGE_B_HEAD_LINES = 18;
 const STAGE_B_TAIL_LINES = 8;
@@ -454,6 +470,11 @@ interface DispatchTelemetrySnapshot {
   compaction_ratio: number;
   compaction_stage_distribution: Record<DispatchCompactionStage, number>;
   overflow_terminal_count: number;
+  ledger_mode_usage: Record<LedgerMode, number>;
+  ledger_rebuild_count: number;
+  ledger_prompt_tokens_baseline: number;
+  ledger_prompt_tokens_actual: number;
+  ledger_prompt_token_delta: number;
 }
 
 function buildDispatchGuideInstruction(input: {
@@ -581,6 +602,10 @@ class DispatchRuntimeManager {
   private readonly promptCompiler = new DispatchPromptCompiler();
   private readonly guidePromptCounts = new Map<string, number>();
   private readonly compactionPolicy = resolveDispatchCompactionPolicy();
+  private readonly stalledThreshold = intFromEnv(
+    process.env.SPEC_CONTEXT_DISPATCH_STALLED_THRESHOLD,
+    DEFAULT_STALLED_THRESHOLD
+  );
   private telemetry: DispatchTelemetrySnapshot = {
     dispatch_count: 0,
     total_output_tokens: 0,
@@ -599,13 +624,32 @@ class DispatchRuntimeManager {
       stage_c_fallback: 0,
     },
     overflow_terminal_count: 0,
+    ledger_mode_usage: {
+      ledger_only: 0,
+    },
+    ledger_rebuild_count: 0,
+    ledger_prompt_tokens_baseline: 0,
+    ledger_prompt_tokens_actual: 0,
+    ledger_prompt_token_delta: 0,
   };
 
   constructor() {
     this.registerSchemas();
   }
 
-  async initRun(runId: string, specName: string, taskId: string): Promise<StateSnapshot> {
+  async initRun(runId: string, specName: string, taskId: string, projectPath: string): Promise<StateSnapshot> {
+    const progressLedger = await extractProgressLedger({
+      specName,
+      taskId,
+      sourcePath: resolveTasksFilePath(projectPath, specName),
+    });
+    const taskLedger = taskLedgerFromFacts({
+      runId,
+      taskId,
+      facts: [],
+      stalledThreshold: this.stalledThreshold,
+    });
+
     this.guidePromptCounts.delete(`${runId}:implementer`);
     this.guidePromptCounts.delete(`${runId}:reviewer`);
     const initEvent = await this.publishEvent({
@@ -618,6 +662,8 @@ class DispatchRuntimeManager {
         spec_name: specName,
         task_id: taskId,
         dispatch_status: 'running',
+        ledger_progress_totals: progressLedger.totals,
+        ledger_progress_active_task_id: progressLedger.activeTaskId,
       },
     });
 
@@ -628,6 +674,8 @@ class DispatchRuntimeManager {
       facts: [
         { k: 'spec_name', v: specName, confidence: 1 },
         { k: 'task_id', v: taskId, confidence: 1 },
+        ...progressLedgerToFacts(progressLedger),
+        ...taskLedgerToFacts(taskLedger),
       ],
       pendingWrites: [
         {
@@ -667,7 +715,7 @@ class DispatchRuntimeManager {
     nextAction: string;
     outputTokens: number;
   }> {
-    await this.assertRunBinding(args.runId, args.taskId);
+    const snapshotBefore = await this.assertRunBinding(args.runId, args.taskId);
     const parsed = extractStructuredJson(args.outputContent);
     const outputTokens = estimateTokensFromChars(args.outputContent, this.compactionPolicy.tokenCharsPerToken);
     if (typeof args.maxOutputTokens === 'number' && outputTokens > args.maxOutputTokens) {
@@ -689,11 +737,27 @@ class DispatchRuntimeManager {
         },
       });
 
+      const taskLedger = applyOutcomeToTaskLedger(
+        taskLedgerFromFacts({
+          runId: args.runId,
+          taskId: args.taskId,
+          facts: snapshotBefore.facts ?? [],
+          stalledThreshold: this.stalledThreshold,
+        }),
+        {
+          role: 'implementer',
+          status: result.status,
+          summary: result.summary,
+          followUpActions: result.follow_up_actions,
+        }
+      );
+
       const facts: StateSnapshotFact[] = [
         { k: 'implementer_status', v: result.status, confidence: 1 },
         { k: 'implementer_summary', v: result.summary, confidence: 0.9 },
         { k: 'output_tokens:last', v: String(outputTokens), confidence: 1 },
         { k: 'task_id', v: result.task_id, confidence: 1 },
+        ...taskLedgerToFacts(taskLedger),
       ];
       await this.updateSnapshot(args.runId, responseEvent, facts, result.task_id, statusForImplementer(result));
       this.bumpDispatchTelemetry(outputTokens, false);
@@ -721,11 +785,31 @@ class DispatchRuntimeManager {
       },
     });
 
+    const taskLedger = applyOutcomeToTaskLedger(
+      taskLedgerFromFacts({
+        runId: args.runId,
+        taskId: args.taskId,
+        facts: snapshotBefore.facts ?? [],
+        stalledThreshold: this.stalledThreshold,
+      }),
+      {
+        role: 'reviewer',
+        assessment: result.assessment,
+        issues: result.issues.map(issue => ({
+          severity: issue.severity,
+          message: issue.message,
+          file: issue.file,
+        })),
+        requiredFixes: result.required_fixes,
+      }
+    );
+
     const facts: StateSnapshotFact[] = [
       { k: 'reviewer_assessment', v: result.assessment, confidence: 1 },
       { k: 'reviewer_issue_count', v: String(result.issues.length), confidence: 1 },
       { k: 'output_tokens:last', v: String(outputTokens), confidence: 1 },
       { k: 'task_id', v: result.task_id, confidence: 1 },
+      ...taskLedgerToFacts(taskLedger),
     ];
     await this.updateSnapshot(args.runId, responseEvent, facts, result.task_id, statusForReviewer(result));
     this.bumpDispatchTelemetry(outputTokens, result.assessment === 'needs_changes');
@@ -747,7 +831,8 @@ class DispatchRuntimeManager {
     runId: string;
     role: DispatchRole;
     taskId: string;
-    taskPrompt: string;
+    projectPath: string;
+    taskPrompt?: string;
     maxOutputTokens: number;
     compactionContext?: string[];
     compactionPromptOverride?: string;
@@ -767,19 +852,81 @@ class DispatchRuntimeManager {
     compactionStage: DispatchCompactionStage;
     compactionTrace: DispatchCompactionTrace[];
   }> {
-    const snapshot = await this.assertRunBinding(args.runId, args.taskId);
-    const facts = new Map((snapshot.facts ?? []).map(fact => [fact.k, fact.v]));
+    let snapshot = await this.assertRunBinding(args.runId, args.taskId);
+    const snapshotFactMap = new Map((snapshot.facts ?? []).map(fact => [fact.k, fact.v]));
+    let progressLedger = progressLedgerFromFacts(snapshot.facts ?? []);
+    const missingProgressLedger = !progressLedger;
+    const staleProgressLedger = progressLedger ? await isProgressLedgerStale(progressLedger) : false;
+
+    if (missingProgressLedger || staleProgressLedger) {
+      const specName = snapshotFactMap.get('spec_name');
+      if (!specName) {
+        throw new DispatchLedgerError(
+          'progress_ledger_incomplete',
+          'Cannot rebuild progress ledger because spec_name fact is missing'
+        );
+      }
+
+      const sourcePath = progressLedger?.sourcePath ?? resolveTasksFilePath(args.projectPath, specName);
+      const rebuilt = await extractProgressLedger({
+        specName,
+        taskId: args.taskId,
+        sourcePath,
+      });
+      progressLedger = rebuilt;
+      this.telemetry.ledger_rebuild_count += 1;
+
+      const rebuildEvent = await this.publishEvent({
+        partition_key: args.runId,
+        run_id: args.runId,
+        step_id: args.taskId,
+        agent_id: 'orchestrator',
+        type: 'STATE_DELTA',
+        payload: {
+          task_id: args.taskId,
+          ledger_rebuild: true,
+          ledger_source_path: rebuilt.sourcePath,
+          ledger_source_fingerprint: rebuilt.sourceFingerprint,
+        },
+      });
+
+      await this.updateSnapshot(
+        args.runId,
+        rebuildEvent,
+        progressLedgerToFacts(rebuilt),
+        args.taskId,
+        snapshot.status
+      );
+      snapshot = await this.requireSnapshot(args.runId);
+    }
+
+    const ensuredProgressLedger = assertCompleteProgressLedger(progressLedger);
+    const ledgerPrompt = buildLedgerTaskPrompt(ensuredProgressLedger);
+    if (ledgerPrompt.missing.length > 0) {
+      throw new DispatchLedgerError(
+        'progress_ledger_incomplete',
+        `Progress ledger missing required fields: ${ledgerPrompt.missing.join(', ')}`
+      );
+    }
+
     const guideMode = this.nextGuideMode(args.runId, args.role);
     const guideCacheKey = `${args.role}:${args.runId}`;
-    let deltaPacket: Record<string, unknown> = {
-      task_id: args.taskId,
-      previous_implementer_summary: facts.get('implementer_summary') ?? null,
-      previous_reviewer_assessment: facts.get('reviewer_assessment') ?? null,
-      previous_reviewer_issue_count: facts.get('reviewer_issue_count') ?? null,
-      guide_mode: guideMode,
-      guide_cache_key: guideCacheKey,
-    };
-    let taskPrompt = args.taskPrompt;
+    const taskLedger = taskLedgerFromFacts({
+      runId: args.runId,
+      taskId: args.taskId,
+      facts: snapshot.facts ?? [],
+      stalledThreshold: this.stalledThreshold,
+    });
+    let deltaPacket: Record<string, unknown> = buildLedgerDeltaPacket({
+      taskId: args.taskId,
+      guideMode,
+      guideCacheKey,
+      taskLedger,
+      progressLedger: ensuredProgressLedger,
+    });
+    let taskPrompt = args.taskPrompt?.trim()
+      ? args.taskPrompt.trim()
+      : ledgerPrompt.prompt;
 
     const promptBudget = this.resolvePromptInputBudget(args.role, args.maxOutputTokens);
     const autoCompaction = args.compactionAuto ?? this.compactionPolicy.auto;
@@ -926,6 +1073,8 @@ class DispatchRuntimeManager {
       );
     }
 
+    this.bumpLedgerCompileTelemetry('ledger_only', promptTokensBefore, compiled.promptTokens);
+
     return {
       prompt: compiled.prompt,
       stablePrefixHash: compiled.stablePrefixHash,
@@ -947,6 +1096,7 @@ class DispatchRuntimeManager {
     return {
       ...this.telemetry,
       compaction_stage_distribution: { ...this.telemetry.compaction_stage_distribution },
+      ledger_mode_usage: { ...this.telemetry.ledger_mode_usage },
     };
   }
 
@@ -1048,6 +1198,14 @@ class DispatchRuntimeManager {
     }
   }
 
+  private bumpLedgerCompileTelemetry(mode: LedgerMode, baselineTokens: number, actualTokens: number): void {
+    this.telemetry.ledger_mode_usage[mode] += 1;
+    this.telemetry.ledger_prompt_tokens_baseline += baselineTokens;
+    this.telemetry.ledger_prompt_tokens_actual += actualTokens;
+    this.telemetry.ledger_prompt_token_delta =
+      this.telemetry.ledger_prompt_tokens_actual - this.telemetry.ledger_prompt_tokens_baseline;
+  }
+
   private resolvePromptInputBudget(role: DispatchRole, maxOutputTokens: number): number {
     const roleCap = role === 'implementer'
       ? this.compactionPolicy.maxInputTokensImplementer
@@ -1144,7 +1302,13 @@ const dispatchRuntimeManager = new DispatchRuntimeManager();
 
 function errorCodeFromMessage(
   message: string
-): 'run_not_initialized' | 'run_task_mismatch' | 'dispatch_prompt_overflow_terminal' | null {
+): 'run_not_initialized'
+  | 'run_task_mismatch'
+  | 'dispatch_prompt_overflow_terminal'
+  | 'progress_ledger_missing_tasks'
+  | 'progress_ledger_parse_failed'
+  | 'progress_ledger_incomplete'
+  | null {
   if (message.startsWith('run_not_initialized:')) {
     return 'run_not_initialized';
   }
@@ -1153,6 +1317,15 @@ function errorCodeFromMessage(
   }
   if (message.startsWith('dispatch_prompt_overflow_terminal:')) {
     return 'dispatch_prompt_overflow_terminal';
+  }
+  if (message.startsWith('progress_ledger_missing_tasks:')) {
+    return 'progress_ledger_missing_tasks';
+  }
+  if (message.startsWith('progress_ledger_parse_failed:')) {
+    return 'progress_ledger_parse_failed';
+  }
+  if (message.startsWith('progress_ledger_incomplete:')) {
+    return 'progress_ledger_incomplete';
   }
   return null;
 }
@@ -1246,15 +1419,29 @@ export async function dispatchRuntimeHandler(
       };
     }
     const runId = String(args.runId || '').trim() || `${specName}:${taskId}:${randomUUID()}`;
-    const snapshot = await dispatchRuntimeManager.initRun(runId, specName, taskId);
-    return {
-      success: true,
-      message: 'Dispatch runtime initialized',
-      data: {
-        runId,
-        snapshot,
-      },
-    };
+    try {
+      const snapshot = await dispatchRuntimeManager.initRun(runId, specName, taskId, context.projectPath);
+      return {
+        success: true,
+        message: 'Dispatch runtime initialized',
+        data: {
+          runId,
+          snapshot,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const errorCode = errorCodeFromMessage(message);
+      return {
+        success: false,
+        message,
+        data: {
+          runId,
+          taskId,
+          errorCode,
+        },
+      };
+    }
   }
 
   const runId = String(args.runId || '').trim();
@@ -1301,7 +1488,9 @@ export async function dispatchRuntimeHandler(
   }
 
   if (action === 'compile_prompt') {
-    const taskPrompt = String(args.taskPrompt || '').trim();
+    const taskPrompt = typeof args.taskPrompt === 'string'
+      ? args.taskPrompt.trim()
+      : undefined;
     const maxOutputTokens = Number(args.maxOutputTokens ?? 1200);
     const compactionContext = Array.isArray(args.compactionContext)
       ? args.compactionContext
@@ -1336,12 +1525,6 @@ export async function dispatchRuntimeHandler(
       }
     }
 
-    if (!taskPrompt) {
-      return {
-        success: false,
-        message: 'compile_prompt requires taskPrompt',
-      };
-    }
     if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
       return {
         success: false,
@@ -1354,6 +1537,7 @@ export async function dispatchRuntimeHandler(
         runId,
         role,
         taskId,
+        projectPath: context.projectPath,
         taskPrompt,
         maxOutputTokens,
         compactionContext,
