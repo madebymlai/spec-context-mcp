@@ -1,0 +1,22 @@
+{
+  "filePath": ".spec-context/specs/mcp-tool-result-caching/requirements.md",
+  "currentVersion": 2,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2026-02-07T15:19:18.651Z",
+      "trigger": "initial",
+      "approvalId": "approval_1770477558648_dt8ynzbiv",
+      "approvalTitle": "Requirements: MCP Tool-Result Caching (Dimension 5 P1)"
+    },
+    {
+      "version": 2,
+      "filename": "snapshot-002.json",
+      "timestamp": "2026-02-07T15:19:22.046Z",
+      "trigger": "approved",
+      "approvalId": "approval_1770477558648_dt8ynzbiv",
+      "approvalTitle": "Requirements: MCP Tool-Result Caching (Dimension 5 P1)"
+    }
+  ]
+}

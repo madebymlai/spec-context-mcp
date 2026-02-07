@@ -4,8 +4,9 @@ import { join } from 'path';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { PathUtils } from '../../core/workflow/path-utils.js';
 import { SpecParser } from '../../core/workflow/parser.js';
-import type { FileContentFingerprint, IFileContentCache } from '../../core/cache/file-content-cache.js';
+import { areFileFingerprintsEqual, type FileContentFingerprint } from '../../core/cache/file-content-cache.js';
 import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
+import { setBoundedMapEntry } from '../../core/cache/bounded-map.js';
 
 interface SpecStatusCacheEntry {
   spec: Awaited<ReturnType<SpecParser['getSpec']>>;
@@ -14,6 +15,7 @@ interface SpecStatusCacheEntry {
 }
 
 const specStatusCache = new Map<string, SpecStatusCacheEntry>();
+const MAX_SPEC_STATUS_CACHE_ENTRIES = 512;
 
 export const specStatusTool: Tool = {
   name: 'spec-status',
@@ -34,7 +36,27 @@ Call when resuming work on a spec or checking overall completion status. Shows w
       }
     },
     required: ['specName']
-  }
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      success: { type: 'boolean' },
+      message: { type: 'string' },
+      data: {
+        type: 'object',
+        additionalProperties: true,
+      },
+      nextSteps: {
+        type: 'array',
+        items: { type: 'string' },
+      },
+      projectContext: {
+        type: 'object',
+        additionalProperties: true,
+      },
+    },
+    required: ['success', 'message'],
+  },
 };
 
 export async function specStatusHandler(args: any, context: ToolContext): Promise<ToolResponse> {
@@ -64,7 +86,7 @@ export async function specStatusHandler(args: any, context: ToolContext): Promis
     const cached = specStatusCache.get(cacheKey);
     const useCachedSpec =
       cached !== undefined
-      && areFingerprintsEqual(cached.tasksFingerprint, tasksFingerprint)
+      && areFileFingerprintsEqual(cached.tasksFingerprint, tasksFingerprint)
       && cached.specDirMtimeMs === specDirMtimeMs;
 
     let spec = useCachedSpec ? cached.spec : null;
@@ -72,11 +94,11 @@ export async function specStatusHandler(args: any, context: ToolContext): Promis
       const parser = new SpecParser(translatedPath);
       spec = await parser.getSpec(specName);
       if (spec) {
-        specStatusCache.set(cacheKey, {
+        setBoundedMapEntry(specStatusCache, cacheKey, {
           spec,
           tasksFingerprint,
           specDirMtimeMs,
-        });
+        }, MAX_SPEC_STATUS_CACHE_ENTRIES);
       } else {
         specStatusCache.delete(cacheKey);
       }
@@ -231,17 +253,4 @@ async function getDirectoryMtimeMs(specDirPath: string): Promise<number | null> 
   } catch {
     return null;
   }
-}
-
-function areFingerprintsEqual(
-  left: FileContentFingerprint | null,
-  right: FileContentFingerprint | null
-): boolean {
-  if (!left && !right) {
-    return true;
-  }
-  if (!left || !right) {
-    return false;
-  }
-  return left.mtimeMs === right.mtimeMs && left.hash === right.hash;
 }

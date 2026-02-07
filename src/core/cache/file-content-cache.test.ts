@@ -61,7 +61,6 @@ describe('file-content-cache', () => {
     expect(fp1).not.toBeNull();
     expect(fp2).not.toBeNull();
     expect(fp1?.mtimeMs).not.toBe(fp2?.mtimeMs);
-    expect(fp1?.hash).not.toBe(fp2?.hash);
     expect(cache.getTelemetry().namespaces['spec-status']?.misses).toBe(2);
   });
 
@@ -115,5 +114,26 @@ describe('file-content-cache', () => {
 
     cache.clear();
     expect(cache.getFingerprint(filePath)).toBeNull();
+  });
+
+  it('evicts oldest entries when maxEntries is reached', async () => {
+    const dir = await createTempDir('evict');
+    const fileA = join(dir, 'a.txt');
+    const fileB = join(dir, 'b.txt');
+    const fileC = join(dir, 'c.txt');
+    await writeFile(fileA, 'a', 'utf8');
+    await writeFile(fileB, 'b', 'utf8');
+    await writeFile(fileC, 'c', 'utf8');
+    const cache = new FileContentCache(2);
+
+    await cache.get(fileA);
+    await cache.get(fileB);
+    expect(cache.getFingerprint(fileA)).not.toBeNull();
+    expect(cache.getFingerprint(fileB)).not.toBeNull();
+
+    await cache.get(fileC);
+    expect(cache.getFingerprint(fileA)).toBeNull();
+    expect(cache.getFingerprint(fileB)).not.toBeNull();
+    expect(cache.getFingerprint(fileC)).not.toBeNull();
   });
 });

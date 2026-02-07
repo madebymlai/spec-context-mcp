@@ -84,13 +84,15 @@ export class SpecParser {
       const productExists = await this.fileExists(join(steeringPath, 'product.md'));
       const techExists = await this.fileExists(join(steeringPath, 'tech.md'));
       const structureExists = await this.fileExists(join(steeringPath, 'structure.md'));
+      const principlesExists = await this.fileExists(join(steeringPath, 'principles.md'));
       
       return {
         exists: stats.isDirectory(),
         documents: {
           product: productExists,
           tech: techExists,
-          structure: structureExists
+          structure: structureExists,
+          principles: principlesExists,
         },
         lastModified: stats.mtime.toISOString()
       };
@@ -100,7 +102,8 @@ export class SpecParser {
         documents: {
           product: false,
           tech: false,
-          structure: false
+          structure: false,
+          principles: false,
         }
       };
     }

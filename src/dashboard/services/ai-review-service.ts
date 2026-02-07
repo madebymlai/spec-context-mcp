@@ -138,6 +138,7 @@ export interface SteeringContext {
     product?: string;
     tech?: string;
     structure?: string;
+    principles?: string;
 }
 
 /**
@@ -451,6 +452,12 @@ ${REVIEW_USER_SUFFIX}`;
                 id: 'structure',
                 title: 'Codebase Structure',
                 content: steeringContext?.structure ?? '',
+                required: false,
+            },
+            {
+                id: 'principles',
+                title: 'Engineering Principles',
+                content: steeringContext?.principles ?? '',
                 required: false,
             },
             {

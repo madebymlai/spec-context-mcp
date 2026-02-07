@@ -277,8 +277,16 @@ function Content() {
       displayName: 'Structure',
       exists: steeringDocuments?.documents?.structure || false,
       lastModified: steeringDocuments?.lastModified
+    },
+    {
+      name: 'principles',
+      displayName: 'Principles',
+      exists: steeringDocuments?.documents?.principles || false,
+      lastModified: steeringDocuments?.lastModified
     }
   ];
+  const hasAnyDocument = documents.some(doc => doc.exists);
+  const showEmptyState = steeringDocuments !== undefined && !hasAnyDocument && !steeringDocuments?.exists;
 
   return (
     <div className="grid gap-4">
@@ -373,7 +381,7 @@ function Content() {
         </div>
 
         {/* Empty State */}
-        {!documents.some(doc => doc.exists) && (
+        {showEmptyState && (
           <div className="text-center py-12 mt-8 border-t border-gray-200 dark:border-gray-700">
             <svg className="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />

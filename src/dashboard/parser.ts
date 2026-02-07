@@ -236,7 +236,8 @@ export class SpecParser {
       documents: {
         product: false,
         tech: false,
-        structure: false
+        structure: false,
+        principles: false,
       }
     };
 
@@ -258,6 +259,11 @@ export class SpecParser {
       try {
         await access(join(this.steeringPath, 'structure.md'));
         status.documents.structure = true;
+      } catch {}
+
+      try {
+        await access(join(this.steeringPath, 'principles.md'));
+        status.documents.principles = true;
       } catch {}
 
       // Get last modified time for steering directory

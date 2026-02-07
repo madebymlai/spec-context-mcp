@@ -24,7 +24,13 @@ import {
   DEFAULT_SECURITY_CONFIG
 } from '../core/workflow/security-utils.js';
 import { SecurityConfig } from '../workflow-types.js';
-import { AiReviewService, AiReviewModel, AI_REVIEW_MODELS, SpecDocsContext } from './services/ai-review-service.js';
+import {
+  AiReviewService,
+  AiReviewModel,
+  AI_REVIEW_MODELS,
+  SpecDocsContext,
+  SteeringContext,
+} from './services/ai-review-service.js';
 import { BudgetExceededError } from '../core/llm/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1157,7 +1163,7 @@ export class MultiProjectDashboardServer {
         }
 
         // Load steering docs for context (if they exist)
-        const steeringDocs: { product?: string; tech?: string; structure?: string } = {};
+        const steeringDocs: SteeringContext = {};
         const steeringPath = join(project.projectPath, '.spec-context', 'steering');
         try {
           steeringDocs.product = await readFile(join(steeringPath, 'product.md'), 'utf-8');
@@ -1167,6 +1173,9 @@ export class MultiProjectDashboardServer {
         } catch { /* optional */ }
         try {
           steeringDocs.structure = await readFile(join(steeringPath, 'structure.md'), 'utf-8');
+        } catch { /* optional */ }
+        try {
+          steeringDocs.principles = await readFile(join(steeringPath, 'principles.md'), 'utf-8');
         } catch { /* optional */ }
 
         // Load previous spec documents for context (if reviewing design or tasks)
@@ -1250,7 +1259,7 @@ export class MultiProjectDashboardServer {
         return reply.code(404).send({ error: 'Project not found' });
       }
 
-      const allowedDocs = ['product', 'tech', 'structure'];
+      const allowedDocs = ['product', 'tech', 'structure', 'principles'];
       if (!allowedDocs.includes(name)) {
         return reply.code(400).send({ error: 'Invalid steering document name' });
       }
@@ -1282,7 +1291,7 @@ export class MultiProjectDashboardServer {
         return reply.code(404).send({ error: 'Project not found' });
       }
 
-      const allowedDocs = ['product', 'tech', 'structure'];
+      const allowedDocs = ['product', 'tech', 'structure', 'principles'];
       if (!allowedDocs.includes(name)) {
         return reply.code(400).send({ error: 'Invalid steering document name' });
       }

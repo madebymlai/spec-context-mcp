@@ -6,13 +6,21 @@
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import type { IFileContentCache } from '../../core/cache/file-content-cache.js';
+import {
+  areFileFingerprintsEqual,
+  type FileContentFingerprint,
+  type IFileContentCache,
+} from '../../core/cache/file-content-cache.js';
 
 export type SteeringDocType = 'product' | 'tech' | 'structure' | 'principles';
+export const GUIDE_STEERING_DOCS = ['tech', 'principles'] as const;
+export type GuideSteeringDocType = (typeof GUIDE_STEERING_DOCS)[number];
 
 export type SteeringDocsResult = {
   [K in SteeringDocType]?: string;
 };
+
+export type SteeringFingerprintMap = Partial<Record<SteeringDocType, FileContentFingerprint>>;
 
 /**
  * Load specific steering documents from the project's steering directory.
@@ -26,33 +34,65 @@ export async function getSteeringDocs(
   docs: SteeringDocType[],
   cache?: IFileContentCache
 ): Promise<SteeringDocsResult | null> {
-  const steeringDir = join(projectPath, '.spec-context', 'steering');
-
-  if (!existsSync(steeringDir)) {
-    return null;
-  }
-
   const result: SteeringDocsResult = {};
 
   for (const doc of docs) {
-    const docPath = join(steeringDir, `${doc}.md`);
-    if (existsSync(docPath)) {
-      try {
-        if (cache) {
-          const cached = await cache.get(docPath, { namespace: 'steering' });
-          if (cached !== null) {
-            result[doc] = cached;
-          }
-        } else {
-          result[doc] = await readFile(docPath, 'utf-8');
+    const docPath = buildSteeringDocPath(projectPath, doc);
+    try {
+      if (cache) {
+        const cached = await cache.get(docPath, { namespace: 'steering' });
+        if (cached !== null) {
+          result[doc] = cached;
         }
-      } catch {
-        // Skip if can't read
+      } else {
+        result[doc] = await readFile(docPath, 'utf-8');
       }
+    } catch {
+      // Skip if can't read
     }
   }
 
   return Object.keys(result).length > 0 ? result : null;
+}
+
+export function buildSteeringDocPath(projectPath: string, doc: SteeringDocType): string {
+  return join(projectPath, '.spec-context', 'steering', `${doc}.md`);
+}
+
+export function collectSteeringFingerprints(
+  projectPath: string,
+  docs: readonly SteeringDocType[],
+  fileContentCache: IFileContentCache
+): SteeringFingerprintMap {
+  const fingerprints: SteeringFingerprintMap = {};
+  for (const doc of docs) {
+    const fingerprint = fileContentCache.getFingerprint(buildSteeringDocPath(projectPath, doc));
+    if (fingerprint) {
+      fingerprints[doc] = fingerprint;
+    }
+  }
+  return fingerprints;
+}
+
+export function hasSteeringFingerprintMismatch(
+  args: {
+    projectPath: string;
+    docs: readonly SteeringDocType[];
+    previous: SteeringFingerprintMap;
+    fileContentCache: IFileContentCache;
+  }
+): boolean {
+  for (const doc of args.docs) {
+    const current = args.fileContentCache.getFingerprint(buildSteeringDocPath(args.projectPath, doc));
+    const previous = args.previous[doc];
+    if (!current || !previous) {
+      return true;
+    }
+    if (!areFileFingerprintsEqual(current, previous)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

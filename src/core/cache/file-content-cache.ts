@@ -1,9 +1,8 @@
-import { createHash } from 'crypto';
 import { readFile, stat } from 'fs/promises';
+import { setBoundedMapEntry } from './bounded-map.js';
 
 export interface FileContentFingerprint {
   mtimeMs: number;
-  hash: string;
 }
 
 export interface FileContentCacheNamespaceTelemetry {
@@ -22,7 +21,6 @@ export interface FileContentCacheTelemetry {
 interface FileContentCacheEntry {
   content: string;
   fingerprint: FileContentFingerprint;
-  cachedAt: number;
 }
 
 export interface IFileContentCache {
@@ -33,16 +31,30 @@ export interface IFileContentCache {
   clear(): void;
 }
 
-function hashContent(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
+export function areFileFingerprintsEqual(
+  left: FileContentFingerprint | null,
+  right: FileContentFingerprint | null
+): boolean {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return left.mtimeMs === right.mtimeMs;
 }
 
 export class FileContentCache implements IFileContentCache {
   private readonly entries = new Map<string, FileContentCacheEntry>();
   private readonly namespaceTelemetry = new Map<string, FileContentCacheNamespaceTelemetry>();
+  private readonly maxEntries: number;
   private hits = 0;
   private misses = 0;
   private errors = 0;
+
+  constructor(maxEntries = 512) {
+    this.maxEntries = Math.max(1, Math.floor(maxEntries));
+  }
 
   async get(filePath: string, options?: { namespace?: string }): Promise<string | null> {
     const namespace = options?.namespace ?? 'default';
@@ -80,20 +92,10 @@ export class FileContentCache implements IFileContentCache {
       return null;
     }
 
-    let hash: string;
-    try {
-      hash = hashContent(content);
-    } catch {
-      this.recordError(namespace);
-      this.entries.delete(filePath);
-      return null;
-    }
-
-    this.entries.set(filePath, {
+    setBoundedMapEntry(this.entries, filePath, {
       content,
-      fingerprint: { mtimeMs, hash },
-      cachedAt: Date.now(),
-    });
+      fingerprint: { mtimeMs },
+    }, this.maxEntries);
     this.recordMiss(namespace);
     return content;
   }
