@@ -15,9 +15,9 @@ describe('HeuristicComplexityClassifier', () => {
     expect(classifier.classify({ taskDescription: 'Refactor auth module to use strategy pattern' }).level).toBe('complex');
   });
 
-  it('classifies ambiguous work as moderate', () => {
+  it('classifies ambiguous work as complex', () => {
     const result = classifier.classify({ taskDescription: 'Add error handling to API endpoints' });
-    expect(result.level).toBe('moderate');
+    expect(result.level).toBe('complex');
     expect(result.confidence).toBeGreaterThan(0);
     expect(result.classifierId).toBe('heuristic-v1');
   });

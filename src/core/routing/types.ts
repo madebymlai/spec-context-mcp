@@ -1,6 +1,6 @@
 import type { CanonicalProvider, DispatchRole } from '../../config/discipline.js';
 
-export type ComplexityLevel = 'simple' | 'moderate' | 'complex';
+export type ComplexityLevel = 'simple' | 'complex';
 
 export interface TaskClassificationInput {
   taskDescription: string;
@@ -30,7 +30,6 @@ export interface ITaskComplexityClassifier {
 
 export interface RoutingTableConfig {
   simple: CanonicalProvider;
-  moderate: CanonicalProvider;
   complex: CanonicalProvider;
 }
 

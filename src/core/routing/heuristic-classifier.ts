@@ -36,10 +36,7 @@ function classifyScore(score: number): ComplexityLevel {
   if (score < -0.3) {
     return 'simple';
   }
-  if (score > 0.5) {
-    return 'complex';
-  }
-  return 'moderate';
+  return 'complex';
 }
 
 function confidenceFromFeatures(score: number, featureCount: number): number {

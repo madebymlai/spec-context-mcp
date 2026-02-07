@@ -320,10 +320,10 @@ ${dispatchRuntimeV2 ? `4. **Initialize runtime state for this task**:
      - \`taskId: "{taskId}"\`
      - \`taskPrompt: "{task prompt content}"\`
      - \`maxOutputTokens: 1200\`
-   - Use returned \`prompt\` for dispatch.` : ''}
+   - Use returned \`prompt\` and \`dispatch_cli\` for dispatch.` : ''}
    \`\`\`bash
    ${dispatchRuntimeV2
-     ? `${implementerCli} "{compiled implementer prompt from dispatch-runtime}" > /tmp/spec-impl.log 2>&1`
+     ? `{dispatch_cli from dispatch-runtime} "{compiled implementer prompt from dispatch-runtime}" > /tmp/spec-impl.log 2>&1`
      : `${implementerCli} "Implement the task for spec {spec-name}, first call get-implementer-guide to load implementation rules then implement the task: {task prompt content}." > /tmp/spec-impl.log 2>&1`}
    \`\`\`
    - Implementer LAST output must be strict contract markers \`BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT\`
@@ -352,10 +352,10 @@ ${reviewerCli ? `${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` wit
      - \`taskId: "{taskId}"\`
      - \`taskPrompt: "{review prompt + base SHA + diff scope}"\`
      - \`maxOutputTokens: 1200\`
-   - Use returned \`prompt\` for reviewer dispatch.` : ''}
+   - Use returned \`prompt\` and \`dispatch_cli\` for reviewer dispatch.` : ''}
    \`\`\`bash
    ${dispatchRuntimeV2
-     ? `${reviewerCli} "{compiled reviewer prompt from dispatch-runtime}" > /tmp/spec-review.log 2>&1`
+     ? `{dispatch_cli from dispatch-runtime} "{compiled reviewer prompt from dispatch-runtime}" > /tmp/spec-review.log 2>&1`
      : `${reviewerCli} "Review task {taskId} for spec {spec-name}. Base SHA: {base-sha}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1`}
    \`\`\`
 ${dispatchRuntimeV2 ? `   - Call \`dispatch-runtime\` with:

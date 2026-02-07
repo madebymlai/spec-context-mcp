@@ -88,6 +88,7 @@ describe('dispatch-runtime integration (no mocks)', () => {
       expect(findFact(init, 'ledger.progress.active_task_id')).toBe(taskId);
       expect(init.data?.selected_provider).toBeTypeOf('string');
       expect(init.data?.classification_level).toBeTypeOf('string');
+      expect(init.data?.dispatch_cli).toBeTypeOf('string');
 
       const compileImplementer = await callDispatch(projectPath, {
         action: 'compile_prompt',
@@ -101,6 +102,7 @@ describe('dispatch-runtime integration (no mocks)', () => {
       expect(compileImplementer.data?.stablePrefixHash).toHaveLength(64);
       expect(compileImplementer.data?.guideMode).toBe('full');
       expect(compileImplementer.data?.prompt).toContain('"mode":"full"');
+      expect(compileImplementer.data?.dispatch_cli).toBeTypeOf('string');
 
       const implementerOutputPath = join(projectPath, 'impl.log');
       await writeFile(

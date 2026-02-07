@@ -19,6 +19,7 @@ import type {
 } from '../../core/llm/index.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import type { DispatchRole } from '../../config/discipline.js';
+import { getDispatchCliForComplexity, type DispatchComplexity } from '../../config/dispatch-cli-resolver.js';
 import {
   type LedgerMode,
   DispatchLedgerError,
@@ -53,12 +54,17 @@ type DispatchAction = 'init_run' | 'ingest_output' | 'get_snapshot' | 'compile_p
 const DISPATCH_CLASSIFICATION_FACT_KEYS = {
   level: 'classification_level',
   selectedProvider: 'selected_provider',
+  dispatchCli: 'dispatch_cli',
   features: 'classification_features',
   classifierId: 'classification_classifier_id',
 } as const;
 
 function getFactValue(snapshot: StateSnapshot, key: string): string | undefined {
   return snapshot.facts.find(fact => fact.k === key)?.v;
+}
+
+function normalizeDispatchComplexity(value: string | undefined): DispatchComplexity {
+  return value === 'simple' ? 'simple' : 'complex';
 }
 
 const DISPATCH_RESULT_BEGIN = 'BEGIN_DISPATCH_RESULT';
@@ -652,6 +658,7 @@ export class DispatchRuntimeManager {
       console.error('[dispatch-runtime] task complexity classification failed', error);
     }
     const routingEntry = this.routingTable.resolve(classification.level, 'implementer');
+    const dispatchCli = getDispatchCliForComplexity('implementer', classification.level) ?? routingEntry.cli;
 
     const initEvent = await this.publishEvent({
       partition_key: runId,
@@ -667,6 +674,7 @@ export class DispatchRuntimeManager {
         ledger_progress_active_task_id: progressLedger.activeTaskId,
         classification_level: classification.level,
         selected_provider: routingEntry.provider,
+        dispatch_cli: dispatchCli,
       },
     });
 
@@ -679,6 +687,7 @@ export class DispatchRuntimeManager {
         { k: 'task_id', v: taskId, confidence: 1 },
         { k: DISPATCH_CLASSIFICATION_FACT_KEYS.level, v: classification.level, confidence: classification.confidence },
         { k: DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider, v: routingEntry.provider, confidence: 1 },
+        { k: DISPATCH_CLASSIFICATION_FACT_KEYS.dispatchCli, v: dispatchCli, confidence: 1 },
         {
           k: DISPATCH_CLASSIFICATION_FACT_KEYS.features,
           v: JSON.stringify(classification.features),
@@ -873,11 +882,17 @@ export class DispatchRuntimeManager {
     compactionApplied: boolean;
     compactionStage: DispatchCompactionStage;
     compactionTrace: DispatchCompactionTrace[];
+    dispatchCli: string;
   }> {
     let snapshot = await this.assertRunBinding(args.runId, args.taskId);
     this.bumpSchemaVersionTelemetry(DISPATCH_CONTRACT_SCHEMA_VERSION);
 
     const snapshotFactMap = new Map((snapshot.facts ?? []).map(fact => [fact.k, fact.v]));
+    const dispatchComplexity = normalizeDispatchComplexity(
+      snapshotFactMap.get(DISPATCH_CLASSIFICATION_FACT_KEYS.level)
+    );
+    const dispatchCli = getDispatchCliForComplexity(args.role, dispatchComplexity)
+      ?? this.routingTable.resolve(dispatchComplexity, args.role).cli;
     let progressLedger = progressLedgerFromFacts(snapshot.facts ?? []);
     const missingProgressLedger = !progressLedger;
     const staleProgressLedger = progressLedger ? await isProgressLedgerStale(progressLedger) : false;
@@ -1115,6 +1130,7 @@ export class DispatchRuntimeManager {
       compactionApplied: compactionStage !== 'none',
       compactionStage,
       compactionTrace,
+      dispatchCli,
     };
   }
 
@@ -1320,10 +1336,17 @@ export class DispatchRuntimeManager {
     registerDispatchContractSchemas(this.schemaRegistry);
   }
 }
-const dispatchRuntimeManager = new DispatchRuntimeManager(
-  new HeuristicComplexityClassifier(),
-  RoutingTable.fromEnvOrDefault(),
-);
+let dispatchRuntimeManager: DispatchRuntimeManager | null = null;
+
+function getDispatchRuntimeManager(): DispatchRuntimeManager {
+  if (!dispatchRuntimeManager) {
+    dispatchRuntimeManager = new DispatchRuntimeManager(
+      new HeuristicComplexityClassifier(),
+      RoutingTable.fromEnvOrDefault(),
+    );
+  }
+  return dispatchRuntimeManager;
+}
 
 type DispatchToolErrorCode =
   | DispatchRuntimeErrorCode
@@ -1435,7 +1458,7 @@ export async function dispatchRuntimeHandler(
     }
     const runId = String(args.runId || '').trim() || `${specName}:${taskId}:${randomUUID()}`;
     try {
-      const snapshot = await dispatchRuntimeManager.initRun(runId, specName, taskId, context.projectPath);
+      const snapshot = await getDispatchRuntimeManager().initRun(runId, specName, taskId, context.projectPath);
       return {
         success: true,
         message: 'Dispatch runtime initialized',
@@ -1444,6 +1467,7 @@ export async function dispatchRuntimeHandler(
           snapshot,
           selected_provider: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider),
           classification_level: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.level),
+          dispatch_cli: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.dispatchCli),
         },
       };
     } catch (error) {
@@ -1470,7 +1494,15 @@ export async function dispatchRuntimeHandler(
   }
 
   if (action === 'get_snapshot') {
-    const snapshot = await dispatchRuntimeManager.getSnapshot(runId);
+    let snapshot: StateSnapshot | null;
+    try {
+      snapshot = await getDispatchRuntimeManager().getSnapshot(runId);
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
     if (!snapshot) {
       return {
         success: false,
@@ -1488,11 +1520,20 @@ export async function dispatchRuntimeHandler(
   }
 
   if (action === 'get_telemetry') {
+    let manager: DispatchRuntimeManager;
+    try {
+      manager = getDispatchRuntimeManager();
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
     return {
       success: true,
       message: 'Dispatch runtime telemetry loaded',
       data: {
-        ...dispatchRuntimeManager.getTelemetrySnapshot(),
+        ...manager.getTelemetrySnapshot(),
         file_content_cache: getSharedFileContentCacheTelemetry(),
       },
     };
@@ -1553,7 +1594,7 @@ export async function dispatchRuntimeHandler(
     }
 
     try {
-      const compiled = await dispatchRuntimeManager.compilePrompt({
+      const compiled = await getDispatchRuntimeManager().compilePrompt({
         runId,
         role,
         taskId,
@@ -1572,6 +1613,7 @@ export async function dispatchRuntimeHandler(
           role,
           taskId,
           ...compiled,
+          dispatch_cli: compiled.dispatchCli,
         },
       };
     } catch (error) {
@@ -1617,7 +1659,8 @@ export async function dispatchRuntimeHandler(
   }
 
   try {
-    const result = await dispatchRuntimeManager.ingestOutput({
+    const manager = getDispatchRuntimeManager();
+    const result = await manager.ingestOutput({
       runId,
       role,
       taskId,
@@ -1635,7 +1678,7 @@ export async function dispatchRuntimeHandler(
         result: result.result,
         snapshot: result.snapshot,
         outputTokens: result.outputTokens,
-        telemetry: dispatchRuntimeManager.getTelemetrySnapshot(),
+        telemetry: manager.getTelemetrySnapshot(),
       },
       nextSteps: [
         `Follow next action: ${result.nextAction}`,
@@ -1645,7 +1688,8 @@ export async function dispatchRuntimeHandler(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (error instanceof DispatchContractError) {
-      const snapshot = await dispatchRuntimeManager.recordTerminalContractFailure({
+      const manager = getDispatchRuntimeManager();
+      const snapshot = await manager.recordTerminalContractFailure({
         runId,
         role,
         taskId,
@@ -1662,7 +1706,7 @@ export async function dispatchRuntimeHandler(
           errorCode: error.code,
           nextAction: 'halt_schema_invalid_terminal',
           snapshot,
-          telemetry: dispatchRuntimeManager.getTelemetrySnapshot(),
+          telemetry: manager.getTelemetrySnapshot(),
         },
       };
     }

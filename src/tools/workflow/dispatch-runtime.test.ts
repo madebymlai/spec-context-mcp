@@ -14,6 +14,12 @@ const context = {
 
 const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
 const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
+const ORIGINAL_IMPLEMENTER_MODEL_SIMPLE = process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE;
+const ORIGINAL_IMPLEMENTER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX;
+const ORIGINAL_REVIEWER_MODEL_SIMPLE = process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
+const ORIGINAL_REVIEWER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
+const ORIGINAL_REVIEWER_REASONING_EFFORT_SIMPLE = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE;
+const ORIGINAL_REVIEWER_REASONING_EFFORT_COMPLEX = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX;
 
 describe('dispatch-runtime tool', () => {
   beforeAll(async () => {
@@ -64,6 +70,12 @@ describe('dispatch-runtime tool', () => {
   beforeEach(() => {
     process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
     process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+    delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE;
+    delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX;
+    delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
+    delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
+    delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE;
+    delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX;
   });
 
   afterEach(() => {
@@ -77,6 +89,42 @@ describe('dispatch-runtime tool', () => {
       delete process.env.SPEC_CONTEXT_REVIEWER;
     } else {
       process.env.SPEC_CONTEXT_REVIEWER = ORIGINAL_REVIEWER;
+    }
+
+    if (ORIGINAL_IMPLEMENTER_MODEL_SIMPLE === undefined) {
+      delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE;
+    } else {
+      process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE = ORIGINAL_IMPLEMENTER_MODEL_SIMPLE;
+    }
+
+    if (ORIGINAL_IMPLEMENTER_MODEL_COMPLEX === undefined) {
+      delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX;
+    } else {
+      process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX = ORIGINAL_IMPLEMENTER_MODEL_COMPLEX;
+    }
+
+    if (ORIGINAL_REVIEWER_MODEL_SIMPLE === undefined) {
+      delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
+    } else {
+      process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE = ORIGINAL_REVIEWER_MODEL_SIMPLE;
+    }
+
+    if (ORIGINAL_REVIEWER_MODEL_COMPLEX === undefined) {
+      delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
+    } else {
+      process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX = ORIGINAL_REVIEWER_MODEL_COMPLEX;
+    }
+
+    if (ORIGINAL_REVIEWER_REASONING_EFFORT_SIMPLE === undefined) {
+      delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE;
+    } else {
+      process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE = ORIGINAL_REVIEWER_REASONING_EFFORT_SIMPLE;
+    }
+
+    if (ORIGINAL_REVIEWER_REASONING_EFFORT_COMPLEX === undefined) {
+      delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX;
+    } else {
+      process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX = ORIGINAL_REVIEWER_REASONING_EFFORT_COMPLEX;
     }
   });
 
@@ -205,9 +253,12 @@ END_DISPATCH_RESULT`,
     expect(result.data?.snapshot?.goal).toContain('dispatch_task');
     expect(result.data?.classification_level).toBeTypeOf('string');
     expect(result.data?.selected_provider).toBeTypeOf('string');
+    expect(result.data?.dispatch_cli).toBeTypeOf('string');
   });
 
   it('classifies simple tasks and selects the mapped provider during init_run', async () => {
+    process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE = 'sonnet-4.5';
+
     const result = await dispatchRuntimeHandler(
       {
         action: 'init_run',
@@ -224,6 +275,8 @@ END_DISPATCH_RESULT`,
     const facts = (result.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
     expect(facts.find(fact => fact.k === 'classification_level')?.v).toBe('simple');
     expect(facts.find(fact => fact.k === 'selected_provider')?.v).toBe('codex');
+    expect(result.data?.dispatch_cli).toContain('--model sonnet-4.5');
+    expect(facts.find(fact => fact.k === 'dispatch_cli')?.v).toContain('--model sonnet-4.5');
     expect(facts.find(fact => fact.k === 'classification_features')?.v).toContain('keyword_match');
   });
 
@@ -237,7 +290,6 @@ END_DISPATCH_RESULT`,
       classifier,
       new RoutingTable({
         simple: 'codex',
-        moderate: 'claude',
         complex: 'claude',
       }),
     );
@@ -509,6 +561,7 @@ END_DISPATCH_RESULT`,
     expect(result.data?.guideMode).toBe('full');
     expect(result.data?.guideCacheKey).toBe('implementer:test-run-compile');
     expect(result.data?.deltaPacket?.guide_mode).toBe('full');
+    expect(result.data?.dispatch_cli).toBeTypeOf('string');
 
     const second = await dispatchRuntimeHandler(
       {
@@ -524,6 +577,38 @@ END_DISPATCH_RESULT`,
     expect(second.success).toBe(true);
     expect(second.data?.guideMode).toBe('compact');
     expect(second.data?.deltaPacket?.guide_mode).toBe('compact');
+  });
+
+  it('returns role-specific dispatch_cli with complexity model flags', async () => {
+    process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE = 'codex-5.3';
+    process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE = 'medium';
+
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-compile-reviewer-cli-tier',
+        specName: SPEC_NAME,
+        taskId: '8.1',
+      },
+      context
+    );
+
+    const compile = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId: 'test-run-compile-reviewer-cli-tier',
+        role: 'reviewer',
+        taskId: '8.1',
+        taskPrompt: 'Review simple routing fixture',
+        maxOutputTokens: 700,
+      },
+      context
+    );
+
+    expect(compile.success).toBe(true);
+    expect(compile.data?.dispatch_cli).toContain('codex exec --sandbox read-only');
+    expect(compile.data?.dispatch_cli).toContain('--model codex-5.3');
+    expect(compile.data?.dispatch_cli).toContain('model_reasoning_effort=medium');
   });
 
   it('keeps stable prefix hash constant and preserves explicit task prompt override', async () => {
