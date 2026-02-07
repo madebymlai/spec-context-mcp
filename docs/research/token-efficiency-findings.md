@@ -155,7 +155,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **The problem:** The orchestrator dispatches all tasks to the same CLI agent regardless of complexity. Simple tasks (test stubs, file moves, doc updates) don't need expensive models.
 
-### Start here: CLI Agent Routing by Task Complexity — P1
+### Start here: CLI Agent Routing by Task Complexity — P1 [OK]
 
 **What:** Route tasks to the cheapest CLI agent that can handle them. Simple tasks go to cheaper agents (codex, opencode with smaller models); complex tasks go to stronger agents (claude with Opus/Sonnet). Uses task-complexity classification at dispatch time.
 
@@ -189,7 +189,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **The problem:** The orchestrator makes redundant dispatches and MCP tool calls that could be skipped.
 
-### Start here: Tool-Result Caching for MCP Operations — P1
+### Start here: Tool-Result Caching for MCP Operations — P1 [OK]
 
 **What:** Cache results of deterministic MCP tool calls (file reads, spec status, steering doc loads) using content-addressable hashing (file path + mtime). Repeated invocations return cached results.
 

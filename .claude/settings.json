@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git checkout:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git reset:*)",
+      "Bash(git clean -f:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Task(Explore)",
+      "Task(general-purpose)",
+      "Task(Plan)"
+    ]
+  }
+}

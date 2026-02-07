@@ -1,0 +1,22 @@
+{
+  "filePath": ".spec-context/specs/task-complexity-classifier/tasks.md",
+  "currentVersion": 2,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2026-02-07T16:02:56.715Z",
+      "trigger": "initial",
+      "approvalId": "approval_1770480176714_xjisaa5zl",
+      "approvalTitle": "Tasks: Task-Complexity Classifier for CLI Agent Routing"
+    },
+    {
+      "version": 2,
+      "filename": "snapshot-002.json",
+      "timestamp": "2026-02-07T16:02:59.919Z",
+      "trigger": "approved",
+      "approvalId": "approval_1770480176714_xjisaa5zl",
+      "approvalTitle": "Tasks: Task-Complexity Classifier for CLI Agent Routing"
+    }
+  ]
+}
