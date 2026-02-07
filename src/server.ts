@@ -1,5 +1,6 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
     ListToolsRequestSchema,
     CallToolRequestSchema,
@@ -129,7 +130,7 @@ export class SpecContextServer {
         console.error(`[${this.config.name}] Starting MCP server...`);
 
         const transport = new StdioServerTransport();
-        await this.server.connect(transport);
+        await this.connectTransport(transport);
 
         console.error(`[${this.config.name}] Server running on stdio`);
 
@@ -146,6 +147,15 @@ export class SpecContextServer {
         // blocking MCP startup (clients like Codex enforce short startup timeouts).
         void initChunkHoundBridge(process.cwd());
         void this.registerWithDashboard();
+    }
+
+    async connectTransport(transport: Transport): Promise<void> {
+        await this.server.connect(transport);
+    }
+
+    async closeTransport(): Promise<void> {
+        resetChunkHoundBridge();
+        await this.server.close();
     }
 
     private shutdown(): void {
