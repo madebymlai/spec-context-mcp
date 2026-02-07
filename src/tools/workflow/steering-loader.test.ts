@@ -98,23 +98,23 @@ describe('steering-loader', () => {
   });
 
   describe('getMissingSteeringDocs', () => {
-    it('returns all docs as missing when none exist', () => {
-      const missing = getMissingSteeringDocs(testDir, ['tech', 'principles']);
+    it('returns all docs as missing when none exist', async () => {
+      const missing = await getMissingSteeringDocs(testDir, ['tech', 'principles']);
       expect(missing).toEqual(['tech', 'principles']);
     });
 
-    it('returns empty array when all required docs exist', () => {
+    it('returns empty array when all required docs exist', async () => {
       writeFileSync(join(steeringDir, 'tech.md'), 'tech');
       writeFileSync(join(steeringDir, 'principles.md'), 'principles');
 
-      const missing = getMissingSteeringDocs(testDir, ['tech', 'principles']);
+      const missing = await getMissingSteeringDocs(testDir, ['tech', 'principles']);
       expect(missing).toEqual([]);
     });
 
-    it('returns only missing docs', () => {
+    it('returns only missing docs', async () => {
       writeFileSync(join(steeringDir, 'tech.md'), 'tech');
 
-      const missing = getMissingSteeringDocs(testDir, ['tech', 'principles']);
+      const missing = await getMissingSteeringDocs(testDir, ['tech', 'principles']);
       expect(missing).toEqual(['principles']);
     });
   });

@@ -26,6 +26,13 @@ export interface RuntimeSnapshotStoreOptions {
 
 const DEFAULT_FLUSH_DELAY_MS = 35;
 
+function isNotFoundError(error: unknown): boolean {
+    return typeof error === 'object'
+        && error !== null
+        && 'code' in error
+        && (error as { code?: unknown }).code === 'ENOENT';
+}
+
 export class RuntimeSnapshotStore {
     private readonly snapshotPath: string;
     private readonly flushDelayMs: number;
@@ -173,8 +180,10 @@ export class RuntimeSnapshotStore {
             for (const [runId, snapshot] of Object.entries(parsed.snapshots)) {
                 this.snapshots.set(runId, snapshot);
             }
-        } catch {
-            // Missing/invalid snapshot file is treated as empty state.
+        } catch (error) {
+            if (!isNotFoundError(error)) {
+                throw error;
+            }
         }
     }
 }

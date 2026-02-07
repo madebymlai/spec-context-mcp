@@ -237,9 +237,13 @@ export class AuditLogger {
           };
 
           // Fire and forget - don't await to avoid blocking
-          this.log(entry).catch(() => {});
+          this.log(entry).catch((error) => {
+            console.error('Failed to write audit log:', error);
+          });
         },
-        () => {} // Ignore errors from reply.then
+        (error) => {
+          console.error('Audit middleware completion failed:', error);
+        }
       );
     };
   }

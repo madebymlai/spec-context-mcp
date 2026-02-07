@@ -9,13 +9,13 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
-import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as net from 'net';
 import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
 import { EventSource } from 'eventsource';
+import { access, mkdir, open, stat, unlink, type FileHandle } from 'fs/promises';
 import { getPackageVersion } from '../core/workflow/constants.js';
 
 // ESM equivalent of __dirname
@@ -118,13 +118,15 @@ function isTimeoutError(error: unknown): boolean {
     return message.toLowerCase().includes('timeout');
 }
 
+function isNotFoundError(error: unknown): boolean {
+    return typeof error === 'object'
+        && error !== null
+        && 'code' in error
+        && (error as { code?: unknown }).code === 'ENOENT';
+}
+
 function normalizeProjectPath(projectPath?: string): string {
-    const resolved = path.resolve(projectPath || process.cwd());
-    try {
-        return (fs.realpathSync.native ? fs.realpathSync.native(resolved) : fs.realpathSync(resolved));
-    } catch {
-        return resolved;
-    }
+    return path.resolve(projectPath || process.cwd());
 }
 
 async function canConnectTcp(port: number, timeoutMs = 500): Promise<boolean> {
@@ -157,35 +159,35 @@ async function waitForTcpListening(port: number, timeoutMs: number): Promise<voi
     throw new Error(`ChunkHound HTTP server did not start listening on port ${port} in time`);
 }
 
-type StartupLock = { path: string; fd: number | null; acquired: boolean };
+type StartupLock = { path: string; fileHandle: FileHandle | null; acquired: boolean };
 
-function tryAcquireStartupLock(projectPath: string, port: number): StartupLock {
+async function tryAcquireStartupLock(projectPath: string, port: number): Promise<StartupLock> {
     const lockDir = path.join(projectPath, '.chunkhound');
     try {
-        fs.mkdirSync(lockDir, { recursive: true });
-    } catch {
-        // Ignore; if we can't create lock dir, we fall back to best-effort startup without lock.
-        return { path: '', fd: null, acquired: true };
+        await mkdir(lockDir, { recursive: true });
+    } catch (error) {
+        console.warn('[ChunkHound Bridge] Failed to create startup lock directory, continuing without lock', error);
+        return { path: '', fileHandle: null, acquired: true };
     }
 
     const lockPath = path.join(lockDir, `sse-start-${port}.lock`);
     const now = Date.now();
 
-    const openExclusive = (): number => fs.openSync(lockPath, 'wx');
-    const writeLockFile = (fd: number, recovered = false) => {
+    const openExclusive = async (): Promise<FileHandle> => open(lockPath, 'wx');
+    const writeLockFile = async (fileHandle: FileHandle, recovered = false) => {
         const payload = JSON.stringify({
             pid: process.pid,
             port,
             created_at: new Date().toISOString(),
             recovered,
         });
-        fs.writeFileSync(fd, payload);
+        await fileHandle.writeFile(payload);
     };
 
     try {
-        const fd = openExclusive();
-        writeLockFile(fd);
-        return { path: lockPath, fd, acquired: true };
+        const fileHandle = await openExclusive();
+        await writeLockFile(fileHandle);
+        return { path: lockPath, fileHandle, acquired: true };
     } catch (err) {
         const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
         if (code !== 'EEXIST') {
@@ -194,43 +196,61 @@ function tryAcquireStartupLock(projectPath: string, port: number): StartupLock {
 
         // Stale lock recovery: if the file is old, assume the starter crashed and retry.
         try {
-            const stat = fs.statSync(lockPath);
-            if (now - stat.mtimeMs > STARTUP_LOCK_TTL_MS) {
-                fs.unlinkSync(lockPath);
-                const fd = openExclusive();
-                writeLockFile(fd, true);
-                return { path: lockPath, fd, acquired: true };
+            const lockStat = await stat(lockPath);
+            if (now - lockStat.mtimeMs > STARTUP_LOCK_TTL_MS) {
+                await unlink(lockPath);
+                const fileHandle = await openExclusive();
+                await writeLockFile(fileHandle, true);
+                return { path: lockPath, fileHandle, acquired: true };
             }
-        } catch {
-            // Ignore and treat as not acquired.
+        } catch (error) {
+            console.warn('[ChunkHound Bridge] Failed stale lock recovery, treating lock as not acquired', error);
         }
 
-        return { path: lockPath, fd: null, acquired: false };
+        return { path: lockPath, fileHandle: null, acquired: false };
     }
 }
 
-function releaseStartupLock(lock: StartupLock): void {
+async function releaseStartupLock(lock: StartupLock): Promise<void> {
     if (!lock.acquired) {
         return;
     }
-    if (lock.fd !== null) {
+    if (lock.fileHandle !== null) {
         try {
-            fs.closeSync(lock.fd);
-        } catch {
-            // Ignore
+            await lock.fileHandle.close();
+        } catch (error) {
+            console.warn('[ChunkHound Bridge] Failed to close startup lock file handle', error);
         }
     }
     if (lock.path) {
         try {
-            fs.unlinkSync(lock.path);
-        } catch {
-            // Ignore
+            await unlink(lock.path);
+        } catch (error) {
+            console.warn('[ChunkHound Bridge] Failed to remove startup lock file', error);
         }
     }
 }
 
 export interface ChunkHoundConfig {
-    pythonPath: string;
+    pythonPathOverride?: string;
+}
+
+async function resolvePythonPath(config: ChunkHoundConfig): Promise<string> {
+    if (config.pythonPathOverride) {
+        return config.pythonPathOverride;
+    }
+
+    const specContextRoot = path.resolve(__dirname, '..', '..');
+    const venvPython = path.join(specContextRoot, '.venv', 'bin', 'python');
+    try {
+        await access(venvPython);
+        return venvPython;
+    } catch (error) {
+        if (!isNotFoundError(error)) {
+            throw error;
+        }
+        return 'python3';
+    }
 }
 
 export interface SearchArgs {
@@ -607,7 +627,7 @@ Run: npx spec-context-mcp doctor`);
         }
 
         this.httpStartPromise = (async () => {
-            const lock = tryAcquireStartupLock(this.projectPath, this.port);
+            const lock = await tryAcquireStartupLock(this.projectPath, this.port);
 
             // Another process is already starting the server for this project+port.
             // Wait for the TCP port to come up instead of racing and causing a
@@ -622,7 +642,7 @@ Run: npx spec-context-mcp doctor`);
                 await this.startHttpServer();
                 await waitForTcpListening(this.port, HEALTH_READY_TIMEOUT_MS);
             } finally {
-                releaseStartupLock(lock);
+                await releaseStartupLock(lock);
             }
         })().finally(() => {
             this.httpStartPromise = null;
@@ -635,7 +655,7 @@ Run: npx spec-context-mcp doctor`);
      * Start ChunkHound as SSE server (detached, survives session end)
      */
     private async startHttpServer(): Promise<void> {
-        const pythonPath = this.config.pythonPath;
+        const pythonPath = await resolvePythonPath(this.config);
         const specContextRoot = path.resolve(__dirname, '..', '..');
 
         // Start detached so it survives session end
@@ -767,8 +787,10 @@ Run: npx spec-context-mcp doctor`));
                     console.error('[ChunkHound Bridge] Scan already complete');
                 }
             }
-        } catch {
-            // Ignore errors, assume not complete
+        } catch (error) {
+            if (!(error instanceof TypeError) && !isTimeoutError(error)) {
+                throw error;
+            }
         }
     }
 
@@ -776,7 +798,7 @@ Run: npx spec-context-mcp doctor`));
      * Legacy stdio mode (no longer used)
      */
     private async startStdioServer(): Promise<void> {
-        const pythonPath = this.config.pythonPath;
+        const pythonPath = await resolvePythonPath(this.config);
         const specContextRoot = path.resolve(__dirname, '..', '..');
 
         this.process = spawn(pythonPath, ['-m', 'chunkhound.mcp_server.stdio'], {
@@ -980,7 +1002,8 @@ Run: npx spec-context-mcp doctor`));
                         if (retryText) {
                             try {
                                 return JSON.parse(retryText);
-                            } catch {
+                            } catch (error) {
+                                console.warn('[ChunkHound Bridge] Retry response was not valid JSON text', error);
                                 return retryText;
                             }
                         }
@@ -988,7 +1011,8 @@ Run: npx spec-context-mcp doctor`));
                     }
 
                     return parsed;
-                } catch {
+                } catch (error) {
+                    console.warn('[ChunkHound Bridge] Tool response text was not valid JSON', error);
                     return textContent.text;
                 }
             }
@@ -1039,8 +1063,10 @@ Run: npx spec-context-mcp doctor`));
                         return;
                     }
                 }
-            } catch {
-                // Ignore and retry
+            } catch (error) {
+                if (!(error instanceof TypeError) && !isTimeoutError(error)) {
+                    throw error;
+                }
             }
             await new Promise(resolve => setTimeout(resolve, 500));
         }
@@ -1071,8 +1097,10 @@ Run: npx spec-context-mcp doctor`));
                     this.scanComplete = true;
                 }
             }
-        } catch {
-            // Ignore health check failures; we'll retry later
+        } catch (error) {
+            if (!(error instanceof TypeError) && !isTimeoutError(error)) {
+                throw error;
+            }
         }
     }
 
@@ -1176,12 +1204,8 @@ export function getChunkHoundBridge(projectPath?: string): ChunkHoundBridge {
     }
 
     // Create new bridge
-    const specContextRoot = path.resolve(__dirname, '..', '..');
-    const venvPython = path.join(specContextRoot, '.venv', 'bin', 'python');
-    const defaultPython = fs.existsSync(venvPython) ? venvPython : 'python3';
-
     const config: ChunkHoundConfig = {
-        pythonPath: process.env.CHUNKHOUND_PYTHON || defaultPython,
+        pythonPathOverride: process.env.CHUNKHOUND_PYTHON,
     };
 
     const bridge = new ChunkHoundBridge(config, resolvedPath);

@@ -157,7 +157,8 @@ export class RuleBasedFactExtractor implements IFactExtractor {
   extractFromImplementer(result: ImplementerResult, taskId: string): SessionFact[] {
     try {
       return this.executeImplementerRules(result, taskId);
-    } catch {
+    } catch (error) {
+      console.warn('[session-fact-extractor] implementer extraction failed', error);
       return [];
     }
   }
@@ -165,7 +166,8 @@ export class RuleBasedFactExtractor implements IFactExtractor {
   extractFromReviewer(result: ReviewerResult, taskId: string): SessionFact[] {
     try {
       return this.executeReviewerRules(result, taskId);
-    } catch {
+    } catch (error) {
+      console.warn('[session-fact-extractor] reviewer extraction failed', error);
       return [];
     }
   }

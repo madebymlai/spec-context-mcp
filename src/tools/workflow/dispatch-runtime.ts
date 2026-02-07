@@ -4,6 +4,7 @@ import { resolve } from 'path';
 import { randomUUID } from 'crypto';
 import {
   RuntimeEventStream,
+  NodeRuntimeEventStorage,
   RuntimeSnapshotStore,
   SchemaRegistry,
   StateProjector,
@@ -141,8 +142,8 @@ function extractStructuredJson(rawOutput: string): unknown {
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonBody);
-  } catch {
-    throw new DispatchContractError('json_parse_failed', 'Dispatch result JSON is invalid');
+  } catch (error) {
+    throw new DispatchContractError('json_parse_failed', `Dispatch result JSON is invalid: ${String(error)}`);
   }
 
   if (typeof parsed !== 'object' || parsed === null) {
@@ -592,7 +593,7 @@ ${DISPATCH_RESULT_END}`,
 }
 
 export class DispatchRuntimeManager {
-  private readonly eventStream = new RuntimeEventStream();
+  private readonly eventStream = new RuntimeEventStream({ storage: new NodeRuntimeEventStorage() });
   private readonly snapshotStore = new RuntimeSnapshotStore();
   private readonly schemaRegistry = new SchemaRegistry();
   private readonly stateProjector = new StateProjector();
@@ -766,8 +767,8 @@ export class DispatchRuntimeManager {
     if (args.role === 'implementer') {
       try {
         this.schemaRegistry.assert('dispatch.result.implementer', parsed, DISPATCH_CONTRACT_SCHEMA_VERSION);
-      } catch {
-        throw new DispatchContractError('schema_invalid', 'Implementer dispatch result failed schema validation');
+      } catch (error) {
+        throw new DispatchContractError('schema_invalid', `Implementer dispatch result failed schema validation: ${String(error)}`);
       }
       const result = parsed as ImplementerResult;
       const extractedFacts = this.factExtractor.extractFromImplementer(result, args.taskId);
@@ -820,8 +821,8 @@ export class DispatchRuntimeManager {
 
     try {
       this.schemaRegistry.assert('dispatch.result.reviewer', parsed, DISPATCH_CONTRACT_SCHEMA_VERSION);
-    } catch {
-      throw new DispatchContractError('schema_invalid', 'Reviewer dispatch result failed schema validation');
+    } catch (error) {
+      throw new DispatchContractError('schema_invalid', `Reviewer dispatch result failed schema validation: ${String(error)}`);
     }
     const result = parsed as ReviewerResult;
     const extractedFacts = this.factExtractor.extractFromReviewer(result, args.taskId);

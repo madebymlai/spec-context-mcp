@@ -4,6 +4,13 @@ import { PathUtils } from './path-utils.js';
 import { SpecData, SteeringStatus, PhaseStatus } from '../../workflow-types.js';
 import { parseTaskProgress } from './task-parser.js';
 
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT';
+}
+
 export class SpecParser {
   constructor(private projectPath: string) {}
 
@@ -23,8 +30,10 @@ export class SpecParser {
         }
       }
     } catch (error) {
-      // Directory doesn't exist yet
-      return [];
+      if (isNotFoundError(error)) {
+        return [];
+      }
+      throw error;
     }
     
     return specs;
@@ -50,8 +59,10 @@ export class SpecParser {
         try {
           const tasksContent = await readFile(join(specPath, 'tasks.md'), 'utf-8');
           taskProgress = parseTaskProgress(tasksContent);
-        } catch {
-          // Error reading tasks file
+        } catch (error) {
+          if (!isNotFoundError(error)) {
+            throw error;
+          }
         }
       }
       
@@ -70,7 +81,10 @@ export class SpecParser {
         taskProgress
       };
     } catch (error) {
-      return null;
+      if (isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 
@@ -97,15 +111,18 @@ export class SpecParser {
         lastModified: stats.mtime.toISOString()
       };
     } catch (error) {
-      return {
-        exists: false,
-        documents: {
-          product: false,
-          tech: false,
-          structure: false,
-          principles: false,
-        }
-      };
+      if (isNotFoundError(error)) {
+        return {
+          exists: false,
+          documents: {
+            product: false,
+            tech: false,
+            structure: false,
+            principles: false,
+          }
+        };
+      }
+      throw error;
     }
   }
 
@@ -122,9 +139,12 @@ export class SpecParser {
         content
       };
     } catch (error) {
-      return {
-        exists: false
-      };
+      if (isNotFoundError(error)) {
+        return {
+          exists: false
+        };
+      }
+      throw error;
     }
   }
 
@@ -133,8 +153,11 @@ export class SpecParser {
     try {
       await stat(filePath);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return false;
+      }
+      throw error;
     }
   }
 }

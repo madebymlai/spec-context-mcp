@@ -88,11 +88,8 @@ function serializeToolData(data: unknown): { serialized: string; contentType: 't
             serialized: JSON.stringify(data, null, 2),
             contentType: 'json',
         };
-    } catch {
-        return {
-            serialized: String(data),
-            contentType: 'text',
-        };
+    } catch (error) {
+        throw new Error(`Failed to serialize tool response payload: ${String(error)}`);
     }
 }
 
@@ -140,8 +137,11 @@ async function cleanupExpiredOffloads(outputDir: string, ttlMinutes: number): Pr
     let entries: string[] = [];
     try {
         entries = await readdir(outputDir);
-    } catch {
-        return;
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT') {
+            return;
+        }
+        throw error;
     }
 
     await Promise.all(entries.map(async entry => {
@@ -154,8 +154,8 @@ async function cleanupExpiredOffloads(outputDir: string, ttlMinutes: number): Pr
             if (fileStat.mtimeMs < cutoff) {
                 await rm(entryPath, { force: true });
             }
-        } catch {
-            // Best-effort cleanup only.
+        } catch (error) {
+            console.error(`[tools] Failed to clean expired offload entry ${entryPath}`, error);
         }
     }));
 }
@@ -289,23 +289,93 @@ ERROR RECOVERY: If incomplete, try narrower query or use path parameter to scope
     },
 };
 
-/** Returns all 10 registered tools (unfiltered). */
-export function getAllTools(): Tool[] {
-    const toolsByName: Record<ToolName, Tool> = {
-        search: searchTool,
-        code_research: codeResearchTool,
-        'spec-workflow-guide': specWorkflowGuideTool as Tool,
-        'steering-guide': steeringGuideTool as Tool,
-        'spec-status': specStatusTool as Tool,
-        approvals: approvalsTool as Tool,
-        'wait-for-approval': waitForApprovalTool as Tool,
-        'get-implementer-guide': getImplementerGuideTool as Tool,
-        'get-reviewer-guide': getReviewerGuideTool as Tool,
-        'get-brainstorm-guide': getBrainstormGuideTool as Tool,
-        'dispatch-runtime': dispatchRuntimeTool as Tool,
-    };
+type ToolHandler = (
+    args: Record<string, unknown>,
+    context: WorkflowToolContext
+) => Promise<ToolResponse>;
 
-    return TOOL_CATALOG_ORDER.map(name => toolsByName[name]);
+interface RegisteredTool {
+    tool: Tool;
+    handler: ToolHandler;
+}
+
+function buildSuccess(message: string, data?: unknown): ToolResponse {
+    return {
+        success: true,
+        message,
+        data,
+    };
+}
+
+const searchHandler: ToolHandler = async (args, context) => {
+    const bridge = getChunkHoundBridge(context.projectPath);
+    const result = await bridge.search(args as unknown as SearchArgs);
+    return buildSuccess('Search completed', result);
+};
+
+const codeResearchHandler: ToolHandler = async (args, context) => {
+    const bridge = getChunkHoundBridge(context.projectPath);
+    const result = await bridge.codeResearch(args as unknown as CodeResearchArgs);
+    return buildSuccess('Code research completed', result);
+};
+
+const TOOL_REGISTRY: Record<ToolName, RegisteredTool> = {
+    search: {
+        tool: searchTool,
+        handler: searchHandler,
+    },
+    code_research: {
+        tool: codeResearchTool,
+        handler: codeResearchHandler,
+    },
+    'spec-workflow-guide': {
+        tool: specWorkflowGuideTool as Tool,
+        handler: specWorkflowGuideHandler,
+    },
+    'steering-guide': {
+        tool: steeringGuideTool as Tool,
+        handler: steeringGuideHandler,
+    },
+    'spec-status': {
+        tool: specStatusTool as Tool,
+        handler: specStatusHandler,
+    },
+    approvals: {
+        tool: approvalsTool as Tool,
+        handler: (args, context) => approvalsHandler(args as any, context),
+    },
+    'wait-for-approval': {
+        tool: waitForApprovalTool as Tool,
+        handler: (args, context) => waitForApprovalHandler(args as any, context),
+    },
+    'get-implementer-guide': {
+        tool: getImplementerGuideTool as Tool,
+        handler: getImplementerGuideHandler,
+    },
+    'get-reviewer-guide': {
+        tool: getReviewerGuideTool as Tool,
+        handler: getReviewerGuideHandler,
+    },
+    'get-brainstorm-guide': {
+        tool: getBrainstormGuideTool as Tool,
+        handler: getBrainstormGuideHandler,
+    },
+    'dispatch-runtime': {
+        tool: dispatchRuntimeTool as Tool,
+        handler: dispatchRuntimeHandler,
+    },
+};
+
+function getRegisteredTool(name: string): RegisteredTool | undefined {
+    if (!Object.prototype.hasOwnProperty.call(TOOL_REGISTRY, name)) {
+        return undefined;
+    }
+    return TOOL_REGISTRY[name as ToolName];
+}
+
+/** Returns all registered tools (unfiltered). */
+export function getAllTools(): Tool[] {
+    return TOOL_CATALOG_ORDER.map(name => TOOL_REGISTRY[name].tool);
 }
 
 /** Returns only the tools visible in the current session mode. */
@@ -332,69 +402,11 @@ export async function handleToolCall(
         fileContentCache,
     };
 
-    const buildSuccess = (message: string, data?: unknown): ToolResponse => ({
-        success: true,
-        message,
-        data,
-    });
-
-    let rawResponse: ToolResponse;
-    switch (name) {
-        // ChunkHound context tools
-        case 'search': {
-            const bridge = getChunkHoundBridge(wfCtx.projectPath);
-            const result = await bridge.search(args as unknown as SearchArgs);
-            rawResponse = buildSuccess('Search completed', result);
-            break;
-        }
-
-        case 'code_research': {
-            const bridge = getChunkHoundBridge(wfCtx.projectPath);
-            const result = await bridge.codeResearch(args as unknown as CodeResearchArgs);
-            rawResponse = buildSuccess('Code research completed', result);
-            break;
-        }
-
-        // Workflow tools
-        case 'spec-workflow-guide':
-            rawResponse = await specWorkflowGuideHandler(args, wfCtx);
-            break;
-
-        case 'steering-guide':
-            rawResponse = await steeringGuideHandler(args, wfCtx);
-            break;
-
-        case 'spec-status':
-            rawResponse = await specStatusHandler(args, wfCtx);
-            break;
-
-        case 'approvals':
-            rawResponse = await approvalsHandler(args as any, wfCtx);
-            break;
-
-        case 'wait-for-approval':
-            rawResponse = await waitForApprovalHandler(args as any, wfCtx);
-            break;
-
-        case 'get-implementer-guide':
-            rawResponse = await getImplementerGuideHandler(args, wfCtx);
-            break;
-
-        case 'get-reviewer-guide':
-            rawResponse = await getReviewerGuideHandler(args, wfCtx);
-            break;
-
-        case 'get-brainstorm-guide':
-            rawResponse = await getBrainstormGuideHandler(args, wfCtx);
-            break;
-
-        case 'dispatch-runtime':
-            rawResponse = await dispatchRuntimeHandler(args, wfCtx);
-            break;
-
-        default:
-            throw new Error(`Unknown tool: ${name}`);
+    const registeredTool = getRegisteredTool(name);
+    if (!registeredTool) {
+        throw new Error(`Unknown tool: ${name}`);
     }
 
+    const rawResponse = await registeredTool.handler(args, wfCtx);
     return maybeOffloadToolResponse(name, rawResponse, wfCtx);
 }

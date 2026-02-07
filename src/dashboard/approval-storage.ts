@@ -101,6 +101,13 @@ export interface ApprovalRequest {
   categoryName: string; // spec or steering document name
 }
 
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT';
+}
+
 export class ApprovalStorage extends EventEmitter {
   public projectPath: string; // Make public so dashboard server can access it (translated for local access)
   public originalProjectPath: string; // Original host path for display/registry
@@ -242,8 +249,11 @@ export class ApprovalStorage extends EventEmitter {
 
       const content = await fs.readFile(approvalPath, 'utf-8');
       return JSON.parse(content) as ApprovalRequest;
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 
@@ -257,13 +267,17 @@ export class ApprovalStorage extends EventEmitter {
           try {
             await fs.access(approvalPath);
             return approvalPath;
-          } catch {
-            // File doesn't exist in this location, continue searching
+          } catch (error) {
+            if (!isNotFoundError(error)) {
+              throw error;
+            }
           }
         }
       }
-    } catch {
-      // Approvals directory doesn't exist
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
     }
 
     return null;
@@ -395,23 +409,28 @@ export class ApprovalStorage extends EventEmitter {
                     const approval = JSON.parse(content) as ApprovalRequest;
                     approvals.push(approval);
                   } catch (error) {
-                    // Error reading approval file
+                    console.warn(`[approval-storage] Failed to read approval file ${join(categoryPath, file)}`, error);
                   }
                 }
               }
             } catch (error) {
-              // Error reading category directory
+              console.warn(`[approval-storage] Failed to read category directory ${categoryPath}`, error);
             }
           }
         }
-      } catch {
-        // Approvals directory doesn't exist
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
       }
 
       // Sort by creation date (newest first)
       return approvals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    } catch {
-      return [];
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return [];
+      }
+      throw error;
     }
   }
 
@@ -427,8 +446,11 @@ export class ApprovalStorage extends EventEmitter {
       // Snapshots are stored in .snapshots/{filename}/ and should persist across approval cycles
 
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return false;
+      }
+      throw error;
     }
   }
 
@@ -494,12 +516,16 @@ export class ApprovalStorage extends EventEmitter {
     try {
       const metadataContent = await fs.readFile(metadataPath, 'utf-8');
       metadata = JSON.parse(metadataContent);
-    } catch {
-      metadata = {
-        filePath: approval.filePath,
-        currentVersion: 0,
-        snapshots: []
-      };
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        metadata = {
+          filePath: approval.filePath,
+          currentVersion: 0,
+          snapshots: []
+        };
+      } else {
+        throw error;
+      }
     }
 
     // Check for duplicate initial snapshots
@@ -574,8 +600,11 @@ export class ApprovalStorage extends EventEmitter {
       }
 
       return snapshots.sort((a, b) => a.version - b.version);
-    } catch {
-      return [];
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return [];
+      }
+      throw error;
     }
   }
 
@@ -594,8 +623,11 @@ export class ApprovalStorage extends EventEmitter {
 
     try {
       return await fs.readFile(filePath, 'utf-8');
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 

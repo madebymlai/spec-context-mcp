@@ -180,8 +180,8 @@ export class SpecContextServer {
             if (response.ok) {
                 console.error(`[${this.config.name}] Registered with dashboard at ${dashboardUrl}`);
             }
-        } catch {
-            // Dashboard not running - that's fine
+        } catch (error) {
+            console.error(`[${this.config.name}] Failed to register with dashboard`, error);
         }
     }
 }

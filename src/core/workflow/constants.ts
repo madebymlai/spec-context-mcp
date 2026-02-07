@@ -19,8 +19,12 @@ export function getPackageVersion(fallback = '1.0.0'): string {
     const content = readFileSync(packageJsonPath, 'utf-8');
     const parsed = JSON.parse(content) as { version?: string };
     cachedVersion = parsed.version || fallback;
-  } catch {
-    cachedVersion = fallback;
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT') {
+      cachedVersion = fallback;
+    } else {
+      throw error;
+    }
   }
 
   return cachedVersion;

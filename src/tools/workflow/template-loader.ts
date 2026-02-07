@@ -105,7 +105,10 @@ async function resolveTemplate(
 async function readFileSafe(path: string): Promise<string | null> {
   try {
     return await readFile(path, 'utf-8');
-  } catch {
-    return null;
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT') {
+      return null;
+    }
+    throw error;
   }
 }

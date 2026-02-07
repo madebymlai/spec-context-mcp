@@ -9,6 +9,12 @@ export interface DashboardSessionEntry {
   startedAt: string;
 }
 
+function getErrorCode(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
 /**
  * Manages the global dashboard session
  * Stores dashboard connection info in ~/.spec-context-mcp/activeSession.json
@@ -85,7 +91,14 @@ export class DashboardSessionManager {
       process.kill(pid, 0);
       return true;
     } catch (error) {
-      return false;
+      const code = getErrorCode(error);
+      if (code === 'ESRCH') {
+        return false;
+      }
+      if (code === 'EPERM') {
+        return true;
+      }
+      throw error;
     }
   }
 
@@ -129,11 +142,7 @@ export class DashboardSessionManager {
     // Check if the dashboard process is still alive
     if (!this.isProcessAlive(session.pid)) {
       // Process is dead, clean up
-      try {
-        await this.unregisterDashboard();
-      } catch (error) {
-        // Ignore cleanup errors
-      }
+      await this.unregisterDashboard();
       return null;
     }
 

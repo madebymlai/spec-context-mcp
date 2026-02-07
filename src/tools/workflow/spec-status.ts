@@ -250,7 +250,10 @@ async function getDirectoryMtimeMs(specDirPath: string): Promise<number | null> 
       return null;
     }
     return stats.mtimeMs;
-  } catch {
-    return null;
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT') {
+      return null;
+    }
+    throw error;
   }
 }

@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import chokidar, { FSWatcher } from 'chokidar';
 import { stat } from 'fs/promises';
 import { PathUtils } from '../core/workflow/path-utils.js';
-import { SpecParser, ParsedSpec } from './parser.js';
+import type { ISpecParser, ParsedSpec } from './parser.js';
 
 export interface SpecChangeEvent {
   type: 'spec' | 'steering';
@@ -11,14 +11,21 @@ export interface SpecChangeEvent {
   data?: ParsedSpec | any;
 }
 
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT';
+}
+
 export class SpecWatcher extends EventEmitter {
   private projectPath: string;
-  private parser: SpecParser;
+  private parser: ISpecParser;
   private watcher?: FSWatcher;
   private pendingChanges: Map<string, { action: 'created' | 'updated' | 'deleted'; timer: NodeJS.Timeout }> = new Map();
   private readonly DEBOUNCE_MS = 500;
 
-  constructor(projectPath: string, parser: SpecParser) {
+  constructor(projectPath: string, parser: ISpecParser) {
     super();
     // Path should already be translated by caller (ProjectManager)
     this.projectPath = projectPath;
@@ -121,9 +128,11 @@ export class SpecWatcher extends EventEmitter {
           stableCount = 0;
           lastSize = stats.size;
         }
-      } catch {
-        // File might be deleted or in transition
-        return false;
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          return false;
+        }
+        throw error;
       }
       await new Promise(resolve => setTimeout(resolve, checkInterval));
     }

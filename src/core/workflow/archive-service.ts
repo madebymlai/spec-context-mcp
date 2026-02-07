@@ -1,6 +1,12 @@
 import { promises as fs } from 'fs';
-import { join } from 'path';
 import { PathUtils } from './path-utils.js';
+
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT';
+}
 
 export class SpecArchiveService {
   private projectPath: string;
@@ -17,8 +23,11 @@ export class SpecArchiveService {
     // Verify the active spec exists
     try {
       await fs.access(activeSpecPath);
-    } catch {
-      throw new Error(`Spec '${specName}' not found in active specs`);
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        throw new Error(`Spec '${specName}' not found in active specs`);
+      }
+      throw error;
     }
 
     // Verify the archive destination doesn't already exist
@@ -26,7 +35,7 @@ export class SpecArchiveService {
       await fs.access(archiveSpecPath);
       throw new Error(`Spec '${specName}' already exists in archive`);
     } catch (error) {
-      if (error instanceof Error && (error as any).code !== 'ENOENT') {
+      if (!isNotFoundError(error)) {
         throw error;
       }
     }
@@ -50,8 +59,11 @@ export class SpecArchiveService {
     // Verify the archived spec exists
     try {
       await fs.access(archiveSpecPath);
-    } catch {
-      throw new Error(`Spec '${specName}' not found in archive`);
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        throw new Error(`Spec '${specName}' not found in archive`);
+      }
+      throw error;
     }
 
     // Verify the active destination doesn't already exist
@@ -59,7 +71,7 @@ export class SpecArchiveService {
       await fs.access(activeSpecPath);
       throw new Error(`Spec '${specName}' already exists in active specs`);
     } catch (error) {
-      if (error instanceof Error && (error as any).code !== 'ENOENT') {
+      if (!isNotFoundError(error)) {
         throw error;
       }
     }
@@ -80,8 +92,11 @@ export class SpecArchiveService {
     try {
       await fs.access(PathUtils.getSpecPath(this.projectPath, specName));
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return false;
+      }
+      throw error;
     }
   }
 
@@ -89,8 +104,11 @@ export class SpecArchiveService {
     try {
       await fs.access(PathUtils.getArchiveSpecPath(this.projectPath, specName));
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return false;
+      }
+      throw error;
     }
   }
 

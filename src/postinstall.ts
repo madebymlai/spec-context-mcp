@@ -46,8 +46,8 @@ function main(): void {
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 `);
-    } catch {
-        // Never fail, just silently exit
+    } catch (error) {
+        console.warn('[postinstall] setup check failed:', error);
     }
 }
 

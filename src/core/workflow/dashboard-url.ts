@@ -1,28 +1,32 @@
 import { DashboardSessionManager } from './dashboard-session.js';
 import { DEFAULT_DASHBOARD_URL } from './constants.js';
 
+export interface DashboardSessionReader {
+  getDashboardSession(): Promise<{ url: string } | null>;
+}
+
 export interface ResolveDashboardUrlOptions {
   defaultUrl?: string;
+  sessionReader?: DashboardSessionReader;
 }
+
+const defaultDashboardSessionReader: DashboardSessionReader = new DashboardSessionManager();
 
 export async function resolveDashboardUrl(
   options: ResolveDashboardUrlOptions = {}
 ): Promise<string> {
   const defaultUrl = options.defaultUrl || DEFAULT_DASHBOARD_URL;
   const envUrl = (process.env.DASHBOARD_URL || '').trim();
+  const sessionReader = options.sessionReader || defaultDashboardSessionReader;
 
   // Treat a non-default env URL as an explicit override.
   if (envUrl && envUrl !== defaultUrl) {
     return envUrl;
   }
 
-  try {
-    const session = await new DashboardSessionManager().getDashboardSession();
-    if (session?.url) {
-      return session.url;
-    }
-  } catch {
-    // Ignore session lookup errors and fall back.
+  const session = await sessionReader.getDashboardSession();
+  if (session?.url) {
+    return session.url;
   }
 
   if (envUrl) {

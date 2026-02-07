@@ -165,14 +165,10 @@ function getPlatformInstallInstructions(): { python: string; buildTools: string 
     } else if (os === 'linux') {
         // Try to detect distro
         let distro = 'debian';
-        try {
-            if (existsSync('/etc/fedora-release') || existsSync('/etc/redhat-release')) {
-                distro = 'fedora';
-            } else if (existsSync('/etc/arch-release')) {
-                distro = 'arch';
-            }
-        } catch {
-            // Default to debian-style
+        if (existsSync('/etc/fedora-release') || existsSync('/etc/redhat-release')) {
+            distro = 'fedora';
+        } else if (existsSync('/etc/arch-release')) {
+            distro = 'arch';
         }
 
         if (distro === 'fedora') {

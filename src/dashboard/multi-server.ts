@@ -41,6 +41,13 @@ interface WebSocketConnection extends WebSocket {
   isAlive?: boolean;
 }
 
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT';
+}
+
 export interface MultiDashboardOptions {
   autoOpen?: boolean;
   port?: number;
@@ -129,8 +136,11 @@ export class MultiProjectDashboardServer {
         const packageJsonContent = await readFile(packageJsonPath, 'utf-8');
         const packageJson = JSON.parse(packageJsonContent) as { version?: string };
         return packageJson.version || null;
-      } catch {
-        return null;
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          return null;
+        }
+        throw error;
       }
     };
 
@@ -146,8 +156,8 @@ export class MultiProjectDashboardServer {
           const packageInfo = await response.json() as { version?: string };
           this.packageVersion = packageInfo.version || 'unknown';
         }
-      } catch {
-        // Ignore network errors and fall back to local version.
+      } catch (error) {
+        console.warn('[dashboard] Failed to check latest package version, falling back to local version', error);
       }
     }
 
@@ -608,8 +618,12 @@ export class MultiProjectDashboardServer {
             content,
             lastModified: stats.mtime.toISOString()
           };
-        } catch {
-          result[doc] = null;
+        } catch (error) {
+          if (isNotFoundError(error)) {
+            result[doc] = null;
+          } else {
+            throw error;
+          }
         }
       }
 
@@ -638,8 +652,12 @@ export class MultiProjectDashboardServer {
             content,
             lastModified: stats.mtime.toISOString()
           };
-        } catch {
-          result[doc] = null;
+        } catch (error) {
+          if (isNotFoundError(error)) {
+            result[doc] = null;
+          } else {
+            throw error;
+          }
         }
       }
 
@@ -804,8 +822,10 @@ export class MultiProjectDashboardServer {
             content = data;
             resolvedPath = candidate;
             break;
-          } catch {
-            // try next candidate
+          } catch (error) {
+            if (!isNotFoundError(error)) {
+              throw error;
+            }
           }
         }
 
@@ -1151,8 +1171,10 @@ export class MultiProjectDashboardServer {
           try {
             content = await readFile(candidate, 'utf-8');
             break;
-          } catch {
-            // try next candidate
+          } catch (error) {
+            if (!isNotFoundError(error)) {
+              throw error;
+            }
           }
         }
 
@@ -1167,16 +1189,32 @@ export class MultiProjectDashboardServer {
         const steeringPath = join(project.projectPath, '.spec-context', 'steering');
         try {
           steeringDocs.product = await readFile(join(steeringPath, 'product.md'), 'utf-8');
-        } catch { /* optional */ }
+        } catch (error) {
+          if (!isNotFoundError(error)) {
+            throw error;
+          }
+        }
         try {
           steeringDocs.tech = await readFile(join(steeringPath, 'tech.md'), 'utf-8');
-        } catch { /* optional */ }
+        } catch (error) {
+          if (!isNotFoundError(error)) {
+            throw error;
+          }
+        }
         try {
           steeringDocs.structure = await readFile(join(steeringPath, 'structure.md'), 'utf-8');
-        } catch { /* optional */ }
+        } catch (error) {
+          if (!isNotFoundError(error)) {
+            throw error;
+          }
+        }
         try {
           steeringDocs.principles = await readFile(join(steeringPath, 'principles.md'), 'utf-8');
-        } catch { /* optional */ }
+        } catch (error) {
+          if (!isNotFoundError(error)) {
+            throw error;
+          }
+        }
 
         // Load previous spec documents for context (if reviewing design or tasks)
         const specDocsContext: SpecDocsContext = {};
@@ -1189,12 +1227,20 @@ export class MultiProjectDashboardServer {
           if (filePath.includes('design.md') || filePath.includes('tasks.md')) {
             try {
               specDocsContext.requirements = await readFile(join(specPath, 'requirements.md'), 'utf-8');
-            } catch { /* optional */ }
+            } catch (error) {
+              if (!isNotFoundError(error)) {
+                throw error;
+              }
+            }
           }
           if (filePath.includes('tasks.md')) {
             try {
               specDocsContext.design = await readFile(join(specPath, 'design.md'), 'utf-8');
-            } catch { /* optional */ }
+            } catch (error) {
+              if (!isNotFoundError(error)) {
+                throw error;
+              }
+            }
           }
         }
 
@@ -1273,11 +1319,14 @@ export class MultiProjectDashboardServer {
           content,
           lastModified: stats.mtime.toISOString()
         };
-      } catch {
-        return {
-          content: '',
-          lastModified: new Date().toISOString()
-        };
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          return {
+            content: '',
+            lastModified: new Date().toISOString()
+          };
+        }
+        throw error;
       }
     });
 
@@ -1608,8 +1657,8 @@ export class MultiProjectDashboardServer {
         if (connection.readyState === WebSocket.OPEN) {
           connection.close();
         }
-      } catch {
-        // Ignore cleanup errors
+      } catch (error) {
+        console.error('Error cleaning up WebSocket connection:', error);
       }
     });
   }
@@ -1622,7 +1671,8 @@ export class MultiProjectDashboardServer {
             // Mark as waiting for pong
             connection.isAlive = false;
             connection.ping();
-          } catch {
+          } catch (error) {
+            console.error('Heartbeat ping failed, cleaning up connection:', error);
             this.scheduleConnectionCleanup(connection);
           }
         }

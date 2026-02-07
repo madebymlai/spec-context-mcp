@@ -8,8 +8,23 @@ export interface ParsedSpec extends SpecData {
   displayName: string;
 }
 
+export interface ISpecParser {
+  getAllSpecs(): Promise<ParsedSpec[]>;
+  getAllArchivedSpecs(): Promise<ParsedSpec[]>;
+  getSpec(name: string): Promise<ParsedSpec | null>;
+  getArchivedSpec(name: string): Promise<ParsedSpec | null>;
+  getProjectSteeringStatus(): Promise<SteeringStatus>;
+}
 
-export class SpecParser {
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT';
+}
+
+
+export class SpecParser implements ISpecParser {
   private projectPath: string;
   private specsPath: string;
   private archiveSpecsPath: string;
@@ -38,8 +53,11 @@ export class SpecParser {
       }
       
       return specs.sort((a, b) => a.name.localeCompare(b.name));
-    } catch {
-      return [];
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return [];
+      }
+      throw error;
     }
   }
 
@@ -58,8 +76,11 @@ export class SpecParser {
       }
       
       return specs.sort((a, b) => a.name.localeCompare(b.name));
-    } catch {
-      return [];
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return [];
+      }
+      throw error;
     }
   }
 
@@ -102,7 +123,11 @@ export class SpecParser {
         if (reqStats.mtime > new Date(spec.lastModified)) {
           spec.lastModified = reqStats.mtime.toISOString();
         }
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       // Check design
       try {
@@ -114,7 +139,11 @@ export class SpecParser {
         if (designStats.mtime > new Date(spec.lastModified)) {
           spec.lastModified = designStats.mtime.toISOString();
         }
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       // Check tasks
       try {
@@ -135,14 +164,21 @@ export class SpecParser {
           completed: taskProgress.completed,
           pending: taskProgress.pending
         };
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       // Implementation phase is always considered "exists" since it's ongoing manual work
       spec.phases.implementation.exists = true;
 
       return spec;
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 
@@ -185,7 +221,11 @@ export class SpecParser {
         if (reqStats.mtime > new Date(spec.lastModified)) {
           spec.lastModified = reqStats.mtime.toISOString();
         }
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       // Check design
       try {
@@ -197,7 +237,11 @@ export class SpecParser {
         if (designStats.mtime > new Date(spec.lastModified)) {
           spec.lastModified = designStats.mtime.toISOString();
         }
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       // Check tasks
       try {
@@ -218,14 +262,21 @@ export class SpecParser {
           completed: taskProgress.completed,
           pending: taskProgress.pending
         };
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       // Implementation phase is always considered "exists" since it's ongoing manual work
       spec.phases.implementation.exists = true;
 
       return spec;
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 
@@ -249,28 +300,48 @@ export class SpecParser {
       try {
         await access(join(this.steeringPath, 'product.md'));
         status.documents.product = true;
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       try {
         await access(join(this.steeringPath, 'tech.md'));
         status.documents.tech = true;
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       try {
         await access(join(this.steeringPath, 'structure.md'));
         status.documents.structure = true;
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       try {
         await access(join(this.steeringPath, 'principles.md'));
         status.documents.principles = true;
-      } catch {}
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
 
       // Get last modified time for steering directory
       const steeringStats = await stat(this.steeringPath);
       status.lastModified = steeringStats.mtime.toISOString();
 
-    } catch {}
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+    }
 
     return status;
   }

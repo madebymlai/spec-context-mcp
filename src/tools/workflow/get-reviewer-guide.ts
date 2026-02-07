@@ -134,7 +134,7 @@ export async function getReviewerGuideHandler(
   }
 
   // Check for required steering docs
-  const missing = getMissingSteeringDocs(context.projectPath, [...GUIDE_STEERING_DOCS]);
+  const missing = await getMissingSteeringDocs(context.projectPath, [...GUIDE_STEERING_DOCS]);
   if (missing.length > 0) {
     return {
       success: false,

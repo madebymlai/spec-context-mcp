@@ -37,14 +37,10 @@ function getPlatformInfo(): { os: string; installCmd: { python: string; buildToo
   } else if (os === 'linux') {
     // Try to detect distro
     let distro = 'debian';
-    try {
-      if (existsSync('/etc/fedora-release') || existsSync('/etc/redhat-release')) {
-        distro = 'fedora';
-      } else if (existsSync('/etc/arch-release')) {
-        distro = 'arch';
-      }
-    } catch {
-      // Default to debian-style
+    if (existsSync('/etc/fedora-release') || existsSync('/etc/redhat-release')) {
+      distro = 'fedora';
+    } else if (existsSync('/etc/arch-release')) {
+      distro = 'arch';
     }
 
     if (distro === 'fedora') {
@@ -364,11 +360,11 @@ export async function runDoctor(): Promise<number> {
             ],
           });
         }
-      } catch {
+      } catch (error) {
         results.push({
           name: 'RapidYAML (ryml)',
           status: 'warn',
-          details: 'Unable to parse RapidYAML check output.',
+          details: `Unable to parse RapidYAML check output: ${String(error)}`,
           hint:
             'Install rapidyaml>=0.10.0 from the git tag v0.10.0 (PyPI currently ships an older build).',
           fix: [
@@ -445,12 +441,12 @@ export async function runDoctor(): Promise<number> {
         hint: 'Start with spec-context-dashboard if needed.',
       });
     }
-  } catch {
+  } catch (error) {
     const isDefault = dashboardUrl === DEFAULT_DASHBOARD_URL;
     results.push({
       name: 'Dashboard',
       status: isDefault ? 'warn' : 'fail',
-      details: `Dashboard not reachable at ${dashboardUrl}.`,
+      details: `Dashboard not reachable at ${dashboardUrl}: ${String(error)}`,
       hint: 'Start with spec-context-dashboard or update DASHBOARD_URL.',
     });
   }

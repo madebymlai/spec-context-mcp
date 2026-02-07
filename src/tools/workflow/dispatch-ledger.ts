@@ -108,7 +108,8 @@ function parseJsonValue<T>(value: string | undefined): T | undefined {
   }
   try {
     return JSON.parse(value) as T;
-  } catch {
+  } catch (error) {
+    console.warn('[dispatch-ledger] Failed to parse persisted JSON value', error);
     return undefined;
   }
 }

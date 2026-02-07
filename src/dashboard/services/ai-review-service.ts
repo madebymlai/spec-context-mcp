@@ -345,10 +345,10 @@ ${REVIEW_USER_SUFFIX}`;
                 try {
                     suggestions = this.parseResponseStrict(response.content);
                     break;
-                } catch {
+                } catch (error) {
                     previousAssistantContent = response.content;
                     if (attempt >= MAX_SCHEMA_RETRIES) {
-                        throw new Error('schema_validation_failed');
+                        throw new Error(`schema_validation_failed: ${String(error)}`);
                     }
                 }
             }
@@ -408,8 +408,8 @@ ${REVIEW_USER_SUFFIX}`;
         let parsed: unknown;
         try {
             parsed = JSON.parse(content);
-        } catch {
-            const parseError = new Error('schema_validation_failed: invalid_json') as Error & { code?: string };
+        } catch (error) {
+            const parseError = new Error(`schema_validation_failed: invalid_json: ${String(error)}`) as Error & { code?: string };
             parseError.code = 'schema_validation_failed';
             throw parseError;
         }

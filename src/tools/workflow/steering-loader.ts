@@ -3,8 +3,7 @@
  * Loads specific steering docs on demand
  */
 
-import { existsSync } from 'fs';
-import { readFile } from 'fs/promises';
+import { access, readFile } from 'fs/promises';
 import { join } from 'path';
 import {
   areFileFingerprintsEqual,
@@ -21,6 +20,13 @@ export type SteeringDocsResult = {
 };
 
 export type SteeringFingerprintMap = Partial<Record<SteeringDocType, FileContentFingerprint>>;
+
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT';
+}
 
 /**
  * Load specific steering documents from the project's steering directory.
@@ -47,8 +53,10 @@ export async function getSteeringDocs(
       } else {
         result[doc] = await readFile(docPath, 'utf-8');
       }
-    } catch {
-      // Skip if can't read
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
     }
   }
 
@@ -99,17 +107,23 @@ export function hasSteeringFingerprintMismatch(
  * Check if required steering docs exist.
  * Returns list of missing docs.
  */
-export function getMissingSteeringDocs(
+export async function getMissingSteeringDocs(
   projectPath: string,
   required: SteeringDocType[]
-): SteeringDocType[] {
+): Promise<SteeringDocType[]> {
   const steeringDir = join(projectPath, '.spec-context', 'steering');
   const missing: SteeringDocType[] = [];
 
   for (const doc of required) {
     const docPath = join(steeringDir, `${doc}.md`);
-    if (!existsSync(docPath)) {
-      missing.push(doc);
+    try {
+      await access(docPath);
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        missing.push(doc);
+      } else {
+        throw error;
+      }
     }
   }
 

@@ -150,9 +150,12 @@ Templates can include placeholders that will be replaced when documents are crea
     try {
       // Only create if it doesn't exist to avoid overwriting user's README
       await fs.access(readmePath);
-    } catch {
-      // File doesn't exist, create it
-      await fs.writeFile(readmePath, readmeContent, 'utf-8');
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT') {
+        await fs.writeFile(readmePath, readmeContent, 'utf-8');
+      } else {
+        throw error;
+      }
     }
   }
 

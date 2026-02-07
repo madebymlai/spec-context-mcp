@@ -319,8 +319,12 @@ export async function validateProjectPath(projectPath: string): Promise<string> 
 export async function ensureDirectoryExists(dirPath: string): Promise<void> {
   try {
     await access(dirPath, constants.F_OK);
-  } catch {
-    await mkdir(dirPath, { recursive: true });
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT') {
+      await mkdir(dirPath, { recursive: true });
+      return;
+    }
+    throw error;
   }
 }
 

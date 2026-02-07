@@ -19,6 +19,8 @@ export { BudgetGuard } from './budget-guard.js';
 export { HistoryReducer } from './history-reducer.js';
 export { InterceptionLayer } from './interception-layer.js';
 export { RuntimeEventStream } from './runtime-event-stream.js';
+export type { RuntimeEventStorage } from './runtime-event-storage.js';
+export { NodeRuntimeEventStorage } from './node-runtime-event-storage.js';
 export { RuntimeSnapshotStore } from './runtime-snapshot-store.js';
 export { SchemaRegistry } from './schema-registry.js';
 export { PromptTemplateRegistry } from './prompt-template-registry.js';

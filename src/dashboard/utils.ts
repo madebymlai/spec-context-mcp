@@ -79,9 +79,14 @@ export async function checkExistingDashboard(port: number, host: string): Promis
       return data.message === DASHBOARD_HEALTH_MESSAGE;
     }
     return false;
-  } catch {
-    // Connection failed or timeout - no dashboard running
-    return false;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return false;
+    }
+    if (error instanceof TypeError) {
+      return false;
+    }
+    throw error;
   }
 }
 

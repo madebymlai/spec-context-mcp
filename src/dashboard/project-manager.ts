@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import chokidar, { FSWatcher } from 'chokidar';
-import { SpecParser } from './parser.js';
+import { SpecParser, type ISpecParser } from './parser.js';
 import { SpecWatcher } from './watcher.js';
 import { ApprovalStorage } from './approval-storage.js';
 import { SpecArchiveService } from '../core/workflow/archive-service.js';
@@ -13,7 +13,7 @@ export interface ProjectContext {
   originalProjectPath: string;   // Original host path for display/registry
   projectName: string;
   instances: ProjectInstance[];  // Active MCP server instances for this project
-  parser: SpecParser;
+  parser: ISpecParser;
   watcher: SpecWatcher;
   approvalStorage: ApprovalStorage;
   archiveService: SpecArchiveService;
