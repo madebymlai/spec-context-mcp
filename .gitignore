@@ -37,4 +37,5 @@ coverage/
 
 # Local snapshot
 .spec-context-mcp/
+.spec-context/
 .mcp.json
