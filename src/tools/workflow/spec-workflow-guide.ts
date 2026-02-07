@@ -1,6 +1,7 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getSteeringDocs } from './steering-loader.js';
+import { getSpecTemplates, SPEC_WORKFLOW_TEMPLATES } from './template-loader.js';
 import { getDisciplineMode, getDispatchCli } from '../../config/discipline.js';
 import { isDispatchRuntimeV2Enabled } from '../../config/dispatch-runtime.js';
 import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
@@ -38,6 +39,10 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
     ['product', 'tech', 'structure', 'principles'],
     fileContentCache
   );
+  const templates = await getSpecTemplates(
+    SPEC_WORKFLOW_TEMPLATES,
+    fileContentCache
+  );
 
   return {
     success: true,
@@ -45,6 +50,7 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
     data: {
       guide: getSpecWorkflowGuide(disciplineMode, implementerCli, reviewerCli),
       steering: steeringContent,
+      templates: templates ?? {},
       disciplineMode,
       dispatch: {
         implementerCli,
@@ -93,7 +99,7 @@ flowchart TD
     CheckSteering -->|No| P1_Template
 
     %% Phase 1: Requirements
-    P1_Load --> P1_Template[Check user-templates first,<br/>then read template:<br/>requirements-template.md]
+    P1_Load --> P1_Template[Use injected server template:<br/>requirements-template.md]
     P1_Template --> P1_Research[Web search if available]
     P1_Research --> P1_Create[Create file:<br/>.spec-context/specs/{name}/<br/>requirements.md]
     P1_Create --> P1_Approve[approvals<br/>action: request<br/>filePath only]
@@ -104,7 +110,7 @@ flowchart TD
     P1_Check -->|rejected| P1_Stop[Ask user for guidance]
 
     %% Phase 2: Design
-    P1_Check -->|approved| P2_Template[Check user-templates first,<br/>then read template:<br/>design-template.md]
+    P1_Check -->|approved| P2_Template[Use injected server template:<br/>design-template.md]
     P2_Template --> P2_Analyze[Analyze codebase patterns]
     P2_Analyze --> P2_Create[Create file:<br/>.spec-context/specs/{name}/<br/>design.md]
     P2_Create --> P2_Approve[approvals<br/>action: request<br/>filePath only]
@@ -115,7 +121,7 @@ flowchart TD
     P2_Check -->|rejected| P2_Stop[Ask user for guidance]
 
     %% Phase 3: Tasks
-    P2_Check -->|approved| P3_Template[Check user-templates first,<br/>then read template:<br/>tasks-template.md]
+    P2_Check -->|approved| P3_Template[Use injected server template:<br/>tasks-template.md]
     P3_Template --> P3_Break[Convert design to tasks]
     P3_Break --> P3_Create[Create file:<br/>.spec-context/specs/{name}/<br/>tasks.md]
     P3_Create --> P3_Approve[approvals<br/>action: request<br/>filePath only]
@@ -158,9 +164,9 @@ flowchart TD
 **Purpose**: Define what to build based on user needs.
 
 **File Operations**:
+- Use injected template payload from this tool response first: \`data.templates.requirements\`
 - Read steering docs: \`.spec-context/steering/*.md\` (if they exist)
-- Check for custom template: \`.spec-context/user-templates/requirements-template.md\`
-- Read template: \`.spec-context/templates/requirements-template.md\` (if no custom template)
+- Use server template: \`requirements-template.md\` from injected payload
 - Create document: \`.spec-context/specs/{spec-name}/requirements.md\`
 
 **Tools**:
@@ -169,8 +175,8 @@ flowchart TD
 
 **Process**:
 1. Check if \`.spec-context/steering/\` exists (if yes, read product.md, tech.md, structure.md, principles.md)
-2. Check for custom template at \`.spec-context/user-templates/requirements-template.md\`
-3. If no custom template, read from \`.spec-context/templates/requirements-template.md\`
+2. Use \`data.templates.requirements.content\` from this tool response when available (includes resolved source + path)
+3. If \`data.templates.requirements\` is missing, stop and ask user to retry tool loading (no local template fallback)
 4. Research market/user expectations (if web search available, current year: ${currentYear})
 5. Generate requirements as user stories with EARS criteria
 6. Create \`requirements.md\` at \`.spec-context/specs/{spec-name}/requirements.md\`
@@ -185,8 +191,8 @@ flowchart TD
 **Purpose**: Create technical design addressing all requirements.
 
 **File Operations**:
-- Check for custom template: \`.spec-context/user-templates/design-template.md\`
-- Read template: \`.spec-context/templates/design-template.md\` (if no custom template)
+- Use injected template payload from this tool response first: \`data.templates.design\`
+- Use server template: \`design-template.md\` from injected payload
 - Create document: \`.spec-context/specs/{spec-name}/design.md\`
 
 **Tools**:
@@ -194,8 +200,8 @@ flowchart TD
 - wait-for-approval: Block until user responds, auto-cleans up
 
 **Process**:
-1. Check for custom template at \`.spec-context/user-templates/design-template.md\`
-2. If no custom template, read from \`.spec-context/templates/design-template.md\`
+1. Use \`data.templates.design.content\` from this tool response when available (includes resolved source + path)
+2. If \`data.templates.design\` is missing, stop and ask user to retry tool loading (no local template fallback)
 3. Analyze codebase for patterns to reuse
 4. Research technology choices (if web search available, current year: ${currentYear})
 5. Generate design with all template sections
@@ -211,8 +217,8 @@ flowchart TD
 **Purpose**: Break design into atomic implementation tasks.
 
 **File Operations**:
-- Check for custom template: \`.spec-context/user-templates/tasks-template.md\`
-- Read template: \`.spec-context/templates/tasks-template.md\` (if no custom template)
+- Use injected template payload from this tool response first: \`data.templates.tasks\`
+- Use server template: \`tasks-template.md\` from injected payload
 - Create document: \`.spec-context/specs/{spec-name}/tasks.md\`
 
 **Tools**:
@@ -220,8 +226,8 @@ flowchart TD
 - wait-for-approval: Block until user responds, auto-cleans up
 
 **Process**:
-1. Check for custom template at \`.spec-context/user-templates/tasks-template.md\`
-2. If no custom template, read from \`.spec-context/templates/tasks-template.md\`
+1. Use \`data.templates.tasks.content\` from this tool response when available (includes resolved source + path)
+2. If \`data.templates.tasks\` is missing, stop and ask user to retry tool loading (no local template fallback)
 3. Convert design into atomic tasks (1-3 files each)
 4. Include file paths and requirement references
 5. **IMPORTANT**: Generate a _Prompt field for each task with:
@@ -373,7 +379,7 @@ ${dispatchRuntimeV2 ? '- NEVER branch orchestration state from raw logs; only us
 ## Workflow Rules
 
 - Create documents directly at specified file paths
-- Read templates from \`.spec-context/templates/\` directory
+- Use server-injected template payloads from this tool response
 - Follow exact template structures
 - Get explicit user approval between phases using: approvals action:'request' → wait-for-approval
 - Complete phases in sequence (no skipping)
@@ -412,14 +418,6 @@ ${reviewerCli ? `**NEVER review tasks yourself — always dispatch to \`${review
 ## File Structure
 \`\`\`
 .spec-context/
-├── templates/           # Auto-populated on server start
-│   ├── requirements-template.md
-│   ├── design-template.md
-│   ├── tasks-template.md
-│   ├── product-template.md
-│   ├── tech-template.md
-│   ├── structure-template.md
-│   └── principles-template.md
 ├── specs/
 │   └── {spec-name}/
 │       ├── requirements.md
@@ -430,5 +428,7 @@ ${reviewerCli ? `**NEVER review tasks yourself — always dispatch to \`${review
     ├── tech.md
     ├── structure.md
     └── principles.md
-\`\`\``;
+\`\`\`
+
+Template files are server-bundled and injected into this tool response.`;
 }

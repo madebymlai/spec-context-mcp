@@ -6,4 +6,5 @@ export * from './get-implementer-guide.js';
 export * from './get-reviewer-guide.js';
 export * from './get-brainstorm-guide.js';
 export * from './steering-loader.js';
+export * from './template-loader.js';
 export * from './dispatch-runtime.js';
