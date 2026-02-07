@@ -44,6 +44,7 @@
 5. **Dependency Inversion (DIP)** — Depend on abstractions
    - Import interfaces, never concrete implementations.
    - All external I/O (network, files, databases) must go through an interface.
+   - Wire implementations to abstractions in the composition root/DI container.
    - Ask: "Am I importing a concrete class or an interface?"
    - Ask: "Can I swap this dependency without changing this file?"
 
@@ -83,12 +84,7 @@
    - Ask: "Am I inspecting data to decide behavior instead of delegating it?"
    - Ask: "Can this decision be moved into the owning type?"
 
-7. **DIP at Composition Root** — Wire concrete implementations in one place
-   - Application code depends on abstractions; concrete types are selected at the composition boundary.
-   - Ask: "Is this file depending on an interface rather than a concrete implementation?"
-   - Ask: "Can this dependency be swapped without changing business logic?"
-
-8. **[Add project-specific standards]**
+7. **[Add project-specific standards]**
    - [Explanation]
    - Ask: "[Verification question]"
 
