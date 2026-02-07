@@ -59,7 +59,14 @@ const PROVIDER_ALIASES = {
   'opencode-cli': 'opencode',
 } as const;
 
-type CanonicalProvider = keyof typeof PROVIDER_CATALOG;
+export type CanonicalProvider = keyof typeof PROVIDER_CATALOG;
+
+export const PROVIDER_CAPABILITIES: Record<CanonicalProvider, { schemaConstrained: boolean }> = {
+  claude: { schemaConstrained: true },
+  codex: { schemaConstrained: true },
+  gemini: { schemaConstrained: true },
+  opencode: { schemaConstrained: true },
+};
 
 function resolveCanonicalProvider(value: string): CanonicalProvider | null {
   const key = value.trim().toLowerCase();
@@ -71,6 +78,15 @@ function resolveCanonicalProvider(value: string): CanonicalProvider | null {
     return null;
   }
   return alias as CanonicalProvider;
+}
+
+export function resolveDispatchProvider(value: string): CanonicalProvider | null {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+  const [firstToken] = trimmed.split(/\s+/);
+  return resolveCanonicalProvider(firstToken ?? '');
 }
 
 /**

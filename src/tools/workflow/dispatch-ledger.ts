@@ -476,6 +476,7 @@ export function buildLedgerTaskPrompt(progressLedger: ProgressLedger | null): {
   const currentTask = progressLedger.currentTask;
   const missing: string[] = [];
   const sections = [
+    'Use the loaded implementer/reviewer guide for global process rules; this section is task-specific context only.',
     `Task ${currentTask.id}: ${currentTask.description}`,
     `Task status: ${currentTask.status}`,
   ];
@@ -517,9 +518,6 @@ export function buildLedgerDeltaPacket(args: {
     ledger_stalled_count: args.taskLedger.stalled.consecutiveNonProgress,
     ledger_stalled_flagged: args.taskLedger.stalled.flagged,
     ledger_replan_hint: args.taskLedger.replanHint ?? null,
-    previous_implementer_summary: args.taskLedger.summary ?? null,
-    previous_reviewer_assessment: args.taskLedger.reviewerAssessment ?? null,
-    previous_reviewer_issue_count: args.taskLedger.reviewerIssues.length,
   };
 }
 

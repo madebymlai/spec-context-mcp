@@ -81,7 +81,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **The problem:** Each dispatch compiles a prompt containing steering docs, spec content, tool schemas, and task instructions. Much of this is redundant across dispatches or unnecessarily verbose.
 
-### Start here: Provider-Aware Prompt Ordering — P0 
+### Start here: Provider-Aware Prompt Ordering — P0 [OK]
 
 **What:** Structure compiled prompts so stable content (steering docs, spec content) always comes first and task-specific instructions come last. The subagent forwards this to its LLM provider, where a stable prefix maximizes provider-side KV-cache hits. Not a size reduction — a reordering that makes every other technique more effective.
 
@@ -123,7 +123,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **The problem:** CLI subagents emit verbose output — prose explanations, reasoning traces, formatting — on top of the structured result the orchestrator actually needs.
 
-### Start here: Structured Output Contracts (Tighten) — P0
+### Start here: Structured Output Contracts (Tighten) — P0 [OK]
 
 **What:** Constrain subagent output to strict JSON schema. Eliminates wasted output tokens on prose/explanation. The subagent emits only the structured `BEGIN_DISPATCH_RESULT`...`END_DISPATCH_RESULT` block with no surrounding prose.
 

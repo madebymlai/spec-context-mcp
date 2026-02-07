@@ -1,8 +1,5 @@
-interface JsonSchemaObject {
-  type: 'object';
-  additionalProperties: boolean;
-  required: string[];
-  properties: Record<string, unknown>;
+interface SchemaRegistryLike {
+  register<T>(type: string, schemaId: string, schemaVersion: string, validate: (payload: unknown) => payload is T): void;
 }
 
 export const DISPATCH_CONTRACT_SCHEMA_VERSION = 'v1';
@@ -37,67 +34,6 @@ export interface ReviewerResult {
   issues: ReviewerIssue[];
   required_fixes: string[];
 }
-
-export const DISPATCH_IMPLEMENTER_SCHEMA: JsonSchemaObject = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['task_id', 'status', 'summary', 'files_changed', 'tests', 'follow_up_actions'],
-  properties: {
-    task_id: { type: 'string' },
-    status: {
-      type: 'string',
-      enum: ['completed', 'blocked', 'failed'],
-    },
-    summary: { type: 'string' },
-    files_changed: { type: 'array', items: { type: 'string' } },
-    tests: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['command', 'passed'],
-        properties: {
-          command: { type: 'string' },
-          passed: { type: 'boolean' },
-          failures: { type: 'array', items: { type: 'string' } },
-        },
-      },
-    },
-    follow_up_actions: { type: 'array', items: { type: 'string' } },
-  },
-};
-
-export const DISPATCH_REVIEWER_SCHEMA: JsonSchemaObject = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['task_id', 'assessment', 'strengths', 'issues', 'required_fixes'],
-  properties: {
-    task_id: { type: 'string' },
-    assessment: {
-      type: 'string',
-      enum: ['approved', 'needs_changes', 'blocked'],
-    },
-    strengths: { type: 'array', items: { type: 'string' } },
-    issues: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['severity', 'message', 'fix'],
-        properties: {
-          severity: {
-            type: 'string',
-            enum: ['critical', 'important', 'minor'],
-          },
-          file: { type: 'string' },
-          message: { type: 'string' },
-          fix: { type: 'string' },
-        },
-      },
-    },
-    required_fixes: { type: 'array', items: { type: 'string' } },
-  },
-};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -179,3 +115,17 @@ export function isReviewerResult(value: unknown): value is ReviewerResult {
   return true;
 }
 
+export function registerDispatchContractSchemas(registry: SchemaRegistryLike): void {
+  registry.register(
+    'dispatch.result.implementer',
+    DISPATCH_IMPLEMENTER_SCHEMA_ID,
+    DISPATCH_CONTRACT_SCHEMA_VERSION,
+    isImplementerResult
+  );
+  registry.register(
+    'dispatch.result.reviewer',
+    DISPATCH_REVIEWER_SCHEMA_ID,
+    DISPATCH_CONTRACT_SCHEMA_VERSION,
+    isReviewerResult
+  );
+}

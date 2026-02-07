@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getDisciplineMode, getDispatchCli, resolveAgentCli, KNOWN_AGENTS } from './discipline.js';
+import {
+  getDisciplineMode,
+  getDispatchCli,
+  KNOWN_AGENTS,
+  PROVIDER_CAPABILITIES,
+  resolveAgentCli,
+  resolveDispatchProvider,
+} from './discipline.js';
 
 describe('discipline config', () => {
   const originalEnv = process.env;
@@ -167,6 +174,26 @@ describe('discipline config', () => {
       expect(KNOWN_AGENTS).toContain('codex');
       expect(KNOWN_AGENTS).toContain('gemini');
       expect(KNOWN_AGENTS).toContain('opencode');
+    });
+  });
+
+  describe('resolveDispatchProvider', () => {
+    it('resolves canonical provider from command text', () => {
+      expect(resolveDispatchProvider('claude -p --foo')).toBe('claude');
+      expect(resolveDispatchProvider('codex exec --full-auto')).toBe('codex');
+    });
+
+    it('returns null for unknown command', () => {
+      expect(resolveDispatchProvider('custom-agent --run')).toBeNull();
+    });
+  });
+
+  describe('PROVIDER_CAPABILITIES', () => {
+    it('declares schema constrained capability for all catalog providers', () => {
+      expect(PROVIDER_CAPABILITIES.claude.schemaConstrained).toBe(true);
+      expect(PROVIDER_CAPABILITIES.codex.schemaConstrained).toBe(true);
+      expect(PROVIDER_CAPABILITIES.gemini.schemaConstrained).toBe(true);
+      expect(PROVIDER_CAPABILITIES.opencode.schemaConstrained).toBe(true);
     });
   });
 });

@@ -1,5 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdir, rm, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { dispatchRuntimeHandler } from './dispatch-runtime.js';
+
+const SPEC_NAME = 'dispatch-task-progress-ledgers';
+const SPEC_DIR = join(process.cwd(), '.spec-context', 'specs', SPEC_NAME);
 
 const context = {
   projectPath: process.cwd(),
@@ -10,6 +15,45 @@ const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
 const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
 
 describe('dispatch-runtime tool', () => {
+  beforeAll(async () => {
+    await mkdir(SPEC_DIR, { recursive: true });
+    await writeFile(
+      join(SPEC_DIR, 'tasks.md'),
+      `# Tasks
+
+- [-] 1. Root compile task
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Implement root compile task_
+- [ ] 1.1 Init task fixture
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Implement task 1.1_
+- [ ] 2.1 Implementer fixture
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Implement task 2.1_
+- [ ] 2.9 Stalled fixture
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Implement task 2.9_
+- [ ] 3.1 Reviewer fixture
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Implement task 3.1_
+- [ ] 4.1 Snapshot fixture
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Implement task 4.1_
+- [ ] 5.1 Terminal fixture
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Implement task 5.1_
+- [ ] 6.1 Provider gate fixture
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Implement task 6.1_
+`,
+      'utf8'
+    );
+  });
+
+  afterAll(async () => {
+    await rm(SPEC_DIR, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
     process.env.SPEC_CONTEXT_REVIEWER = 'codex';
@@ -86,7 +130,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-mismatch-compile',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '10.1',
       },
       context
@@ -114,7 +158,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-mismatch-ingest',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '11.1',
       },
       context
@@ -143,7 +187,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-init',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '1.1',
       },
       context
@@ -159,7 +203,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-implementer',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '2.1',
       },
       context
@@ -191,7 +235,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId,
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId,
       },
       context
@@ -252,7 +296,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-reviewer-invalid',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '3.1',
       },
       context
@@ -282,7 +326,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-schema-terminal',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '5.1',
       },
       context
@@ -321,13 +365,13 @@ END_DISPATCH_RESULT`;
     expect(second.data?.nextAction).toBe('halt_schema_invalid_terminal');
   });
 
-  it('fails compile_prompt when provider is unsupported', async () => {
+  it('compiles prompt even when implementer provider command is custom', async () => {
     process.env.SPEC_CONTEXT_IMPLEMENTER = 'custom-provider --json';
     await dispatchRuntimeHandler(
       {
         action: 'init_run',
         runId: 'test-run-unsupported-provider',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '6.1',
       },
       context
@@ -345,9 +389,8 @@ END_DISPATCH_RESULT`;
       context
     );
 
-    expect(result.success).toBe(false);
-    expect(result.data?.errorCode).toBe('mode_unsupported');
-    expect(result.message).toContain('mode_unsupported');
+    expect(result.success).toBe(true);
+    expect(result.data?.prompt).toContain('Task ID: 6.1');
   });
 
   it('rejects extra prose outside dispatch contract markers', async () => {
@@ -355,7 +398,7 @@ END_DISPATCH_RESULT`;
       {
         action: 'init_run',
         runId: 'test-run-prose-reject',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '7.1',
       },
       context
@@ -384,7 +427,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-compile',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '1',
       },
       context
@@ -433,7 +476,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId,
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId,
       },
       context
@@ -482,7 +525,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId,
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId,
       },
       context
@@ -523,7 +566,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId,
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId,
       },
       context
@@ -579,7 +622,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId,
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId,
       },
       context
@@ -609,7 +652,7 @@ END_DISPATCH_RESULT`,
       {
         action: 'init_run',
         runId: 'test-run-snapshot',
-        specName: 'dispatch-task-progress-ledgers',
+        specName: SPEC_NAME,
         taskId: '4.1',
       },
       context

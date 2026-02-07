@@ -35,17 +35,10 @@ import {
 } from './dispatch-ledger.js';
 import {
   DISPATCH_CONTRACT_SCHEMA_VERSION,
-  DISPATCH_IMPLEMENTER_SCHEMA_ID,
-  DISPATCH_REVIEWER_SCHEMA_ID,
+  registerDispatchContractSchemas,
   type ImplementerResult,
   type ReviewerResult,
-  isImplementerResult,
-  isReviewerResult,
 } from './dispatch-contract-schemas.js';
-import {
-  type DispatchOutputMode,
-  resolveDispatchOutputMode,
-} from './dispatch-output-mode.js';
 
 type DispatchAction = 'init_run' | 'ingest_output' | 'get_snapshot' | 'compile_prompt' | 'get_telemetry';
 type DispatchRole = 'implementer' | 'reviewer';
@@ -56,8 +49,7 @@ const DISPATCH_RESULT_END = 'END_DISPATCH_RESULT';
 type DispatchContractErrorCode =
   | 'marker_missing'
   | 'json_parse_failed'
-  | 'schema_invalid'
-  | 'mode_unsupported';
+  | 'schema_invalid';
 
 class DispatchContractError extends Error {
   constructor(
@@ -66,6 +58,22 @@ class DispatchContractError extends Error {
   ) {
     super(message);
     this.name = 'DispatchContractError';
+  }
+}
+
+type DispatchRuntimeErrorCode =
+  | 'run_not_initialized'
+  | 'run_task_mismatch'
+  | 'dispatch_prompt_overflow_terminal'
+  | 'output_token_budget_exceeded';
+
+class DispatchRuntimeError extends Error {
+  constructor(
+    public readonly code: DispatchRuntimeErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DispatchRuntimeError';
   }
 }
 
@@ -335,11 +343,15 @@ function compactTaskPromptStageC(input: {
 function pruneDeltaPacket(deltaPacket: Record<string, unknown>): Record<string, unknown> {
   const allowedKeys = [
     'task_id',
-    'previous_implementer_summary',
-    'previous_reviewer_assessment',
-    'previous_reviewer_issue_count',
     'guide_mode',
     'guide_cache_key',
+    'ledger_active_task_id',
+    'ledger_summary',
+    'ledger_reviewer_assessment',
+    'ledger_reviewer_issue_count',
+    'ledger_stalled_count',
+    'ledger_stalled_flagged',
+    'ledger_replan_hint',
   ];
   const compacted: Record<string, unknown> = {};
 
@@ -381,11 +393,14 @@ function resolveDispatchCompactionPolicy(): DispatchCompactionPolicy {
   };
 }
 
-interface DispatchTelemetrySnapshot {
+interface DispatchCoreTelemetry {
   dispatch_count: number;
   total_output_tokens: number;
   avg_output_tokens: number;
   approval_loops: number;
+}
+
+interface DispatchCompactionTelemetry {
   compaction_count: number;
   compaction_auto_count: number;
   compaction_prompt_tokens_before: number;
@@ -393,15 +408,26 @@ interface DispatchTelemetrySnapshot {
   compaction_ratio: number;
   compaction_stage_distribution: Record<DispatchCompactionStage, number>;
   overflow_terminal_count: number;
+}
+
+interface DispatchLedgerTelemetry {
   ledger_mode_usage: Record<LedgerMode, number>;
   ledger_rebuild_count: number;
   ledger_prompt_tokens_baseline: number;
   ledger_prompt_tokens_actual: number;
   ledger_prompt_token_delta: number;
-  output_mode_counts: Record<DispatchOutputMode | 'unsupported', number>;
+}
+
+interface DispatchSchemaTelemetry {
   schema_error_counts: Record<DispatchContractErrorCode, number>;
   schema_version_counts: Record<string, number>;
 }
+
+type DispatchTelemetrySnapshot =
+  & DispatchCoreTelemetry
+  & DispatchCompactionTelemetry
+  & DispatchLedgerTelemetry
+  & DispatchSchemaTelemetry;
 
 function buildDispatchGuideInstruction(input: {
   role: DispatchRole;
@@ -424,8 +450,6 @@ function buildDispatchDynamicTail(input: {
   deltaPacket: Record<string, unknown>;
   guideMode: 'full' | 'compact';
   guideCacheKey: string;
-  outputMode: DispatchOutputMode;
-  schemaVersion: string;
 }): string {
   const guideInstruction = buildDispatchGuideInstruction({
     role: input.role,
@@ -437,8 +461,6 @@ function buildDispatchDynamicTail(input: {
     `Max output tokens: ${input.maxOutputTokens}`,
     `Delta context: ${JSON.stringify(input.deltaPacket)}`,
     `Guide cache key: ${input.guideCacheKey}`,
-    `Output mode: ${input.outputMode}`,
-    `Output schema version: ${input.schemaVersion}`,
     guideInstruction,
     'Task prompt:',
     input.taskPrompt,
@@ -491,8 +513,6 @@ ${DISPATCH_RESULT_END}`,
     deltaPacket: Record<string, unknown>;
     guideMode: 'full' | 'compact';
     guideCacheKey: string;
-    outputMode: DispatchOutputMode;
-    schemaVersion: string;
     tokenCharsPerToken?: number;
   }): CompiledDispatchPrompt {
     const templateId = input.role === 'implementer' ? 'dispatch_implementer' : 'dispatch_reviewer';
@@ -562,15 +582,10 @@ class DispatchRuntimeManager {
     ledger_prompt_tokens_baseline: 0,
     ledger_prompt_tokens_actual: 0,
     ledger_prompt_token_delta: 0,
-    output_mode_counts: {
-      schema_constrained: 0,
-      unsupported: 0,
-    },
     schema_error_counts: {
       marker_missing: 0,
       json_parse_failed: 0,
       schema_invalid: 0,
-      mode_unsupported: 0,
     },
     schema_version_counts: {},
   };
@@ -661,7 +676,10 @@ class DispatchRuntimeManager {
     const parsed = extractStructuredJson(args.outputContent);
     const outputTokens = estimateTokensFromChars(args.outputContent, this.compactionPolicy.tokenCharsPerToken);
     if (typeof args.maxOutputTokens === 'number' && outputTokens > args.maxOutputTokens) {
-      throw new Error(`output_token_budget_exceeded: estimated=${outputTokens}, max=${args.maxOutputTokens}`);
+      throw new DispatchRuntimeError(
+        'output_token_budget_exceeded',
+        `output_token_budget_exceeded: estimated=${outputTokens}, max=${args.maxOutputTokens}`
+      );
     }
 
     if (args.role === 'implementer') {
@@ -803,17 +821,6 @@ class DispatchRuntimeManager {
     compactionTrace: DispatchCompactionTrace[];
   }> {
     let snapshot = await this.assertRunBinding(args.runId, args.taskId);
-    const outputModeResolution = resolveDispatchOutputMode({ role: args.role });
-    if (outputModeResolution.decision === 'unsupported') {
-      this.bumpOutputModeTelemetry('unsupported');
-      this.bumpSchemaErrorTelemetry('mode_unsupported');
-      throw new DispatchContractError(
-        'mode_unsupported',
-        `mode_unsupported: role ${args.role} provider is not configured for schema-constrained output`,
-      );
-    }
-    const outputMode: DispatchOutputMode = outputModeResolution.mode ?? 'schema_constrained';
-    this.bumpOutputModeTelemetry(outputMode);
     this.bumpSchemaVersionTelemetry(DISPATCH_CONTRACT_SCHEMA_VERSION);
 
     const snapshotFactMap = new Map((snapshot.facts ?? []).map(fact => [fact.k, fact.v]));
@@ -904,8 +911,6 @@ class DispatchRuntimeManager {
       deltaPacket,
       guideMode,
       guideCacheKey,
-      outputMode,
-      schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
       tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
     });
     const promptTokensBefore = compiled.promptTokens;
@@ -916,7 +921,8 @@ class DispatchRuntimeManager {
     if (compiled.promptTokens > promptBudget) {
       if (!autoCompaction) {
         this.bumpOverflowTerminalTelemetry();
-        throw new Error(
+        throw new DispatchRuntimeError(
+          'dispatch_prompt_overflow_terminal',
           `dispatch_prompt_overflow_terminal: estimated=${compiled.promptTokens}, budget=${promptBudget}, role=${args.role}`
         );
       }
@@ -932,8 +938,6 @@ class DispatchRuntimeManager {
           deltaPacket,
           guideMode,
           guideCacheKey,
-          outputMode,
-          schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
           tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
         });
         if (stageACompiled.promptTokens <= compiled.promptTokens) {
@@ -959,8 +963,6 @@ class DispatchRuntimeManager {
           deltaPacket,
           guideMode,
           guideCacheKey,
-          outputMode,
-          schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
           tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
         });
         if (stageBCompiled.promptTokens <= compiled.promptTokens) {
@@ -987,8 +989,6 @@ class DispatchRuntimeManager {
           deltaPacket,
           guideMode,
           guideCacheKey,
-          outputMode,
-          schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
           tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
         });
         if (stageCCompiled.promptTokens <= compiled.promptTokens) {
@@ -1001,7 +1001,8 @@ class DispatchRuntimeManager {
 
     if (compiled.promptTokens > promptBudget) {
       this.bumpOverflowTerminalTelemetry();
-      throw new Error(
+      throw new DispatchRuntimeError(
+        'dispatch_prompt_overflow_terminal',
         `dispatch_prompt_overflow_terminal: estimated=${compiled.promptTokens}, budget=${promptBudget}, role=${args.role}, stage=${compactionStage}`
       );
     }
@@ -1068,7 +1069,6 @@ class DispatchRuntimeManager {
       ...this.telemetry,
       compaction_stage_distribution: { ...this.telemetry.compaction_stage_distribution },
       ledger_mode_usage: { ...this.telemetry.ledger_mode_usage },
-      output_mode_counts: { ...this.telemetry.output_mode_counts },
       schema_error_counts: { ...this.telemetry.schema_error_counts },
       schema_version_counts: { ...this.telemetry.schema_version_counts },
     };
@@ -1170,10 +1170,6 @@ class DispatchRuntimeManager {
       this.telemetry.ledger_prompt_tokens_actual - this.telemetry.ledger_prompt_tokens_baseline;
   }
 
-  private bumpOutputModeTelemetry(mode: DispatchOutputMode | 'unsupported'): void {
-    this.telemetry.output_mode_counts[mode] += 1;
-  }
-
   private bumpSchemaErrorTelemetry(errorCode: DispatchContractErrorCode): void {
     this.telemetry.schema_error_counts[errorCode] += 1;
   }
@@ -1223,16 +1219,23 @@ class DispatchRuntimeManager {
   private async assertRunBinding(runId: string, taskId: string): Promise<StateSnapshot> {
     const snapshot = await this.snapshotStore.get(runId);
     if (!snapshot) {
-      throw new Error(`run_not_initialized: runId ${runId} is not initialized; call init_run first`);
+      throw new DispatchRuntimeError(
+        'run_not_initialized',
+        `run_not_initialized: runId ${runId} is not initialized; call init_run first`
+      );
     }
 
     const boundTaskId = snapshot.facts.find(fact => fact.k === 'task_id')?.v;
     if (!boundTaskId) {
-      throw new Error(`run_not_initialized: runId ${runId} is missing task binding; call init_run first`);
+      throw new DispatchRuntimeError(
+        'run_not_initialized',
+        `run_not_initialized: runId ${runId} is missing task binding; call init_run first`
+      );
     }
 
     if (boundTaskId !== taskId) {
-      throw new Error(
+      throw new DispatchRuntimeError(
+        'run_task_mismatch',
         `run_task_mismatch: runId ${runId} is bound to task_id ${boundTaskId} but received taskId ${taskId}`
       );
     }
@@ -1260,53 +1263,28 @@ class DispatchRuntimeManager {
   }
 
   private registerSchemas(): void {
-    this.schemaRegistry.register(
-      'dispatch.result.implementer',
-      DISPATCH_IMPLEMENTER_SCHEMA_ID,
-      DISPATCH_CONTRACT_SCHEMA_VERSION,
-      isImplementerResult
-    );
-    this.schemaRegistry.register(
-      'dispatch.result.reviewer',
-      DISPATCH_REVIEWER_SCHEMA_ID,
-      DISPATCH_CONTRACT_SCHEMA_VERSION,
-      isReviewerResult
-    );
+    registerDispatchContractSchemas(this.schemaRegistry);
   }
 }
 
 const dispatchRuntimeManager = new DispatchRuntimeManager();
 
-function errorCodeFromMessage(
-  message: string
-): 'run_not_initialized'
-  | 'run_task_mismatch'
-  | 'dispatch_prompt_overflow_terminal'
+type DispatchToolErrorCode =
+  | DispatchRuntimeErrorCode
+  | DispatchContractErrorCode
   | 'progress_ledger_missing_tasks'
   | 'progress_ledger_parse_failed'
-  | 'progress_ledger_incomplete'
-  | 'mode_unsupported'
-  | null {
-  if (message.startsWith('run_not_initialized:')) {
-    return 'run_not_initialized';
+  | 'progress_ledger_incomplete';
+
+function toDispatchToolErrorCode(error: unknown): DispatchToolErrorCode | null {
+  if (error instanceof DispatchRuntimeError) {
+    return error.code;
   }
-  if (message.startsWith('run_task_mismatch:')) {
-    return 'run_task_mismatch';
+  if (error instanceof DispatchContractError) {
+    return error.code;
   }
-  if (message.startsWith('dispatch_prompt_overflow_terminal:')) {
-    return 'dispatch_prompt_overflow_terminal';
-  }
-  if (message.startsWith('progress_ledger_missing_tasks:')) {
-    return 'progress_ledger_missing_tasks';
-  }
-  if (message.startsWith('progress_ledger_parse_failed:')) {
-    return 'progress_ledger_parse_failed';
-  }
-  if (message.startsWith('progress_ledger_incomplete:')) {
-    return 'progress_ledger_incomplete';
-  }
-  if (message.startsWith('mode_unsupported:')) {
-    return 'mode_unsupported';
+  if (error instanceof DispatchLedgerError) {
+    return error.code;
   }
   return null;
 }
@@ -1412,7 +1390,7 @@ export async function dispatchRuntimeHandler(
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const errorCode = errorCodeFromMessage(message);
+      const errorCode = toDispatchToolErrorCode(error);
       return {
         success: false,
         message,
@@ -1537,7 +1515,7 @@ export async function dispatchRuntimeHandler(
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const errorCode = errorCodeFromMessage(message);
+      const errorCode = toDispatchToolErrorCode(error);
       return {
         success: false,
         message,
@@ -1628,7 +1606,7 @@ export async function dispatchRuntimeHandler(
       };
     }
 
-    const errorCode = errorCodeFromMessage(message);
+    const errorCode = toDispatchToolErrorCode(error);
     return {
       success: false,
       message,

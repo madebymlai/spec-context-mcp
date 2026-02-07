@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   DISPATCH_CONTRACT_SCHEMA_VERSION,
-  DISPATCH_IMPLEMENTER_SCHEMA,
   DISPATCH_IMPLEMENTER_SCHEMA_ID,
-  DISPATCH_REVIEWER_SCHEMA,
   DISPATCH_REVIEWER_SCHEMA_ID,
   isImplementerResult,
   isReviewerResult,
+  registerDispatchContractSchemas,
 } from './dispatch-contract-schemas.js';
 
 describe('dispatch-contract-schemas', () => {
@@ -14,18 +13,6 @@ describe('dispatch-contract-schemas', () => {
     expect(DISPATCH_CONTRACT_SCHEMA_VERSION).toBe('v1');
     expect(DISPATCH_IMPLEMENTER_SCHEMA_ID).toBe('dispatch_result_implementer');
     expect(DISPATCH_REVIEWER_SCHEMA_ID).toBe('dispatch_result_reviewer');
-  });
-
-  it('defines strict object schemas for implementer and reviewer', () => {
-    expect(DISPATCH_IMPLEMENTER_SCHEMA.type).toBe('object');
-    expect(DISPATCH_IMPLEMENTER_SCHEMA.additionalProperties).toBe(false);
-    expect(DISPATCH_IMPLEMENTER_SCHEMA.required).toContain('task_id');
-    expect(DISPATCH_IMPLEMENTER_SCHEMA.required).toContain('tests');
-
-    expect(DISPATCH_REVIEWER_SCHEMA.type).toBe('object');
-    expect(DISPATCH_REVIEWER_SCHEMA.additionalProperties).toBe(false);
-    expect(DISPATCH_REVIEWER_SCHEMA.required).toContain('assessment');
-    expect(DISPATCH_REVIEWER_SCHEMA.required).toContain('issues');
   });
 
   it('validates implementer payloads', () => {
@@ -68,5 +55,28 @@ describe('dispatch-contract-schemas', () => {
     expect(isReviewerResult(valid)).toBe(true);
     expect(isReviewerResult(invalid)).toBe(false);
   });
-});
 
+  it('registers both canonical schemas through registry abstraction', () => {
+    const calls: Array<{ type: string; schemaId: string; schemaVersion: string }> = [];
+    const registry = {
+      register<T>(type: string, schemaId: string, schemaVersion: string, _validate: (payload: unknown) => payload is T) {
+        calls.push({ type, schemaId, schemaVersion });
+      },
+    };
+
+    registerDispatchContractSchemas(registry);
+
+    expect(calls).toEqual([
+      {
+        type: 'dispatch.result.implementer',
+        schemaId: DISPATCH_IMPLEMENTER_SCHEMA_ID,
+        schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
+      },
+      {
+        type: 'dispatch.result.reviewer',
+        schemaId: DISPATCH_REVIEWER_SCHEMA_ID,
+        schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
+      },
+    ]);
+  });
+});

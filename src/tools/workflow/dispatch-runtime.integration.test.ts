@@ -131,7 +131,7 @@ END_DISPATCH_RESULT`,
         maxOutputTokens: 500,
       });
       expect(compileReviewer.success).toBe(true);
-      expect(compileReviewer.data?.deltaPacket?.previous_implementer_summary).toBe('Parser implemented');
+      expect(compileReviewer.data?.deltaPacket?.ledger_summary).toBe('Parser implemented');
       expect(compileReviewer.data?.guideMode).toBe('full');
       expect(compileReviewer.data?.prompt).toContain('"mode":"full"');
 
@@ -277,7 +277,7 @@ END_DISPATCH_RESULT`,
     }
   });
 
-  it('fails compile_prompt with mode_unsupported for unknown provider', async () => {
+  it('compiles prompt with unknown custom provider command', async () => {
     const projectPath = await createTempProject();
     try {
       process.env.SPEC_CONTEXT_IMPLEMENTER = 'custom-provider --json';
@@ -300,9 +300,8 @@ END_DISPATCH_RESULT`,
         maxOutputTokens: 500,
       });
 
-      expect(compile.success).toBe(false);
-      expect(compile.data?.errorCode).toBe('mode_unsupported');
-      expect(compile.message).toContain('mode_unsupported');
+      expect(compile.success).toBe(true);
+      expect(compile.data?.prompt).toContain(`Task ID: ${taskId}`);
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }
