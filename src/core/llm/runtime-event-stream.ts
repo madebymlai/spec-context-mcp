@@ -4,13 +4,33 @@ import { homedir } from 'os';
 import type { RuntimeEventEnvelope, RuntimeEventDraft } from './types.js';
 import type { RuntimeEventStorage } from './runtime-event-storage.js';
 
-export interface RuntimeEventStreamOptions {
-    persistPath?: string;
+export type RuntimeEventStreamPersistence =
+    | {
+        kind: 'enabled';
+        storage: RuntimeEventStorage;
+        path?: string;
+    }
+    | {
+        kind: 'disabled';
+    };
+
+interface RuntimeEventStreamBaseOptions {
     maxEventsPerPartition?: number;
     maxIdempotencyEntries?: number;
+}
+
+interface RuntimeEventStreamStructuredPersistenceOptions {
+    persistence: RuntimeEventStreamPersistence;
+}
+
+interface RuntimeEventStreamLegacyPersistenceOptions {
+    persistPath?: string;
     disablePersistence?: boolean;
     storage?: RuntimeEventStorage;
 }
+
+export type RuntimeEventStreamOptions = RuntimeEventStreamBaseOptions
+    & (RuntimeEventStreamStructuredPersistenceOptions | RuntimeEventStreamLegacyPersistenceOptions);
 
 const DEFAULT_MAX_EVENTS_PER_PARTITION = 2000;
 const DEFAULT_MAX_IDEMPOTENCY_ENTRIES = 10000;
@@ -32,11 +52,9 @@ export class RuntimeEventStream {
     constructor(options: RuntimeEventStreamOptions = {}) {
         this.maxEventsPerPartition = options.maxEventsPerPartition ?? DEFAULT_MAX_EVENTS_PER_PARTITION;
         this.maxIdempotencyEntries = options.maxIdempotencyEntries ?? DEFAULT_MAX_IDEMPOTENCY_ENTRIES;
-        this.persistPath = options.disablePersistence ? null : (options.persistPath ?? DEFAULT_PERSIST_PATH);
-        this.storage = this.persistPath ? (options.storage ?? null) : null;
-        if (this.persistPath && !this.storage) {
-            throw new Error('RuntimeEventStream requires a storage implementation when persistence is enabled');
-        }
+        const persistenceConfig = resolvePersistence(options);
+        this.persistPath = persistenceConfig.persistPath;
+        this.storage = persistenceConfig.storage;
         this.loadPersistedEvents();
     }
 
@@ -202,4 +220,40 @@ export class RuntimeEventStream {
         }
         return event;
     }
+}
+
+function resolvePersistence(options: RuntimeEventStreamOptions): { persistPath: string | null; storage: RuntimeEventStorage | null } {
+    if ('persistence' in options) {
+        if (
+            'persistPath' in options
+            || 'disablePersistence' in options
+            || 'storage' in options
+        ) {
+            throw new Error('RuntimeEventStreamOptions cannot mix persistence with legacy persistence fields');
+        }
+        if (options.persistence.kind === 'disabled') {
+            return { persistPath: null, storage: null };
+        }
+        return {
+            persistPath: options.persistence.path ?? DEFAULT_PERSIST_PATH,
+            storage: options.persistence.storage,
+        };
+    }
+
+    const { disablePersistence, persistPath, storage } = options;
+    if (disablePersistence === true) {
+        if (persistPath !== undefined || storage !== undefined) {
+            throw new Error('RuntimeEventStreamOptions with disablePersistence=true cannot include persistPath or storage');
+        }
+        return { persistPath: null, storage: null };
+    }
+
+    if (!storage) {
+        throw new Error('RuntimeEventStream requires a storage implementation when persistence is enabled');
+    }
+
+    return {
+        persistPath: persistPath ?? DEFAULT_PERSIST_PATH,
+        storage,
+    };
 }

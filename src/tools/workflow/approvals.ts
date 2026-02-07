@@ -5,7 +5,6 @@ import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.j
 import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 import { readFile } from 'fs/promises';
 import { validateTasksMarkdown, formatValidationErrors } from '../../core/workflow/task-validator.js';
-import { nodeApprovalStoreFactory } from './approval-store-node.js';
 import type { ApprovalStoreFactory, ApprovalRecord, ApprovalStatus } from './approval-store.js';
 
 async function tryResolveDashboardProjectId(
@@ -295,8 +294,6 @@ function createApprovalsHandlerWithDependencies(approvalStoreFactory: ApprovalSt
 export function createApprovalsHandler(approvalStoreFactory: ApprovalStoreFactory): ApprovalsHandler {
   return createApprovalsHandlerWithDependencies(approvalStoreFactory);
 }
-
-export const approvalsHandler = createApprovalsHandlerWithDependencies(nodeApprovalStoreFactory);
 
 async function handleRequestApproval(
   args: RequestApprovalArgs,

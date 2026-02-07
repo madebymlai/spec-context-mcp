@@ -756,7 +756,7 @@ Run: npx spec-context-mcp doctor`));
                 capabilities: {},
                 clientInfo: {
                     name: 'spec-context-mcp',
-                    version: getPackageVersion('1.0.0'),
+                    version: getPackageVersion(),
                 },
             });
 
@@ -850,7 +850,7 @@ Run: npx spec-context-mcp doctor`));
             capabilities: {},
             clientInfo: {
                 name: 'spec-context-mcp',
-                version: getPackageVersion('1.0.0'),
+                version: getPackageVersion(),
             },
         });
 

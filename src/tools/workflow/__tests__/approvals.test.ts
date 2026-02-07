@@ -7,20 +7,13 @@ const mocks = vi.hoisted(() => ({
   approvalStorageStop: vi.fn(),
   approvalStorageGetAllPending: vi.fn(async () => []),
   approvalStorageCreate: vi.fn(async () => 'approval-123'),
+  approvalStorageGetApproval: vi.fn(async () => null),
+  approvalStorageDeleteApproval: vi.fn(async () => false),
 }));
 
 vi.mock('../../../core/workflow/path-utils.js', () => ({
   validateProjectPath: mocks.validateProjectPath,
   PathUtils: { translatePath: mocks.translatePath },
-}));
-
-vi.mock('../../../storage/approval-storage.js', () => ({
-  ApprovalStorage: class {
-    start = mocks.approvalStorageStart;
-    stop = mocks.approvalStorageStop;
-    getAllPendingApprovals = mocks.approvalStorageGetAllPending;
-    createApproval = mocks.approvalStorageCreate;
-  }
 }));
 
 vi.mock('fs/promises', () => ({
@@ -32,7 +25,20 @@ vi.mock('../../../core/workflow/task-validator.js', () => ({
   formatValidationErrors: vi.fn(() => []),
 }));
 
-import { approvalsHandler } from '../approvals.js';
+import { createApprovalsHandler } from '../approvals.js';
+
+const approvalStoreFactory = {
+  create: vi.fn(() => ({
+    start: mocks.approvalStorageStart,
+    stop: mocks.approvalStorageStop,
+    getAllPendingApprovals: mocks.approvalStorageGetAllPending,
+    createApproval: mocks.approvalStorageCreate,
+    getApproval: mocks.approvalStorageGetApproval,
+    deleteApproval: mocks.approvalStorageDeleteApproval,
+  })),
+};
+
+const approvalsHandler = createApprovalsHandler(approvalStoreFactory as any);
 
 describe('approvalsHandler', () => {
   it('returns validation error when request fields are missing', async () => {

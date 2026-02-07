@@ -18,6 +18,37 @@ export interface OpenRouterChatConfig {
     telemetryMeter?: IRuntimeTelemetryMeter;
 }
 
+type ProviderChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+
+type ChatMessageSerializer = (message: ChatMessage) => ProviderChatMessage;
+
+const CHAT_MESSAGE_SERIALIZERS: Record<ChatMessage['role'], ChatMessageSerializer> = {
+    system: (message) => ({
+        role: 'system',
+        content: message.content,
+        name: message.name,
+    }),
+    user: (message) => ({
+        role: 'user',
+        content: message.content,
+        name: message.name,
+    }),
+    assistant: (message) => ({
+        role: 'assistant',
+        content: message.content,
+        name: message.name,
+    }),
+    tool: (message) => ({
+        role: 'tool',
+        content: message.content,
+        tool_call_id: message.toolCallId ?? 'tool',
+    }),
+};
+
+function serializeProviderChatMessage(message: ChatMessage): ProviderChatMessage {
+    return CHAT_MESSAGE_SERIALIZERS[message.role](message);
+}
+
 /**
  * OpenRouter-based chat provider using the OpenAI SDK.
  * Supports multiple models via OpenRouter's unified API.
@@ -203,21 +234,7 @@ export class OpenRouterChat implements ChatProvider {
                 prompt_cache_retention?: '24h';
             } = {
                 model: request.model,
-                messages: request.messages.map(m => {
-                    if (m.role === 'tool') {
-                        return {
-                            role: 'tool',
-                            content: m.content,
-                            tool_call_id: m.toolCallId ?? 'tool',
-                        };
-                    }
-
-                    return {
-                        role: m.role,
-                        content: m.content,
-                        name: m.name,
-                    };
-                }),
+                messages: request.messages.map(serializeProviderChatMessage),
                 temperature: options?.temperature ?? 0.7,
                 max_tokens: options?.maxTokens ?? 4096,
             };

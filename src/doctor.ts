@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { existsSync } from 'fs';
 import { platform } from 'os';
-import { resolveDashboardUrl } from './core/workflow/dashboard-url.js';
+import { resolveDashboardUrlForNode } from './core/workflow/node-dashboard-url.js';
 import { DEFAULT_DASHBOARD_URL } from './core/workflow/constants.js';
 
 interface CommandResult {
@@ -421,7 +421,7 @@ export async function runDoctor(): Promise<number> {
     });
   }
 
-  const dashboardUrl = await resolveDashboardUrl({ defaultUrl: DEFAULT_DASHBOARD_URL });
+  const dashboardUrl = await resolveDashboardUrlForNode({ defaultUrl: DEFAULT_DASHBOARD_URL });
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2000);

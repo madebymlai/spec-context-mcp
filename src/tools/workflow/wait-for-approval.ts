@@ -1,7 +1,8 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.js';
-import { resolveDashboardUrl, buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
+import { resolveDashboardUrlForNode } from '../../core/workflow/node-dashboard-url.js';
+import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 
 type ApprovalResolutionStatus = 'approved' | 'rejected' | 'needs-revision';
 type AutoDeleteMode = 'enabled' | 'disabled';
@@ -206,7 +207,7 @@ export async function waitForApprovalHandler(
     const translatedPath = PathUtils.translatePath(validatedProjectPath);
 
     // Get dashboard URL from context
-    const dashboardUrl = context.dashboardUrl || await resolveDashboardUrl();
+    const dashboardUrl = context.dashboardUrl || await resolveDashboardUrlForNode();
 
     // We need to find the projectId for this project path
     // First, get the project list from the dashboard

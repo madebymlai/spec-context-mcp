@@ -34,20 +34,16 @@ export class InMemorySessionFactStore implements ISessionFactStore {
   constructor(private readonly maxValidFacts = DEFAULT_MAX_VALID_FACTS) {}
 
   add(facts: SessionFact[]): void {
-    try {
-      for (const fact of facts) {
-        if (!isSessionFact(fact)) {
-          continue;
-        }
-        this.invalidateInternal(fact.subject, fact.relation, new Date());
-        this.facts.set(fact.id, fact);
-        this.addIndex(fact.subject, fact.id);
+    for (const fact of facts) {
+      if (!isSessionFact(fact)) {
+        continue;
       }
-      if (this.countInternal() > this.maxValidFacts) {
-        this.compact(this.maxValidFacts);
-      }
-    } catch (error) {
-      console.warn('[session-fact-store] add failed', error);
+      this.invalidateInternal(fact.subject, fact.relation, new Date());
+      this.facts.set(fact.id, fact);
+      this.addIndex(fact.subject, fact.id);
+    }
+    if (this.countInternal() > this.maxValidFacts) {
+      this.compact(this.maxValidFacts);
     }
   }
 

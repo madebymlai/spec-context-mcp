@@ -1,4 +1,3 @@
-import { DashboardSessionManager } from './dashboard-session.js';
 import { DEFAULT_DASHBOARD_URL } from './constants.js';
 
 export interface DashboardSessionReader {
@@ -10,23 +9,23 @@ export interface ResolveDashboardUrlOptions {
   sessionReader?: DashboardSessionReader;
 }
 
-const defaultDashboardSessionReader: DashboardSessionReader = new DashboardSessionManager();
-
 export async function resolveDashboardUrl(
   options: ResolveDashboardUrlOptions = {}
 ): Promise<string> {
-  const defaultUrl = options.defaultUrl || DEFAULT_DASHBOARD_URL;
+  const defaultUrl = options.defaultUrl ?? DEFAULT_DASHBOARD_URL;
   const envUrl = (process.env.DASHBOARD_URL || '').trim();
-  const sessionReader = options.sessionReader || defaultDashboardSessionReader;
+  const sessionReader = options.sessionReader;
 
   // Treat a non-default env URL as an explicit override.
   if (envUrl && envUrl !== defaultUrl) {
     return envUrl;
   }
 
-  const session = await sessionReader.getDashboardSession();
-  if (session?.url) {
-    return session.url;
+  if (sessionReader) {
+    const session = await sessionReader.getDashboardSession();
+    if (session?.url) {
+      return session.url;
+    }
   }
 
   if (envUrl) {
@@ -41,7 +40,7 @@ export async function resolveDashboardUrl(
  * Example: http://localhost:5000/#/approvals?id=abc&projectId=xyz
  */
 export function buildApprovalDeeplink(dashboardUrl: string, approvalId: string, projectId?: string): string {
-  const base = (dashboardUrl || '').replace(/\/+$/, '');
+  const base = dashboardUrl.replace(/\/+$/, '');
   const params = new URLSearchParams({ id: approvalId });
   if (projectId) {
     params.set('projectId', projectId);

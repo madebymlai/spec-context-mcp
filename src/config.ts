@@ -33,7 +33,7 @@ export function validateConfig(): void {
 export function createConfig(): SpecContextConfig {
     return {
         name: 'spec-context-mcp',
-        version: getPackageVersion('1.0.0'),
+        version: getPackageVersion(),
         dashboardUrl: process.env.DASHBOARD_URL || DEFAULT_DASHBOARD_URL,
         // ChunkHound settings
         chunkhoundPython: process.env.CHUNKHOUND_PYTHON || 'python3',

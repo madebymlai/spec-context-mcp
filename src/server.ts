@@ -14,7 +14,7 @@ import { getTools, handleToolCall } from './tools/index.js';
 import { processToolCall, isToolVisible, getVisibilityTier, ensureTierAtLeast } from './tools/registry.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
 import { initChunkHoundBridge, resetChunkHoundBridge } from './bridge/chunkhound-bridge.js';
-import { resolveDashboardUrl } from './core/workflow/dashboard-url.js';
+import { resolveDashboardUrlForNode } from './core/workflow/node-dashboard-url.js';
 import { DEFAULT_DASHBOARD_URL } from './core/workflow/constants.js';
 import { toMCPResponse } from './workflow-types.js';
 
@@ -115,7 +115,7 @@ export class SpecContextServer {
         // Handle prompt requests
         this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
             const { name, arguments: args } = request.params;
-            const dashboardUrl = await resolveDashboardUrl({
+            const dashboardUrl = await resolveDashboardUrlForNode({
                 defaultUrl: DEFAULT_DASHBOARD_URL,
             });
             const context = {
@@ -168,7 +168,7 @@ export class SpecContextServer {
         const projectPath = process.cwd();
 
         try {
-            const dashboardUrl = await resolveDashboardUrl({
+            const dashboardUrl = await resolveDashboardUrlForNode({
                 defaultUrl: DEFAULT_DASHBOARD_URL,
             });
             const response = await fetch(`${dashboardUrl}/api/projects/add`, {

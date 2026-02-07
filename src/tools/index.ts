@@ -1,6 +1,6 @@
 import type { ToolContext as WorkflowToolContext, ToolResponse } from '../workflow-types.js';
 import { getChunkHoundBridge, SearchArgs, CodeResearchArgs } from '../bridge/chunkhound-bridge.js';
-import { resolveDashboardUrl } from '../core/workflow/dashboard-url.js';
+import { resolveDashboardUrlForNode } from '../core/workflow/node-dashboard-url.js';
 import { filterVisibleTools } from './registry.js';
 import { TOOL_CATALOG_ORDER, type ToolName } from './catalog.js';
 import { mkdir, readdir, rm, stat, writeFile } from 'fs/promises';
@@ -23,8 +23,9 @@ import {
 } from './workflow/spec-status.js';
 import {
     approvalsTool,
-    approvalsHandler,
+    createApprovalsHandler,
 } from './workflow/approvals.js';
+import { nodeApprovalStoreFactory } from './workflow/approval-store-node.js';
 import {
     waitForApprovalTool,
     waitForApprovalHandler,
@@ -319,6 +320,8 @@ const codeResearchHandler: ToolHandler = async (args, context) => {
     return buildSuccess('Code research completed', result);
 };
 
+const approvalsHandler = createApprovalsHandler(nodeApprovalStoreFactory);
+
 const TOOL_REGISTRY: Record<ToolName, RegisteredTool> = {
     search: {
         tool: searchTool,
@@ -393,7 +396,7 @@ export async function handleToolCall(
 ): Promise<unknown> {
     // Create workflow context if not provided
     const projectPath = (args.projectPath as string) || workflowContext?.projectPath || process.cwd();
-    const dashboardUrl = workflowContext?.dashboardUrl || await resolveDashboardUrl();
+    const dashboardUrl = workflowContext?.dashboardUrl || await resolveDashboardUrlForNode();
     const fileContentCache = workflowContext?.fileContentCache ?? getSharedFileContentCache();
     const wfCtx: WorkflowToolContext = {
         ...workflowContext,
