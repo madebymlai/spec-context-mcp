@@ -1,17 +1,4 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { promises as fs } from 'fs';
-import { resolve } from 'path';
-import { randomUUID } from 'crypto';
-import {
-  RuntimeEventStream,
-  NodeRuntimeEventStorage,
-  RuntimeSnapshotStore,
-  SchemaRegistry,
-  StateProjector,
-  InMemoryEventBusAdapter,
-  PromptTemplateRegistry,
-  PromptPrefixCompiler,
-} from '../../core/llm/index.js';
 import type {
   RuntimeEventDraft,
   RuntimeEventEnvelope,
@@ -42,20 +29,15 @@ import {
   type ImplementerResult,
   type ReviewerResult,
 } from './dispatch-contract-schemas.js';
-import { getSharedFileContentCacheTelemetry } from '../../core/cache/shared-file-content-cache.js';
 import {
-  HeuristicComplexityClassifier,
   type ComplexityLevel,
-  RoutingTable,
+  type IRoutingTable,
   type ITaskComplexityClassifier,
 } from '../../core/routing/index.js';
 import {
   IFactExtractor,
   IFactRetriever,
   ISessionFactStore,
-  InMemorySessionFactStore,
-  KeywordFactRetriever,
-  RuleBasedFactExtractor,
   formatSessionFacts,
 } from '../../core/session/index.js';
 
@@ -79,6 +61,11 @@ const DISPATCH_CLASSIFICATION_FACT_KEYS = {
   classifierId: 'classification_classifier_id',
 } as const;
 
+export const DISPATCH_RESULT_MARKERS = {
+  begin: 'BEGIN_DISPATCH_RESULT',
+  end: 'END_DISPATCH_RESULT',
+} as const;
+
 function getFactValue(snapshot: StateSnapshot, key: string): string | undefined {
   return snapshot.facts.find(fact => fact.k === key)?.v;
 }
@@ -87,8 +74,8 @@ function normalizeDispatchComplexity(value: string | undefined): ComplexityLevel
   return value === 'simple' ? 'simple' : 'complex';
 }
 
-const DISPATCH_RESULT_BEGIN = 'BEGIN_DISPATCH_RESULT';
-const DISPATCH_RESULT_END = 'END_DISPATCH_RESULT';
+const DISPATCH_RESULT_BEGIN = DISPATCH_RESULT_MARKERS.begin;
+const DISPATCH_RESULT_END = DISPATCH_RESULT_MARKERS.end;
 
 type DispatchContractErrorCode =
   | 'marker_missing'
@@ -217,7 +204,7 @@ const STAGE_C_OBJECTIVE_CHARS = 420;
 
 type DispatchCompactionStage = 'none' | 'stage_a_prune' | 'stage_b_prompt' | 'stage_c_fallback';
 
-interface DispatchCompactionPolicy {
+export interface DispatchCompactionPolicy {
   auto: boolean;
   prune: boolean;
   maxInputTokensImplementer: number;
@@ -230,7 +217,7 @@ interface DispatchCompactionTrace {
   promptTokens: number;
 }
 
-interface CompiledDispatchPrompt {
+export interface CompiledDispatchPrompt {
   prompt: string;
   stablePrefixHash: string;
   fullPromptHash: string;
@@ -241,7 +228,7 @@ interface CompiledDispatchPrompt {
   promptTokens: number;
 }
 
-function boolFromEnv(raw: string | undefined, defaultValue: boolean): boolean {
+function boolFromEnv(raw: string | undefined, defaultValue: boolean, envVarName: string): boolean {
   if (!raw) {
     return defaultValue;
   }
@@ -252,16 +239,16 @@ function boolFromEnv(raw: string | undefined, defaultValue: boolean): boolean {
   if (['0', 'false', 'no', 'off'].includes(normalized)) {
     return false;
   }
-  return defaultValue;
+  throw new Error(`${envVarName} must be a boolean-like value (1/0/true/false/yes/no/on/off)`);
 }
 
-function intFromEnv(raw: string | undefined, defaultValue: number): number {
+function intFromEnv(raw: string | undefined, defaultValue: number, envVarName: string): number {
   if (!raw) {
     return defaultValue;
   }
   const value = Number(raw);
   if (!Number.isFinite(value) || value <= 0) {
-    return defaultValue;
+    throw new Error(`${envVarName} must be a positive number`);
   }
   return Math.floor(value);
 }
@@ -418,23 +405,34 @@ function pruneDeltaPacket(deltaPacket: Record<string, unknown>): Record<string, 
   return compacted;
 }
 
-function resolveDispatchCompactionPolicy(): DispatchCompactionPolicy {
+export function resolveDispatchCompactionPolicyFromEnv(): DispatchCompactionPolicy {
   return {
-    auto: boolFromEnv(process.env.SPEC_CONTEXT_DISPATCH_COMPACTION_AUTO, true),
-    prune: boolFromEnv(process.env.SPEC_CONTEXT_DISPATCH_COMPACTION_PRUNE, true),
+    auto: boolFromEnv(process.env.SPEC_CONTEXT_DISPATCH_COMPACTION_AUTO, true, 'SPEC_CONTEXT_DISPATCH_COMPACTION_AUTO'),
+    prune: boolFromEnv(process.env.SPEC_CONTEXT_DISPATCH_COMPACTION_PRUNE, true, 'SPEC_CONTEXT_DISPATCH_COMPACTION_PRUNE'),
     maxInputTokensImplementer: intFromEnv(
       process.env.SPEC_CONTEXT_DISPATCH_MAX_INPUT_TOKENS_IMPLEMENTER,
-      DEFAULT_MAX_INPUT_TOKENS_IMPLEMENTER
+      DEFAULT_MAX_INPUT_TOKENS_IMPLEMENTER,
+      'SPEC_CONTEXT_DISPATCH_MAX_INPUT_TOKENS_IMPLEMENTER',
     ),
     maxInputTokensReviewer: intFromEnv(
       process.env.SPEC_CONTEXT_DISPATCH_MAX_INPUT_TOKENS_REVIEWER,
-      DEFAULT_MAX_INPUT_TOKENS_REVIEWER
+      DEFAULT_MAX_INPUT_TOKENS_REVIEWER,
+      'SPEC_CONTEXT_DISPATCH_MAX_INPUT_TOKENS_REVIEWER',
     ),
     tokenCharsPerToken: intFromEnv(
       process.env.SPEC_CONTEXT_DISPATCH_TOKEN_CHARS_PER_TOKEN,
-      DEFAULT_TOKEN_CHARS_PER_TOKEN
+      DEFAULT_TOKEN_CHARS_PER_TOKEN,
+      'SPEC_CONTEXT_DISPATCH_TOKEN_CHARS_PER_TOKEN',
     ),
   };
+}
+
+export function resolveDispatchStalledThresholdFromEnv(): number {
+  return intFromEnv(
+    process.env.SPEC_CONTEXT_DISPATCH_STALLED_THRESHOLD,
+    DEFAULT_STALLED_THRESHOLD,
+    'SPEC_CONTEXT_DISPATCH_STALLED_THRESHOLD',
+  );
 }
 
 interface DispatchCoreTelemetry {
@@ -473,33 +471,54 @@ type DispatchTelemetrySnapshot =
   & DispatchLedgerTelemetry
   & DispatchSchemaTelemetry;
 
-type SnapshotStoreUpsertInput = Parameters<RuntimeSnapshotStore['upsert']>[0];
-type StateProjectorApplyInput = Parameters<StateProjector['apply']>[0];
-type StateProjectorApplyOutput = ReturnType<StateProjector['apply']>;
+interface SnapshotStoreUpsertInput {
+  runId: string;
+  goal: string;
+  status: StateSnapshot['status'];
+  facts: StateSnapshotFact[];
+  pendingWrites: StateSnapshot['pending_writes'];
+  tokenBudget: StateSnapshot['token_budget'];
+  appliedOffset: StateSnapshot['applied_offsets'][number];
+}
 
-interface DispatchRuntimeEventStream {
+interface StateProjectorApplyInput {
+  event: RuntimeEventEnvelope;
+  previous: StateSnapshot | null;
+}
+
+interface StateProjectorApplyOutput {
+  runId: string;
+  goal: string;
+  status: StateSnapshot['status'];
+  facts: StateSnapshotFact[];
+  pendingWrites: StateSnapshot['pending_writes'];
+  tokenBudget: StateSnapshot['token_budget'];
+  appliedOffset: StateSnapshot['applied_offsets'][number];
+}
+
+export interface DispatchRuntimeEventStream {
   publish(draft: RuntimeEventDraft): RuntimeEventEnvelope;
 }
 
-interface DispatchRuntimeSnapshotStore {
+export interface DispatchRuntimeSnapshotStore {
   get(runId: string): Promise<StateSnapshot | null>;
   upsert(update: SnapshotStoreUpsertInput): Promise<StateSnapshot>;
 }
 
-interface DispatchRuntimeSchemaRegistry {
+export interface DispatchRuntimeSchemaRegistry {
   register<T>(type: string, schemaId: string, schemaVersion: string, validate: (payload: unknown) => payload is T): void;
   assert(type: string, payload: unknown, schemaVersion?: string): void;
 }
 
-interface DispatchRuntimeStateProjector {
+export interface DispatchRuntimeStateProjector {
   apply(input: StateProjectorApplyInput): StateProjectorApplyOutput;
 }
 
-interface DispatchRuntimeEventBus {
+export interface DispatchRuntimeEventBus {
   publish(event: RuntimeEventEnvelope): Promise<void>;
 }
 
-interface DispatchRuntimePromptCompiler {
+export interface DispatchRuntimePromptCompiler {
   compile(input: {
     runId: string;
     role: DispatchRole;
@@ -514,7 +533,7 @@ interface DispatchRuntimePromptCompiler {
   }): CompiledDispatchPrompt;
 }
 
-interface DispatchRuntimeManagerDependencies {
+export interface DispatchRuntimeManagerDependencies {
   eventStream: DispatchRuntimeEventStream;
   snapshotStore: DispatchRuntimeSnapshotStore;
   schemaRegistry: DispatchRuntimeSchemaRegistry;
@@ -523,153 +542,6 @@ interface DispatchRuntimeManagerDependencies {
   promptCompiler: DispatchRuntimePromptCompiler;
   compactionPolicy: DispatchCompactionPolicy;
   stalledThreshold: number;
-}
-
-function buildDispatchGuideInstruction(input: {
-  role: DispatchRole;
-  guideMode: 'full' | 'compact';
-  runId: string;
-}): string {
-  const guideToolName = input.role === 'implementer' ? 'get-implementer-guide' : 'get-reviewer-guide';
-  if (input.guideMode === 'full') {
-    return `Guide policy: first dispatch for this role in run ${input.runId}. Call ${guideToolName} with {"mode":"full","runId":"${input.runId}"} exactly once before coding/reviewing.`;
-  }
-  return `Guide policy: guide already loaded in this run. Do not reload full guide. Reuse cached rules and call ${guideToolName} with {"mode":"compact","runId":"${input.runId}"} if you need a reminder.`;
-}
-
-function buildDispatchDynamicTail(input: {
-  runId: string;
-  role: DispatchRole;
-  taskPrompt: string;
-  taskId: string;
-  maxOutputTokens: number;
-  deltaPacket: Record<string, unknown>;
-  guideMode: 'full' | 'compact';
-  guideCacheKey: string;
-  sessionContext?: string;
-}): string {
-  const guideInstruction = buildDispatchGuideInstruction({
-    role: input.role,
-    guideMode: input.guideMode,
-    runId: input.runId,
-  });
-  const sections = [
-    `Task ID: ${input.taskId}`,
-    `Max output tokens: ${input.maxOutputTokens}`,
-    `Delta context: ${JSON.stringify(input.deltaPacket)}`,
-    `Guide cache key: ${input.guideCacheKey}`,
-    guideInstruction,
-  ];
-  if (input.sessionContext && input.sessionContext.trim()) {
-    sections.push(input.sessionContext.trim());
-  }
-  sections.push('Task prompt:', input.taskPrompt);
-  return sections.join('\n');
-}
-
-class DispatchPromptCompiler {
-  private readonly registry = new PromptTemplateRegistry();
-  private readonly prefixCompiler = new PromptPrefixCompiler();
-  private readonly version = 'v1';
-
-  constructor() {
-    this.registry.register({
-      templateId: 'dispatch_implementer',
-      version: this.version,
-      segments: [
-        {
-          kind: 'system',
-          stable: true,
-          content: `You are an implementer agent. Output only the strict dispatch contract block:
-${DISPATCH_RESULT_BEGIN}
-{...valid JSON object...}
-${DISPATCH_RESULT_END}`,
-        },
-      ],
-    });
-
-    this.registry.register({
-      templateId: 'dispatch_reviewer',
-      version: this.version,
-      segments: [
-        {
-          kind: 'system',
-          stable: true,
-          content: `You are a reviewer agent. Output only the strict dispatch contract block:
-${DISPATCH_RESULT_BEGIN}
-{...valid JSON object...}
-${DISPATCH_RESULT_END}`,
-        },
-      ],
-    });
-  }
-
-  compile(input: {
-    runId: string;
-    role: DispatchRole;
-    taskPrompt: string;
-    taskId: string;
-    maxOutputTokens: number;
-    deltaPacket: Record<string, unknown>;
-    guideMode: 'full' | 'compact';
-    guideCacheKey: string;
-    sessionContext?: string;
-    tokenCharsPerToken?: number;
-  }): CompiledDispatchPrompt {
-    const templateId = input.role === 'implementer' ? 'dispatch_implementer' : 'dispatch_reviewer';
-    const dynamicTail = buildDispatchDynamicTail(input);
-
-    const compiled = this.registry.compile(templateId, this.version, dynamicTail);
-    const prefixCompile = this.prefixCompiler.compile({
-      model: `${input.role}-dispatch`,
-      messages: [
-        { role: 'system', content: compiled.stablePrefix },
-        { role: 'user', content: dynamicTail },
-      ],
-      jsonMode: true,
-      dynamicTailMessages: 1,
-    });
-
-    return {
-      prompt: compiled.text,
-      stablePrefixHash: prefixCompile.stablePrefixHash,
-      fullPromptHash: prefixCompile.cacheKey,
-      deltaPacket: input.deltaPacket,
-      maxOutputTokens: input.maxOutputTokens,
-      guideMode: input.guideMode,
-      guideCacheKey: input.guideCacheKey,
-      promptTokens: estimateTokensFromChars(
-        compiled.text,
-        input.tokenCharsPerToken ?? DEFAULT_TOKEN_CHARS_PER_TOKEN
-      ),
-    };
-  }
-}
-
-function createDefaultDispatchRuntimeManagerDependencies(): DispatchRuntimeManagerDependencies {
-  return {
-    eventStream: new RuntimeEventStream({ storage: new NodeRuntimeEventStorage() }),
-    snapshotStore: new RuntimeSnapshotStore(),
-    schemaRegistry: new SchemaRegistry(),
-    stateProjector: new StateProjector(),
-    eventBus: new InMemoryEventBusAdapter<RuntimeEventEnvelope>(),
-    promptCompiler: new DispatchPromptCompiler(),
-    compactionPolicy: resolveDispatchCompactionPolicy(),
-    stalledThreshold: intFromEnv(
-      process.env.SPEC_CONTEXT_DISPATCH_STALLED_THRESHOLD,
-      DEFAULT_STALLED_THRESHOLD
-    ),
-  };
-}
-
-function resolveDispatchRuntimeManagerDependencies(
-  overrides?: Partial<DispatchRuntimeManagerDependencies>,
-): DispatchRuntimeManagerDependencies {
-  const defaults = createDefaultDispatchRuntimeManagerDependencies();
-  return {
-    ...defaults,
-    ...overrides,
-  };
 }
 
 export class DispatchRuntimeManager {
@@ -716,21 +588,20 @@ export class DispatchRuntimeManager {
 
   constructor(
     private readonly classifier: ITaskComplexityClassifier,
-    private readonly routingTable: RoutingTable,
+    private readonly routingTable: IRoutingTable,
     private readonly factStore: ISessionFactStore,
     private readonly factExtractor: IFactExtractor,
     private readonly factRetriever: IFactRetriever,
-    dependencies?: Partial<DispatchRuntimeManagerDependencies>,
+    dependencies: DispatchRuntimeManagerDependencies,
   ) {
-    const resolvedDependencies = resolveDispatchRuntimeManagerDependencies(dependencies);
-    this.eventStream = resolvedDependencies.eventStream;
-    this.snapshotStore = resolvedDependencies.snapshotStore;
-    this.schemaRegistry = resolvedDependencies.schemaRegistry;
-    this.stateProjector = resolvedDependencies.stateProjector;
-    this.eventBus = resolvedDependencies.eventBus;
-    this.promptCompiler = resolvedDependencies.promptCompiler;
-    this.compactionPolicy = resolvedDependencies.compactionPolicy;
-    this.stalledThreshold = resolvedDependencies.stalledThreshold;
+    this.eventStream = dependencies.eventStream;
+    this.snapshotStore = dependencies.snapshotStore;
+    this.schemaRegistry = dependencies.schemaRegistry;
+    this.stateProjector = dependencies.stateProjector;
+    this.eventBus = dependencies.eventBus;
+    this.promptCompiler = dependencies.promptCompiler;
+    this.compactionPolicy = dependencies.compactionPolicy;
+    this.stalledThreshold = dependencies.stalledThreshold;
     this.registerSchemas();
   }
 
@@ -1496,11 +1367,12 @@ export class DispatchRuntimeManager {
     registerDispatchContractSchemas(this.schemaRegistry);
   }
 }
-interface DispatchRunIdFactory {
+
+export interface DispatchRunIdFactory {
   create(specName: string, taskId: string): string;
 }
 
-interface DispatchOutputResolver {
+export interface DispatchOutputResolver {
   resolve(args: {
     outputContent: unknown;
     outputFilePath: unknown;
@@ -1508,59 +1380,14 @@ interface DispatchOutputResolver {
   }): Promise<string>;
 }
 
-interface DispatchRuntimeHandlerDependencies {
+export type DispatchFileContentCacheTelemetry = unknown;
+
+export interface DispatchRuntimeHandlerDependencies {
   runtimeManager: DispatchRuntimeManager;
   runIdFactory: DispatchRunIdFactory;
   outputResolver: DispatchOutputResolver;
-  fileContentCacheTelemetry: () => ReturnType<typeof getSharedFileContentCacheTelemetry>;
+  fileContentCacheTelemetry: () => DispatchFileContentCacheTelemetry;
 }
-
-class UuidDispatchRunIdFactory implements DispatchRunIdFactory {
-  create(specName: string, taskId: string): string {
-    return `${specName}:${taskId}:${randomUUID()}`;
-  }
-}
-
-class NodeDispatchOutputResolver implements DispatchOutputResolver {
-  async resolve(args: {
-    outputContent: unknown;
-    outputFilePath: unknown;
-    projectPath: string;
-  }): Promise<string> {
-    const inlineOutput = String(args.outputContent || '').trim();
-    if (inlineOutput) {
-      return inlineOutput;
-    }
-
-    const outputFilePath = String(args.outputFilePath || '').trim();
-    if (!outputFilePath) {
-      return '';
-    }
-
-    const filePath = outputFilePath.startsWith('/')
-      ? outputFilePath
-      : resolve(args.projectPath, outputFilePath);
-    return fs.readFile(filePath, 'utf-8');
-  }
-}
-
-function createDefaultDispatchRuntimeHandlerDependencies(): DispatchRuntimeHandlerDependencies {
-  const factStore = new InMemorySessionFactStore();
-  return {
-    runtimeManager: new DispatchRuntimeManager(
-      new HeuristicComplexityClassifier(),
-      RoutingTable.fromEnvOrDefault(),
-      factStore,
-      new RuleBasedFactExtractor(),
-      new KeywordFactRetriever(factStore),
-    ),
-    runIdFactory: new UuidDispatchRunIdFactory(),
-    outputResolver: new NodeDispatchOutputResolver(),
-    fileContentCacheTelemetry: getSharedFileContentCacheTelemetry,
-  };
-}
-
-const dispatchRuntimeDependencies = createDefaultDispatchRuntimeHandlerDependencies();
 
 type DispatchToolErrorCode =
   | DispatchRuntimeErrorCode
@@ -2106,14 +1933,14 @@ updates runtime events/snapshots, enforces output token budgets, and returns det
   },
 };
 
-export async function dispatchRuntimeHandler(
-  args: Record<string, unknown>,
-  context: ToolContext,
-  dependencies: DispatchRuntimeHandlerDependencies = dispatchRuntimeDependencies,
-): Promise<ToolResponse> {
-  const parsed = await parseDispatchCommand(args, context, dependencies);
-  if (!parsed.ok) {
-    return parsed.response;
-  }
-  return executeDispatchCommand(parsed.command, dependencies);
+export function createDispatchRuntimeHandler(
+  dependencies: DispatchRuntimeHandlerDependencies,
+): (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResponse> {
+  return async (args: Record<string, unknown>, context: ToolContext): Promise<ToolResponse> => {
+    const parsed = await parseDispatchCommand(args, context, dependencies);
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    return executeDispatchCommand(parsed.command, dependencies);
+  };
 }

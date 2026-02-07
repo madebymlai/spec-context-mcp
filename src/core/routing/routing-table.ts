@@ -4,7 +4,7 @@ import {
   type DispatchRole,
   resolveDispatchProvider,
 } from '../../config/discipline.js';
-import type { ComplexityLevel, RoutingTableConfig, RoutingTableEntry } from './types.js';
+import type { ComplexityLevel, IRoutingTable, RoutingTableConfig, RoutingTableEntry } from './types.js';
 
 const IMPLEMENTER_ENV_VAR = 'SPEC_CONTEXT_IMPLEMENTER';
 const REVIEWER_ENV_VAR = 'SPEC_CONTEXT_REVIEWER';
@@ -29,7 +29,7 @@ function defaultProviderFromRoleEnv(envVarName: string): CanonicalProvider | nul
   return provider;
 }
 
-export class RoutingTable {
+export class RoutingTable implements IRoutingTable {
   private readonly config: RoutingTableConfig;
 
   constructor(config: RoutingTableConfig) {

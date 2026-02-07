@@ -15,6 +15,15 @@ export type {
   BudgetRequest,
 } from './types.js';
 export { OpenRouterChat, OpenRouterChatConfig } from './openrouter-chat.js';
+export type {
+  OpenRouterChatDependencies,
+  OpenRouterClient,
+  RuntimeInterceptionLayer,
+  RuntimeHistoryReducer,
+  RuntimePromptPrefixCompiler,
+  ProviderChatRequest,
+} from './openrouter-chat.js';
+export { createOpenRouterChat, createNodeOpenRouterChatDependencies } from './openrouter-chat-node.js';
 export { BudgetGuard, filterBudgetCandidates } from './budget-guard.js';
 export type { IBudgetGuard, BudgetFilterResult } from './budget-guard.js';
 export { HistoryReducer } from './history-reducer.js';

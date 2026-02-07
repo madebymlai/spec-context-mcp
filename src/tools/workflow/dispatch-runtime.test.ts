@@ -25,6 +25,7 @@ const ORIGINAL_REVIEWER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_REVIEWER_MODEL_
 const ORIGINAL_REVIEWER_REASONING_EFFORT = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT;
 let dispatchRuntimeHandler: (args: Record<string, unknown>, context: any) => Promise<any>;
 let DispatchRuntimeManagerClass: typeof import('./dispatch-runtime.js').DispatchRuntimeManager;
+let createNodeDispatchRuntimeManagerDependencies: typeof import('./dispatch-runtime-node.js').createNodeDispatchRuntimeManagerDependencies;
 
 function restoreEnvVar(key: string, value: string | undefined): void {
   if (value === undefined) {
@@ -38,9 +39,13 @@ describe('dispatch-runtime tool', () => {
   beforeAll(async () => {
     process.env.SPEC_CONTEXT_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER || 'claude';
     process.env.SPEC_CONTEXT_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER || 'codex';
-    const module = await import('./dispatch-runtime.js');
-    dispatchRuntimeHandler = module.dispatchRuntimeHandler;
-    DispatchRuntimeManagerClass = module.DispatchRuntimeManager;
+    const [coreModule, nodeModule] = await Promise.all([
+      import('./dispatch-runtime.js'),
+      import('./dispatch-runtime-node.js'),
+    ]);
+    dispatchRuntimeHandler = nodeModule.dispatchRuntimeHandler;
+    DispatchRuntimeManagerClass = coreModule.DispatchRuntimeManager;
+    createNodeDispatchRuntimeManagerDependencies = nodeModule.createNodeDispatchRuntimeManagerDependencies;
 
     await mkdir(SPEC_DIR, { recursive: true });
     await writeFile(
@@ -274,6 +279,7 @@ END_DISPATCH_RESULT`,
       factStore,
       new RuleBasedFactExtractor(),
       new KeywordFactRetriever(factStore),
+      createNodeDispatchRuntimeManagerDependencies(),
     );
 
     await expect(

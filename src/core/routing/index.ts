@@ -4,6 +4,7 @@ export type {
   ClassificationResult,
   ClassificationFeature,
   ITaskComplexityClassifier,
+  IRoutingTable,
   RoutingTableConfig,
   RoutingTableEntry,
 } from './types.js';

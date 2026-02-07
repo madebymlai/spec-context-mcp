@@ -1,13 +1,18 @@
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
 import { randomUUID } from 'crypto';
-import { BudgetGuard } from './budget-guard.js';
+import type { IBudgetGuard } from './budget-guard.js';
 import { BudgetExceededError, InterceptorDroppedError } from './errors.js';
-import { HistoryReducer } from './history-reducer.js';
-import { InterceptionLayer } from './interception-layer.js';
-import { PromptPrefixCompiler } from './prompt-prefix-compiler.js';
-import { ProviderCacheAdapterFactory, type LlmProvider, type ProviderCacheAdapter } from './provider-cache-adapter.js';
-import { createRuntimeTelemetryMeter, type IRuntimeTelemetryMeter } from './telemetry-meter.js';
-import type { ChatProvider, ChatMessage, ChatResponse, ChatOptions, RuntimeEventDraft } from './types.js';
+import type { LlmProvider, ProviderCacheAdapter } from './provider-cache-adapter.js';
+import type { IRuntimeTelemetryMeter } from './telemetry-meter.js';
+import type {
+    ChatProvider,
+    ChatMessage,
+    ChatResponse,
+    ChatOptions,
+    RuntimeEventDraft,
+    ChatInterceptor,
+    ChatInterceptionReport,
+} from './types.js';
 
 export interface OpenRouterChatConfig {
     apiKey: string;
@@ -16,6 +21,81 @@ export interface OpenRouterChatConfig {
     provider?: LlmProvider;
     cacheAdapter?: ProviderCacheAdapter;
     telemetryMeter?: IRuntimeTelemetryMeter;
+}
+
+type RuntimeRequest = {
+    model: string;
+    messages: ChatMessage[];
+    options: ChatOptions;
+};
+
+type InterceptionHook = 'on_ingress' | 'on_send_pre_cache_key' | 'on_send_post_route';
+
+interface InterceptionContext {
+    hook: InterceptionHook;
+    requestId: string;
+    runId: string;
+    stepId: string;
+    ts: string;
+}
+
+interface InterceptionResult {
+    request: RuntimeRequest;
+    reports: ChatInterceptionReport[];
+    dropped: boolean;
+    dropReasonCode: string | null;
+}
+
+export type ProviderChatRequest = OpenAI.ChatCompletionCreateParamsNonStreaming & {
+    reasoning?: { effort: string };
+    prompt_cache_key?: string;
+    prompt_cache_retention?: '24h';
+};
+
+export interface OpenRouterClient {
+    createChatCompletion(
+        requestOptions: ProviderChatRequest,
+        options: { timeout: number },
+    ): Promise<OpenAI.Chat.Completions.ChatCompletion>;
+}
+
+export interface RuntimeInterceptionLayer {
+    run(
+        hook: InterceptionHook,
+        request: RuntimeRequest,
+        interceptors: ChatInterceptor[],
+        context: InterceptionContext,
+    ): Promise<InterceptionResult>;
+}
+
+export interface RuntimeHistoryReducer {
+    reduce(
+        messages: ChatMessage[],
+        policy: NonNullable<NonNullable<ChatOptions['runtime']>['historyReducer']>,
+    ): { messages: ChatMessage[] };
+}
+
+export interface RuntimePromptPrefixCompiler {
+    compile(input: {
+        model: string;
+        messages: ChatMessage[];
+        jsonMode: boolean;
+        dynamicTailMessages?: number;
+    }): {
+        cacheKey: string;
+        stablePrefixHash: string;
+        dynamicTailHash: string;
+    };
+}
+
+export interface OpenRouterChatDependencies {
+    client: OpenRouterClient;
+    interceptionLayer: RuntimeInterceptionLayer;
+    historyReducer: RuntimeHistoryReducer;
+    budgetGuard: IBudgetGuard;
+    promptPrefixCompiler: RuntimePromptPrefixCompiler;
+    cacheAdapter: ProviderCacheAdapter;
+    telemetryMeter: IRuntimeTelemetryMeter;
 }
 
 type ProviderChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
@@ -54,31 +134,28 @@ function serializeProviderChatMessage(message: ChatMessage): ProviderChatMessage
  * Supports multiple models via OpenRouter's unified API.
  */
 export class OpenRouterChat implements ChatProvider {
-    private client: OpenAI;
+    private client: OpenRouterClient;
     private defaultModel: string;
     private timeout: number;
-    private interceptionLayer: InterceptionLayer;
-    private historyReducer: HistoryReducer;
-    private budgetGuard: BudgetGuard;
-    private promptPrefixCompiler: PromptPrefixCompiler;
+    private interceptionLayer: RuntimeInterceptionLayer;
+    private historyReducer: RuntimeHistoryReducer;
+    private budgetGuard: IBudgetGuard;
+    private promptPrefixCompiler: RuntimePromptPrefixCompiler;
     private cacheAdapter: ProviderCacheAdapter;
     private telemetryMeter: IRuntimeTelemetryMeter;
     private provider: LlmProvider;
 
-    constructor(config: OpenRouterChatConfig) {
-        this.client = new OpenAI({
-            apiKey: config.apiKey,
-            baseURL: 'https://openrouter.ai/api/v1',
-        });
+    constructor(config: OpenRouterChatConfig, dependencies: OpenRouterChatDependencies) {
+        this.client = dependencies.client;
         this.defaultModel = config.defaultModel || 'deepseek/deepseek-chat';
         this.timeout = config.timeout || 60000;
-        this.interceptionLayer = new InterceptionLayer();
-        this.historyReducer = new HistoryReducer();
-        this.budgetGuard = new BudgetGuard();
-        this.promptPrefixCompiler = new PromptPrefixCompiler();
+        this.interceptionLayer = dependencies.interceptionLayer;
+        this.historyReducer = dependencies.historyReducer;
+        this.budgetGuard = dependencies.budgetGuard;
+        this.promptPrefixCompiler = dependencies.promptPrefixCompiler;
         this.provider = config.provider ?? 'openrouter';
-        this.cacheAdapter = config.cacheAdapter ?? ProviderCacheAdapterFactory.create(this.provider);
-        this.telemetryMeter = config.telemetryMeter ?? createRuntimeTelemetryMeter();
+        this.cacheAdapter = dependencies.cacheAdapter;
+        this.telemetryMeter = dependencies.telemetryMeter;
     }
 
     async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
@@ -228,11 +305,7 @@ export class OpenRouterChat implements ChatProvider {
                 dynamic_tail_hash: prefixCompile.dynamicTailHash,
             });
 
-            const requestOptions: OpenAI.ChatCompletionCreateParamsNonStreaming & {
-                reasoning?: { effort: string };
-                prompt_cache_key?: string;
-                prompt_cache_retention?: '24h';
-            } = {
+            const requestOptions: ProviderChatRequest = {
                 model: request.model,
                 messages: request.messages.map(serializeProviderChatMessage),
                 temperature: options?.temperature ?? 0.7,
@@ -336,17 +409,11 @@ export class OpenRouterChat implements ChatProvider {
     }
 
     private async executeWithProviderDowngrade(
-        requestOptions: OpenAI.ChatCompletionCreateParamsNonStreaming & {
-            reasoning?: { effort: string };
-            prompt_cache_key?: string;
-            prompt_cache_retention?: '24h';
-        },
+        requestOptions: ProviderChatRequest,
         emitEvent: (type: 'LLM_REQUEST' | 'LLM_RESPONSE' | 'BUDGET_DECISION' | 'INTERCEPTOR_DECISION' | 'STATE_DELTA' | 'ERROR', payload: Record<string, unknown>) => Promise<void>
     ) {
         try {
-            return await this.client.chat.completions.create(requestOptions, {
-                timeout: this.timeout,
-            }) as OpenAI.Chat.Completions.ChatCompletion;
+            return await this.client.createChatCompletion(requestOptions, { timeout: this.timeout });
         } catch (error) {
             const downgraded = this.stripUnsupportedProviderOptions(requestOptions, error);
             if (!downgraded.changed) {
@@ -359,28 +426,18 @@ export class OpenRouterChat implements ChatProvider {
                 reason: downgraded.reason,
             });
 
-            return this.client.chat.completions.create(downgraded.requestOptions, {
-                timeout: this.timeout,
-            }) as Promise<OpenAI.Chat.Completions.ChatCompletion>;
+            return this.client.createChatCompletion(downgraded.requestOptions, { timeout: this.timeout });
         }
     }
 
     private stripUnsupportedProviderOptions(
-        requestOptions: OpenAI.ChatCompletionCreateParamsNonStreaming & {
-            reasoning?: { effort: string };
-            prompt_cache_key?: string;
-            prompt_cache_retention?: '24h';
-        },
+        requestOptions: ProviderChatRequest,
         error: unknown
     ): {
         changed: boolean;
         removedFields: string[];
         reason: string;
-        requestOptions: OpenAI.ChatCompletionCreateParamsNonStreaming & {
-            reasoning?: { effort: string };
-            prompt_cache_key?: string;
-            prompt_cache_retention?: '24h';
-        };
+        requestOptions: ProviderChatRequest;
     } {
         const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
         const unsupportedPatterns = ['unsupported', 'unknown parameter', 'not allowed', 'invalid parameter'];

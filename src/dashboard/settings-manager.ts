@@ -18,17 +18,13 @@ export class SettingsManager {
   private async ensureSettingsDir(): Promise<void> {
     try {
       await fs.mkdir(this.settingsDir, { recursive: true });
-    } catch (error: any) {
-      // Directory might already exist, ignore EEXIST errors
-      if (error.code === 'EEXIST') {
-        return;
-      }
-      // For permission errors, provide helpful guidance
-      if (error.code === 'EACCES' || error.code === 'EPERM') {
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+      if (code === 'EACCES' || code === 'EPERM') {
         console.error(getPermissionErrorHelp('create directory', this.settingsDir));
-        throw error;
       }
-      // Re-throw other errors
       throw error;
     }
   }
@@ -41,28 +37,20 @@ export class SettingsManager {
 
     try {
       const content = await fs.readFile(this.settingsPath, 'utf-8');
-      // Handle empty or whitespace-only files
       const trimmedContent = content.trim();
       if (!trimmedContent) {
-        console.error(`[SettingsManager] Warning: ${this.settingsPath} is empty, using default settings`);
-        const defaultSettings = {
-          automationJobs: [],
-          createdAt: new Date().toISOString(),
-          lastModified: new Date().toISOString()
-        };
-        // Write default settings to file
-        await this.saveSettings(defaultSettings);
-        return defaultSettings;
+        throw new Error(`Settings file is empty: ${this.settingsPath}`);
       }
       const parsed = JSON.parse(trimmedContent) as GlobalSettings;
-      // Ensure backward compatibility: add default automationJobs array if missing (older format)
       if (!Array.isArray(parsed.automationJobs)) {
-        parsed.automationJobs = [];
+        throw new Error(`Invalid settings schema in ${this.settingsPath}: automationJobs must be an array`);
       }
       return parsed;
-    } catch (error: any) {
-      if (error.code === 'ENOENT') {
-        // File doesn't exist yet, create it with default settings
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+      if (code === 'ENOENT') {
         const defaultSettings = {
           automationJobs: [],
           createdAt: new Date().toISOString(),
@@ -72,25 +60,7 @@ export class SettingsManager {
         return defaultSettings;
       }
       if (error instanceof SyntaxError) {
-        // JSON parsing error - file is corrupted or invalid
-        console.error(`[SettingsManager] Error: Failed to parse ${this.settingsPath}: ${error.message}`);
-        console.error(`[SettingsManager] The file may be corrupted. Using default settings.`);
-        // Back up the corrupted file
-        try {
-          const backupPath = `${this.settingsPath}.corrupted.${Date.now()}`;
-          await fs.copyFile(this.settingsPath, backupPath);
-          console.error(`[SettingsManager] Corrupted file backed up to: ${backupPath}`);
-        } catch (backupError) {
-          // Ignore backup errors
-        }
-        const defaultSettings = {
-          automationJobs: [],
-          createdAt: new Date().toISOString(),
-          lastModified: new Date().toISOString()
-        };
-        // Write default settings to file
-        await this.saveSettings(defaultSettings);
-        return defaultSettings;
+        throw new Error(`Invalid settings JSON in ${this.settingsPath}: ${error.message}`);
       }
       throw error;
     }

@@ -35,17 +35,11 @@ export class DashboardSessionManager {
   private async ensureSessionDir(): Promise<void> {
     try {
       await fs.mkdir(this.sessionDir, { recursive: true });
-    } catch (error: any) {
-      // Directory might already exist, ignore EEXIST errors
-      if (error.code === 'EEXIST') {
-        return;
-      }
-      // For permission errors, provide helpful guidance
-      if (error.code === 'EACCES' || error.code === 'EPERM') {
+    } catch (error) {
+      const code = getErrorCode(error);
+      if (code === 'EACCES' || code === 'EPERM') {
         console.error(getPermissionErrorHelp('create directory', this.sessionDir));
-        throw error;
       }
-      // Re-throw other errors
       throw error;
     }
   }
@@ -59,8 +53,8 @@ export class DashboardSessionManager {
     try {
       const content = await fs.readFile(this.sessionPath, 'utf-8');
       return JSON.parse(content) as DashboardSessionEntry;
-    } catch (error: any) {
-      if (error.code === 'ENOENT') {
+    } catch (error) {
+      if (getErrorCode(error) === 'ENOENT') {
         // File doesn't exist yet
         return null;
       }
@@ -122,8 +116,8 @@ export class DashboardSessionManager {
   async unregisterDashboard(): Promise<void> {
     try {
       await fs.unlink(this.sessionPath);
-    } catch (error: any) {
-      if (error.code !== 'ENOENT') {
+    } catch (error) {
+      if (getErrorCode(error) !== 'ENOENT') {
         throw error;
       }
     }

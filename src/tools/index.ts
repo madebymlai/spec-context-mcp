@@ -44,8 +44,8 @@ import {
 } from './workflow/get-brainstorm-guide.js';
 import {
     dispatchRuntimeTool,
-    dispatchRuntimeHandler,
 } from './workflow/dispatch-runtime.js';
+import { dispatchRuntimeHandler } from './workflow/dispatch-runtime-node.js';
 
 export interface Tool {
     name: string;

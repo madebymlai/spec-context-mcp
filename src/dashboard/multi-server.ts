@@ -32,7 +32,7 @@ import {
   SpecDocsContext,
   SteeringContext,
 } from './services/ai-review-service.js';
-import { BudgetExceededError, BudgetGuard, OpenRouterChat, TelemetryMeter } from '../core/llm/index.js';
+import { BudgetExceededError, BudgetGuard, createOpenRouterChat, TelemetryMeter } from '../core/llm/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -357,7 +357,7 @@ export class MultiProjectDashboardServer {
     }
     const telemetryMeter = new TelemetryMeter();
     const service = new AiReviewService(apiKey, {
-      chatProvider: new OpenRouterChat({
+      chatProvider: createOpenRouterChat({
         apiKey,
         timeout: 60000,
         telemetryMeter,

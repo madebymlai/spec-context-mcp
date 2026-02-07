@@ -38,3 +38,7 @@ export interface RoutingTableEntry {
   cli: string;
   role: DispatchRole;
 }
+
+export interface IRoutingTable {
+  resolve(level: ComplexityLevel, role: DispatchRole): RoutingTableEntry;
+}

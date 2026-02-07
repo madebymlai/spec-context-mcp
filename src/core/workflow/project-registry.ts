@@ -43,17 +43,13 @@ export class ProjectRegistry {
   private async ensureRegistryDir(): Promise<void> {
     try {
       await fs.mkdir(this.registryDir, { recursive: true });
-    } catch (error: any) {
-      // Directory might already exist, ignore EEXIST errors
-      if (error.code === 'EEXIST') {
-        return;
-      }
-      // For permission errors, provide helpful guidance
-      if (error.code === 'EACCES' || error.code === 'EPERM') {
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+      if (code === 'EACCES' || code === 'EPERM') {
         console.error(getPermissionErrorHelp('create directory', this.registryDir));
-        throw error;
       }
-      // Re-throw other errors
       throw error;
     }
   }
@@ -65,46 +61,29 @@ export class ProjectRegistry {
   private async readRegistry(): Promise<Map<string, ProjectRegistryEntry>> {
     await this.ensureRegistryDir();
 
-    let fileWasEmpty = false;
     try {
       const content = await fs.readFile(this.registryPath, 'utf-8');
-      // Handle empty or whitespace-only files
       const trimmedContent = content.trim();
       if (!trimmedContent) {
-        console.error(`[ProjectRegistry] Warning: ${this.registryPath} is empty, initializing with empty registry`);
-        fileWasEmpty = true;
-        // Mark that we need to write the file
-        this.needsInitialization = true;
-        return new Map();
+        throw new Error(`Project registry file is empty: ${this.registryPath}`);
       }
       const data = JSON.parse(trimmedContent) as Record<string, ProjectRegistryEntry>;
-      // Ensure backward compatibility: add default empty instances array if missing (older format)
       for (const entry of Object.values(data)) {
         if (!Array.isArray(entry.instances)) {
-          entry.instances = [];
+          throw new Error(`Invalid project registry schema in ${this.registryPath}: instances must be an array`);
         }
       }
       return new Map(Object.entries(data));
-    } catch (error: any) {
-      if (error.code === 'ENOENT') {
-        // File doesn't exist yet, return empty map
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+      if (code === 'ENOENT') {
         this.needsInitialization = true;
         return new Map();
       }
       if (error instanceof SyntaxError) {
-        // JSON parsing error - file is corrupted or invalid
-        console.error(`[ProjectRegistry] Error: Failed to parse ${this.registryPath}: ${error.message}`);
-        console.error(`[ProjectRegistry] The file may be corrupted. Initializing with empty registry.`);
-        // Back up the corrupted file
-        try {
-          const backupPath = `${this.registryPath}.corrupted.${Date.now()}`;
-          await fs.copyFile(this.registryPath, backupPath);
-          console.error(`[ProjectRegistry] Corrupted file backed up to: ${backupPath}`);
-        } catch (backupError) {
-          // Ignore backup errors
-        }
-        this.needsInitialization = true;
-        return new Map();
+        throw new Error(`Invalid project registry JSON in ${this.registryPath}: ${error.message}`);
       }
       throw error;
     }
