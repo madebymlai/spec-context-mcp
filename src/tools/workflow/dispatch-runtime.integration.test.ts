@@ -2,9 +2,10 @@ import { randomUUID } from 'crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { handleToolCall } from '../index.js';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolResponse } from '../../workflow-types.js';
+
+let handleToolCall: typeof import('../index.js').handleToolCall;
 
 async function createTempProject(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'dispatch-runtime-int-'));
@@ -45,12 +46,14 @@ const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
 const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
 
 describe('dispatch-runtime integration (no mocks)', () => {
-  beforeEach(() => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+  beforeAll(async () => {
+    process.env.SPEC_CONTEXT_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER || 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER || 'codex';
+    const module = await import('../index.js');
+    handleToolCall = module.handleToolCall;
   });
 
-  afterEach(() => {
+  afterAll(() => {
     if (ORIGINAL_IMPLEMENTER === undefined) {
       delete process.env.SPEC_CONTEXT_IMPLEMENTER;
     } else {
@@ -62,6 +65,16 @@ describe('dispatch-runtime integration (no mocks)', () => {
     } else {
       process.env.SPEC_CONTEXT_REVIEWER = ORIGINAL_REVIEWER;
     }
+  });
+
+  beforeEach(() => {
+    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+  });
+
+  afterEach(() => {
+    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
   });
 
   it('runs init -> compile -> ingest implementer/reviewer using real output files', async () => {

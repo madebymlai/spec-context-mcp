@@ -2,7 +2,6 @@ import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RoutingTable, type ITaskComplexityClassifier } from '../../core/routing/index.js';
-import { DispatchRuntimeManager, dispatchRuntimeHandler } from './dispatch-runtime.js';
 
 const SPEC_NAME = 'dispatch-task-progress-ledgers';
 const SPEC_DIR = join(process.cwd(), '.spec-context', 'specs', SPEC_NAME);
@@ -20,9 +19,25 @@ const ORIGINAL_REVIEWER_MODEL_SIMPLE = process.env.SPEC_CONTEXT_REVIEWER_MODEL_S
 const ORIGINAL_REVIEWER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
 const ORIGINAL_REVIEWER_REASONING_EFFORT_SIMPLE = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE;
 const ORIGINAL_REVIEWER_REASONING_EFFORT_COMPLEX = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX;
+let dispatchRuntimeHandler: (args: Record<string, unknown>, context: any) => Promise<any>;
+let DispatchRuntimeManagerClass: typeof import('./dispatch-runtime.js').DispatchRuntimeManager;
+
+function restoreEnvVar(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
 
 describe('dispatch-runtime tool', () => {
   beforeAll(async () => {
+    process.env.SPEC_CONTEXT_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER || 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER || 'codex';
+    const module = await import('./dispatch-runtime.js');
+    dispatchRuntimeHandler = module.dispatchRuntimeHandler;
+    DispatchRuntimeManagerClass = module.DispatchRuntimeManager;
+
     await mkdir(SPEC_DIR, { recursive: true });
     await writeFile(
       join(SPEC_DIR, 'tasks.md'),
@@ -79,53 +94,14 @@ describe('dispatch-runtime tool', () => {
   });
 
   afterEach(() => {
-    if (ORIGINAL_IMPLEMENTER === undefined) {
-      delete process.env.SPEC_CONTEXT_IMPLEMENTER;
-    } else {
-      process.env.SPEC_CONTEXT_IMPLEMENTER = ORIGINAL_IMPLEMENTER;
-    }
-
-    if (ORIGINAL_REVIEWER === undefined) {
-      delete process.env.SPEC_CONTEXT_REVIEWER;
-    } else {
-      process.env.SPEC_CONTEXT_REVIEWER = ORIGINAL_REVIEWER;
-    }
-
-    if (ORIGINAL_IMPLEMENTER_MODEL_SIMPLE === undefined) {
-      delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE;
-    } else {
-      process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE = ORIGINAL_IMPLEMENTER_MODEL_SIMPLE;
-    }
-
-    if (ORIGINAL_IMPLEMENTER_MODEL_COMPLEX === undefined) {
-      delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX;
-    } else {
-      process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX = ORIGINAL_IMPLEMENTER_MODEL_COMPLEX;
-    }
-
-    if (ORIGINAL_REVIEWER_MODEL_SIMPLE === undefined) {
-      delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
-    } else {
-      process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE = ORIGINAL_REVIEWER_MODEL_SIMPLE;
-    }
-
-    if (ORIGINAL_REVIEWER_MODEL_COMPLEX === undefined) {
-      delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
-    } else {
-      process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX = ORIGINAL_REVIEWER_MODEL_COMPLEX;
-    }
-
-    if (ORIGINAL_REVIEWER_REASONING_EFFORT_SIMPLE === undefined) {
-      delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE;
-    } else {
-      process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE = ORIGINAL_REVIEWER_REASONING_EFFORT_SIMPLE;
-    }
-
-    if (ORIGINAL_REVIEWER_REASONING_EFFORT_COMPLEX === undefined) {
-      delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX;
-    } else {
-      process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX = ORIGINAL_REVIEWER_REASONING_EFFORT_COMPLEX;
-    }
+    restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER', ORIGINAL_IMPLEMENTER);
+    restoreEnvVar('SPEC_CONTEXT_REVIEWER', ORIGINAL_REVIEWER);
+    restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE', ORIGINAL_IMPLEMENTER_MODEL_SIMPLE);
+    restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX', ORIGINAL_IMPLEMENTER_MODEL_COMPLEX);
+    restoreEnvVar('SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE', ORIGINAL_REVIEWER_MODEL_SIMPLE);
+    restoreEnvVar('SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX', ORIGINAL_REVIEWER_MODEL_COMPLEX);
+    restoreEnvVar('SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE', ORIGINAL_REVIEWER_REASONING_EFFORT_SIMPLE);
+    restoreEnvVar('SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX', ORIGINAL_REVIEWER_REASONING_EFFORT_COMPLEX);
   });
 
   it('returns typed error when init_run cannot find tasks.md', async () => {
@@ -286,7 +262,7 @@ END_DISPATCH_RESULT`,
         throw new Error('classifier failure');
       },
     };
-    const manager = new DispatchRuntimeManager(
+    const manager = new DispatchRuntimeManagerClass(
       classifier,
       new RoutingTable({
         simple: 'codex',

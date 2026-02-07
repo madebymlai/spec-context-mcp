@@ -19,7 +19,7 @@ import type {
 } from '../../core/llm/index.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import type { DispatchRole } from '../../config/discipline.js';
-import { getDispatchCliForComplexity, type DispatchComplexity } from '../../config/dispatch-cli-resolver.js';
+import { getDispatchCliForComplexity } from '../../config/dispatch-cli-resolver.js';
 import {
   type LedgerMode,
   DispatchLedgerError,
@@ -44,6 +44,7 @@ import {
 import { getSharedFileContentCacheTelemetry } from '../../core/cache/shared-file-content-cache.js';
 import {
   HeuristicComplexityClassifier,
+  type ComplexityLevel,
   RoutingTable,
   type ClassificationResult,
   type ITaskComplexityClassifier,
@@ -63,7 +64,7 @@ function getFactValue(snapshot: StateSnapshot, key: string): string | undefined 
   return snapshot.facts.find(fact => fact.k === key)?.v;
 }
 
-function normalizeDispatchComplexity(value: string | undefined): DispatchComplexity {
+function normalizeDispatchComplexity(value: string | undefined): ComplexityLevel {
   return value === 'simple' ? 'simple' : 'complex';
 }
 
@@ -1336,17 +1337,10 @@ export class DispatchRuntimeManager {
     registerDispatchContractSchemas(this.schemaRegistry);
   }
 }
-let dispatchRuntimeManager: DispatchRuntimeManager | null = null;
-
-function getDispatchRuntimeManager(): DispatchRuntimeManager {
-  if (!dispatchRuntimeManager) {
-    dispatchRuntimeManager = new DispatchRuntimeManager(
-      new HeuristicComplexityClassifier(),
-      RoutingTable.fromEnvOrDefault(),
-    );
-  }
-  return dispatchRuntimeManager;
-}
+const dispatchRuntimeManager = new DispatchRuntimeManager(
+  new HeuristicComplexityClassifier(),
+  RoutingTable.fromEnvOrDefault(),
+);
 
 type DispatchToolErrorCode =
   | DispatchRuntimeErrorCode
@@ -1458,7 +1452,7 @@ export async function dispatchRuntimeHandler(
     }
     const runId = String(args.runId || '').trim() || `${specName}:${taskId}:${randomUUID()}`;
     try {
-      const snapshot = await getDispatchRuntimeManager().initRun(runId, specName, taskId, context.projectPath);
+      const snapshot = await dispatchRuntimeManager.initRun(runId, specName, taskId, context.projectPath);
       return {
         success: true,
         message: 'Dispatch runtime initialized',
@@ -1494,15 +1488,7 @@ export async function dispatchRuntimeHandler(
   }
 
   if (action === 'get_snapshot') {
-    let snapshot: StateSnapshot | null;
-    try {
-      snapshot = await getDispatchRuntimeManager().getSnapshot(runId);
-    } catch (error) {
-      return {
-        success: false,
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
+    const snapshot = await dispatchRuntimeManager.getSnapshot(runId);
     if (!snapshot) {
       return {
         success: false,
@@ -1520,20 +1506,11 @@ export async function dispatchRuntimeHandler(
   }
 
   if (action === 'get_telemetry') {
-    let manager: DispatchRuntimeManager;
-    try {
-      manager = getDispatchRuntimeManager();
-    } catch (error) {
-      return {
-        success: false,
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
     return {
       success: true,
       message: 'Dispatch runtime telemetry loaded',
       data: {
-        ...manager.getTelemetrySnapshot(),
+        ...dispatchRuntimeManager.getTelemetrySnapshot(),
         file_content_cache: getSharedFileContentCacheTelemetry(),
       },
     };
@@ -1594,7 +1571,7 @@ export async function dispatchRuntimeHandler(
     }
 
     try {
-      const compiled = await getDispatchRuntimeManager().compilePrompt({
+      const compiled = await dispatchRuntimeManager.compilePrompt({
         runId,
         role,
         taskId,
@@ -1659,8 +1636,7 @@ export async function dispatchRuntimeHandler(
   }
 
   try {
-    const manager = getDispatchRuntimeManager();
-    const result = await manager.ingestOutput({
+    const result = await dispatchRuntimeManager.ingestOutput({
       runId,
       role,
       taskId,
@@ -1678,7 +1654,7 @@ export async function dispatchRuntimeHandler(
         result: result.result,
         snapshot: result.snapshot,
         outputTokens: result.outputTokens,
-        telemetry: manager.getTelemetrySnapshot(),
+        telemetry: dispatchRuntimeManager.getTelemetrySnapshot(),
       },
       nextSteps: [
         `Follow next action: ${result.nextAction}`,
@@ -1688,8 +1664,7 @@ export async function dispatchRuntimeHandler(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (error instanceof DispatchContractError) {
-      const manager = getDispatchRuntimeManager();
-      const snapshot = await manager.recordTerminalContractFailure({
+      const snapshot = await dispatchRuntimeManager.recordTerminalContractFailure({
         runId,
         role,
         taskId,
@@ -1706,7 +1681,7 @@ export async function dispatchRuntimeHandler(
           errorCode: error.code,
           nextAction: 'halt_schema_invalid_terminal',
           snapshot,
-          telemetry: manager.getTelemetrySnapshot(),
+          telemetry: dispatchRuntimeManager.getTelemetrySnapshot(),
         },
       };
     }

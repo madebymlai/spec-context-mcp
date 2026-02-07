@@ -4,8 +4,7 @@ import {
   getDispatchCli,
   resolveDispatchProvider,
 } from './discipline.js';
-
-export type DispatchComplexity = 'simple' | 'complex';
+import type { ComplexityLevel } from '../core/routing/types.js';
 
 type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -22,11 +21,11 @@ const CODEX_REASONING_EFFORT_VALUES = new Set<CodexReasoningEffort>([
   'xhigh',
 ]);
 
-function modelEnvVarFor(role: DispatchRole, complexity: DispatchComplexity): string {
+function modelEnvVarFor(role: DispatchRole, complexity: ComplexityLevel): string {
   return `${ROLE_ENV_VAR[role]}_MODEL_${complexity.toUpperCase()}`;
 }
 
-function reasoningEnvVarFor(role: DispatchRole, complexity: DispatchComplexity): string {
+function reasoningEnvVarFor(role: DispatchRole, complexity: ComplexityLevel): string {
   return `${ROLE_ENV_VAR[role]}_REASONING_EFFORT_${complexity.toUpperCase()}`;
 }
 
@@ -61,7 +60,7 @@ function appendModelFlags(args: {
   return command;
 }
 
-export function getDispatchCliForComplexity(role: DispatchRole, complexity: DispatchComplexity): string | null {
+export function getDispatchCliForComplexity(role: DispatchRole, complexity: ComplexityLevel): string | null {
   const baseCli = getDispatchCli(role);
   if (!baseCli) {
     return null;

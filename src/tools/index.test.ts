@@ -1,13 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { handleToolCall } from './index.js';
 import type { ToolResponse } from '../workflow-types.js';
+
+let handleToolCall: typeof import('./index.js').handleToolCall;
 
 describe('handleToolCall tool-result offloading', () => {
   let testDir: string;
   const originalEnv = process.env;
+
+  beforeAll(async () => {
+    process.env.SPEC_CONTEXT_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER || 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER || 'codex';
+    const module = await import('./index.js');
+    handleToolCall = module.handleToolCall;
+  });
 
   beforeEach(() => {
     process.env = { ...originalEnv };

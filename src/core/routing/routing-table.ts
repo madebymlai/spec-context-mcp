@@ -47,6 +47,8 @@ export class RoutingTable {
     const explicitComplex = complex
       ? parseConfiguredProvider(complex, 'SPEC_CONTEXT_ROUTE_COMPLEX')
       : null;
+    // In role-driven orchestration, reviewer is the lower-cost lane and implementer is the higher-capability lane.
+    // Route defaults inherit that policy unless explicit SPEC_CONTEXT_ROUTE_* overrides are provided.
     const inheritedSimple = defaultProviderFromRoleEnv(REVIEWER_ENV_VAR);
     const inheritedComplex = defaultProviderFromRoleEnv(IMPLEMENTER_ENV_VAR);
 
