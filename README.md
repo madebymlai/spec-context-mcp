@@ -203,7 +203,6 @@ Each phase requires approval before proceeding. Documents are stored in:
 
 ```
 .spec-context/
-├── templates/           # Auto-populated templates
 ├── specs/
 │   └── {spec-name}/
 │       ├── requirements.md
