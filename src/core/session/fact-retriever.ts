@@ -42,49 +42,45 @@ export class KeywordFactRetriever implements IFactRetriever {
   constructor(private readonly store: ISessionFactStore) {}
 
   retrieve(query: FactQuery): SessionFact[] {
-    try {
-      const sourceFacts = query.tags === undefined
-        ? this.store.getValid()
-        : this.store.getValidByTags(query.tags);
-      if (sourceFacts.length === 0) {
-        return [];
-      }
-
-      const filtered = sourceFacts.filter(fact => fact.sourceTaskId !== query.taskId);
-      if (filtered.length === 0) {
-        return [];
-      }
-
-      const queryTokens = tokenize(query.taskDescription);
-      const ranked = filtered
-        .map(fact => ({ fact, score: scoreFact(queryTokens, fact) }))
-        .sort((left, right) => {
-          if (right.score !== left.score) {
-            return right.score - left.score;
-          }
-          return right.fact.validFrom.valueOf() - left.fact.validFrom.valueOf();
-        })
-        .slice(0, Math.max(0, query.maxFacts))
-        .map(item => item.fact);
-
-      if (query.maxTokens <= 0) {
-        return [];
-      }
-
-      const withinBudget: SessionFact[] = [];
-      const tokenCharsPerToken = Math.max(1, query.tokenCharsPerToken ?? DEFAULT_TOKEN_CHARS_PER_TOKEN);
-      let usedTokens = 0;
-      for (const fact of ranked) {
-        const factTokens = estimateFactTokens(fact, tokenCharsPerToken);
-        if (usedTokens + factTokens > query.maxTokens) {
-          break;
-        }
-        withinBudget.push(fact);
-        usedTokens += factTokens;
-      }
-      return withinBudget;
-    } catch {
+    const sourceFacts = query.tags === undefined
+      ? this.store.getValid()
+      : this.store.getValidByTags(query.tags);
+    if (sourceFacts.length === 0) {
       return [];
     }
+
+    const filtered = sourceFacts.filter(fact => fact.sourceTaskId !== query.taskId);
+    if (filtered.length === 0) {
+      return [];
+    }
+
+    const queryTokens = tokenize(query.taskDescription);
+    const ranked = filtered
+      .map(fact => ({ fact, score: scoreFact(queryTokens, fact) }))
+      .sort((left, right) => {
+        if (right.score !== left.score) {
+          return right.score - left.score;
+        }
+        return right.fact.validFrom.valueOf() - left.fact.validFrom.valueOf();
+      })
+      .slice(0, Math.max(0, query.maxFacts))
+      .map(item => item.fact);
+
+    if (query.maxTokens <= 0) {
+      return [];
+    }
+
+    const withinBudget: SessionFact[] = [];
+    const tokenCharsPerToken = Math.max(1, query.tokenCharsPerToken ?? DEFAULT_TOKEN_CHARS_PER_TOKEN);
+    let usedTokens = 0;
+    for (const fact of ranked) {
+      const factTokens = estimateFactTokens(fact, tokenCharsPerToken);
+      if (usedTokens + factTokens > query.maxTokens) {
+        break;
+      }
+      withinBudget.push(fact);
+      usedTokens += factTokens;
+    }
+    return withinBudget;
   }
 }

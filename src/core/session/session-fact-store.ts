@@ -46,69 +46,49 @@ export class InMemorySessionFactStore implements ISessionFactStore {
       if (this.countInternal() > this.maxValidFacts) {
         this.compact(this.maxValidFacts);
       }
-    } catch {
-      // Contract: never throw to caller.
+    } catch (error) {
+      console.warn('[session-fact-store] add failed', error);
     }
   }
 
   invalidate(subject: string, relation: string): void {
-    try {
-      this.invalidateInternal(subject, relation, new Date());
-    } catch {
-      // Contract: never throw to caller.
-    }
+    this.invalidateInternal(subject, relation, new Date());
   }
 
   getValid(): SessionFact[] {
-    try {
-      return Array.from(this.facts.values()).filter(fact => fact.validTo === undefined);
-    } catch {
-      return [];
-    }
+    return Array.from(this.facts.values()).filter(fact => fact.validTo === undefined);
   }
 
   getValidByTags(tags: SessionFactTag[]): SessionFact[] {
-    try {
-      const tagSet = new Set(tags);
-      return this.getValid().filter(fact => fact.tags.some(tag => tagSet.has(tag)));
-    } catch {
-      return [];
-    }
+    const tagSet = new Set(tags);
+    return this.getValid().filter(fact => fact.tags.some(tag => tagSet.has(tag)));
   }
 
   count(): number {
-    try {
-      return this.countInternal();
-    } catch {
-      return 0;
-    }
+    return this.countInternal();
   }
 
   compact(maxFacts: number): void {
-    try {
-      if (maxFacts < 0) {
-        return;
-      }
-      if (this.countInternal() <= maxFacts) {
-        return;
-      }
+    if (maxFacts < 0) {
+      return;
+    }
+    if (this.countInternal() <= maxFacts) {
+      return;
+    }
 
-      for (const [id, fact] of this.facts.entries()) {
-        if (fact.validTo !== undefined) {
-          this.removeFact(id, fact);
-        }
+    for (const [id, fact] of this.facts.entries()) {
+      if (fact.validTo !== undefined) {
+        this.removeFact(id, fact);
       }
+    }
 
-      const validFacts = this.getValid()
-        .sort((a, b) => a.validFrom.valueOf() - b.validFrom.valueOf());
+    const validFacts = this.getValid()
+      .sort((a, b) => a.validFrom.valueOf() - b.validFrom.valueOf());
 
-      const removeCount = Math.max(0, validFacts.length - maxFacts);
-      for (let index = 0; index < removeCount; index += 1) {
-        const fact = validFacts[index];
-        this.removeFact(fact.id, fact);
-      }
-    } catch {
-      // Contract: never throw to caller.
+    const removeCount = Math.max(0, validFacts.length - maxFacts);
+    for (let index = 0; index < removeCount; index += 1) {
+      const fact = validFacts[index];
+      this.removeFact(fact.id, fact);
     }
   }
 
