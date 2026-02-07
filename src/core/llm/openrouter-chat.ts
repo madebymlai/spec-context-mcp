@@ -6,7 +6,7 @@ import { HistoryReducer } from './history-reducer.js';
 import { InterceptionLayer } from './interception-layer.js';
 import { PromptPrefixCompiler } from './prompt-prefix-compiler.js';
 import { ProviderCacheAdapterFactory, type LlmProvider, type ProviderCacheAdapter } from './provider-cache-adapter.js';
-import { TelemetryMeter } from './telemetry-meter.js';
+import { createRuntimeTelemetryMeter, type IRuntimeTelemetryMeter } from './telemetry-meter.js';
 import type { ChatProvider, ChatMessage, ChatResponse, ChatOptions, RuntimeEventDraft } from './types.js';
 
 export interface OpenRouterChatConfig {
@@ -15,7 +15,7 @@ export interface OpenRouterChatConfig {
     timeout?: number;
     provider?: LlmProvider;
     cacheAdapter?: ProviderCacheAdapter;
-    telemetryMeter?: TelemetryMeter;
+    telemetryMeter?: IRuntimeTelemetryMeter;
 }
 
 /**
@@ -31,7 +31,7 @@ export class OpenRouterChat implements ChatProvider {
     private budgetGuard: BudgetGuard;
     private promptPrefixCompiler: PromptPrefixCompiler;
     private cacheAdapter: ProviderCacheAdapter;
-    private telemetryMeter: TelemetryMeter;
+    private telemetryMeter: IRuntimeTelemetryMeter;
     private provider: LlmProvider;
 
     constructor(config: OpenRouterChatConfig) {
@@ -47,7 +47,7 @@ export class OpenRouterChat implements ChatProvider {
         this.promptPrefixCompiler = new PromptPrefixCompiler();
         this.provider = config.provider ?? 'openrouter';
         this.cacheAdapter = config.cacheAdapter ?? ProviderCacheAdapterFactory.create(this.provider);
-        this.telemetryMeter = config.telemetryMeter ?? new TelemetryMeter();
+        this.telemetryMeter = config.telemetryMeter ?? createRuntimeTelemetryMeter();
     }
 
     async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {

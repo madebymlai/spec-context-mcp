@@ -19,7 +19,13 @@ export interface RuntimeTelemetrySnapshot {
     avgLatencyMs: number;
 }
 
-export class TelemetryMeter {
+export interface IRuntimeTelemetryMeter {
+    record(sample: RuntimeUsageSample): void;
+    snapshot(): RuntimeTelemetrySnapshot;
+    reset(): void;
+}
+
+export class TelemetryMeter implements IRuntimeTelemetryMeter {
     private requests = 0;
     private totalInputTokens = 0;
     private totalOutputTokens = 0;
@@ -59,4 +65,8 @@ export class TelemetryMeter {
         this.totalCostUsd = 0;
         this.totalLatencyMs = 0;
     }
+}
+
+export function createRuntimeTelemetryMeter(): IRuntimeTelemetryMeter {
+    return new TelemetryMeter();
 }

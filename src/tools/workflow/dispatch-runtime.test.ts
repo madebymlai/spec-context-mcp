@@ -258,7 +258,7 @@ END_DISPATCH_RESULT`,
     expect(facts.find(fact => fact.k === 'classification_features')?.v).toContain('keyword_match');
   });
 
-  it('defaults classification to complex when classifier strategy throws', async () => {
+  it('throws when classifier strategy throws', async () => {
     const classifier: ITaskComplexityClassifier = {
       classify: () => {
         throw new Error('classifier failure');
@@ -276,17 +276,14 @@ END_DISPATCH_RESULT`,
       new KeywordFactRetriever(factStore),
     );
 
-    const snapshot = await manager.initRun(
-      'test-run-classifier-fallback',
-      SPEC_NAME,
-      '9.1',
-      context.projectPath
-    );
-
-    const facts = snapshot.facts as Array<{ k: string; v: string }>;
-    expect(facts.find(fact => fact.k === 'classification_level')?.v).toBe('complex');
-    expect(facts.find(fact => fact.k === 'selected_provider')?.v).toBe('claude');
-    expect(facts.find(fact => fact.k === 'classification_classifier_id')?.v).toBe('fallback');
+    await expect(
+      manager.initRun(
+        'test-run-classifier-fallback',
+        SPEC_NAME,
+        '9.1',
+        context.projectPath
+      )
+    ).rejects.toThrow('classifier failure');
   });
 
   it('ingests implementer output using strict JSON contract', async () => {

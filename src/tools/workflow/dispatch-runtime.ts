@@ -47,7 +47,6 @@ import {
   HeuristicComplexityClassifier,
   type ComplexityLevel,
   RoutingTable,
-  type ClassificationResult,
   type ITaskComplexityClassifier,
 } from '../../core/routing/index.js';
 import {
@@ -435,13 +434,6 @@ interface DispatchCoreTelemetry {
   approval_loops: number;
 }
 
-const FALLBACK_CLASSIFICATION_RESULT: ClassificationResult = {
-  level: 'complex',
-  confidence: 0,
-  features: [],
-  classifierId: 'fallback',
-};
-
 interface DispatchCompactionTelemetry {
   compaction_count: number;
   compaction_auto_count: number;
@@ -666,16 +658,11 @@ export class DispatchRuntimeManager {
     const taskDescription = progressLedger.currentTask?.prompt?.trim()
       || progressLedger.currentTask?.description?.trim()
       || '';
-    let classification = FALLBACK_CLASSIFICATION_RESULT;
-    try {
-      classification = this.classifier.classify({
-        taskDescription,
-        taskId,
-        specName,
-      });
-    } catch (error) {
-      console.error('[dispatch-runtime] task complexity classification failed', error);
-    }
+    const classification = this.classifier.classify({
+      taskDescription,
+      taskId,
+      specName,
+    });
     const routingEntry = this.routingTable.resolve(classification.level, 'implementer');
     const dispatchCli = getDispatchCliForComplexity('implementer', classification.level) ?? routingEntry.cli;
 
@@ -764,61 +751,103 @@ export class DispatchRuntimeManager {
       );
     }
 
-    if (args.role === 'implementer') {
-      try {
-        this.schemaRegistry.assert('dispatch.result.implementer', parsed, DISPATCH_CONTRACT_SCHEMA_VERSION);
-      } catch (error) {
-        throw new DispatchContractError('schema_invalid', `Implementer dispatch result failed schema validation: ${String(error)}`);
-      }
-      const result = parsed as ImplementerResult;
-      const extractedFacts = this.factExtractor.extractFromImplementer(result, args.taskId);
-      this.factStore.add(extractedFacts);
-      const responseEvent = await this.publishEvent({
-        partition_key: args.runId,
-        run_id: args.runId,
-        step_id: args.taskId,
-        agent_id: 'implementer',
-        type: 'LLM_RESPONSE',
-        payload: {
-          role: args.role,
-          result,
-        },
-      });
+    const handlerByRole: Record<DispatchRole, () => Promise<{
+      result: ImplementerResult | ReviewerResult;
+      snapshot: StateSnapshot;
+      nextAction: string;
+      outputTokens: number;
+    }>> = {
+      implementer: () => this.ingestImplementerOutput(args, snapshotBefore, parsed, outputTokens),
+      reviewer: () => this.ingestReviewerOutput(args, snapshotBefore, parsed, outputTokens),
+    };
 
-      const taskLedger = applyOutcomeToTaskLedger(
-        taskLedgerFromFacts({
-          runId: args.runId,
-          taskId: args.taskId,
-          facts: snapshotBefore.facts ?? [],
-          stalledThreshold: this.stalledThreshold,
-        }),
-        {
-          role: 'implementer',
-          status: result.status,
-          summary: result.summary,
-          followUpActions: result.follow_up_actions,
-        }
-      );
+    return handlerByRole[args.role]();
+  }
 
-      const facts: StateSnapshotFact[] = [
-        { k: 'implementer_status', v: result.status, confidence: 1 },
-        { k: 'implementer_summary', v: result.summary, confidence: 0.9 },
-        { k: 'output_tokens:last', v: String(outputTokens), confidence: 1 },
-        { k: 'task_id', v: result.task_id, confidence: 1 },
-        ...taskLedgerToFacts(taskLedger),
-      ];
-      await this.updateSnapshot(args.runId, responseEvent, facts, result.task_id, statusForImplementer(result));
-      this.bumpDispatchTelemetry(outputTokens, false);
-      const snapshot = await this.requireSnapshot(args.runId);
-
-      return {
-        result,
-        snapshot,
-        nextAction: nextActionForImplementer(result),
-        outputTokens,
-      };
+  private async ingestImplementerOutput(
+    args: {
+      runId: string;
+      role: DispatchRole;
+      taskId: string;
+    },
+    snapshotBefore: StateSnapshot,
+    parsed: unknown,
+    outputTokens: number,
+  ): Promise<{
+    result: ImplementerResult;
+    snapshot: StateSnapshot;
+    nextAction: string;
+    outputTokens: number;
+  }> {
+    try {
+      this.schemaRegistry.assert('dispatch.result.implementer', parsed, DISPATCH_CONTRACT_SCHEMA_VERSION);
+    } catch (error) {
+      throw new DispatchContractError('schema_invalid', `Implementer dispatch result failed schema validation: ${String(error)}`);
     }
+    const result = parsed as ImplementerResult;
+    const extractedFacts = this.factExtractor.extractFromImplementer(result, args.taskId);
+    this.factStore.add(extractedFacts);
+    const responseEvent = await this.publishEvent({
+      partition_key: args.runId,
+      run_id: args.runId,
+      step_id: args.taskId,
+      agent_id: 'implementer',
+      type: 'LLM_RESPONSE',
+      payload: {
+        role: args.role,
+        result,
+      },
+    });
 
+    const taskLedger = applyOutcomeToTaskLedger(
+      taskLedgerFromFacts({
+        runId: args.runId,
+        taskId: args.taskId,
+        facts: snapshotBefore.facts ?? [],
+        stalledThreshold: this.stalledThreshold,
+      }),
+      {
+        role: 'implementer',
+        status: result.status,
+        summary: result.summary,
+        followUpActions: result.follow_up_actions,
+      }
+    );
+
+    const facts: StateSnapshotFact[] = [
+      { k: 'implementer_status', v: result.status, confidence: 1 },
+      { k: 'implementer_summary', v: result.summary, confidence: 0.9 },
+      { k: 'output_tokens:last', v: String(outputTokens), confidence: 1 },
+      { k: 'task_id', v: result.task_id, confidence: 1 },
+      ...taskLedgerToFacts(taskLedger),
+    ];
+    await this.updateSnapshot(args.runId, responseEvent, facts, result.task_id, statusForImplementer(result));
+    this.bumpDispatchTelemetry(outputTokens, false);
+    const snapshot = await this.requireSnapshot(args.runId);
+
+    return {
+      result,
+      snapshot,
+      nextAction: nextActionForImplementer(result),
+      outputTokens,
+    };
+  }
+
+  private async ingestReviewerOutput(
+    args: {
+      runId: string;
+      role: DispatchRole;
+      taskId: string;
+    },
+    snapshotBefore: StateSnapshot,
+    parsed: unknown,
+    outputTokens: number,
+  ): Promise<{
+    result: ReviewerResult;
+    snapshot: StateSnapshot;
+    nextAction: string;
+    outputTokens: number;
+  }> {
     try {
       this.schemaRegistry.assert('dispatch.result.reviewer', parsed, DISPATCH_CONTRACT_SCHEMA_VERSION);
     } catch (error) {

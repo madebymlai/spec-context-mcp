@@ -66,16 +66,9 @@ export class WorkspaceInitializer {
     const targetPath = join(targetDir, targetFileName);
     
     const sourcePath = join(__dirname, '..', '..', 'templates', `${templateName}.md`);
-    
-    try {
-      const content = await fs.readFile(sourcePath, 'utf-8');
-      
-      // Always overwrite to ensure latest template version is used
-      await fs.writeFile(targetPath, content, 'utf-8');
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to copy template ${templateName}: ${errorMessage}`);
-    }
+
+    const content = await fs.readFile(sourcePath, 'utf-8');
+    await fs.writeFile(targetPath, content, 'utf-8');
   }
   
   private async createUserTemplatesReadme(): Promise<void> {

@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'crypto';
 import {
-    BudgetGuard,
+    filterBudgetCandidates,
     BudgetExceededError,
-    OpenRouterChat,
+    createRuntimeTelemetryMeter,
     redactionInterceptor,
-    TelemetryMeter,
 } from '../../core/llm/index.js';
 import type {
+    IBudgetGuard,
+    IRuntimeTelemetryMeter,
     BudgetCandidate,
     BudgetDecision,
     BudgetPolicy,
@@ -14,6 +15,7 @@ import type {
     ChatInterceptor,
     ChatOptions,
     ChatProvider,
+    ChatResponse,
     StateSnapshotFact,
 } from '../../core/llm/index.js';
 
@@ -158,7 +160,8 @@ interface AiReviewRunState {
 export interface AiReviewServiceOptions {
     chatProvider?: ChatProvider;
     budgetPolicy?: Partial<BudgetPolicy>;
-    telemetryMeter?: TelemetryMeter;
+    budgetGuard?: IBudgetGuard;
+    telemetryMeter?: IRuntimeTelemetryMeter;
     interceptors?: ChatInterceptor[];
     defaultMaxInputChars?: number;
     defaultMaxOutputTokens?: number;
@@ -218,22 +221,23 @@ function isAiReviewResponsePayload(payload: unknown): payload is { suggestions: 
 export class AiReviewService {
     private chat: ChatProvider;
     private budgetPolicy: BudgetPolicy;
-    private budgetGuard: BudgetGuard;
-    private telemetryMeter: TelemetryMeter;
+    private budgetGuard: IBudgetGuard;
+    private telemetryMeter: IRuntimeTelemetryMeter;
     private interceptors: ChatInterceptor[];
     private defaultMaxInputChars: number;
     private defaultMaxOutputTokens: number;
     private runState = new Map<string, AiReviewRunState>();
 
-    constructor(apiKey: string, options: AiReviewServiceOptions = {}) {
-        this.telemetryMeter = options.telemetryMeter ?? new TelemetryMeter();
-        this.chat = options.chatProvider ?? new OpenRouterChat({
-            apiKey,
-            timeout: 60000,
-            telemetryMeter: this.telemetryMeter,
-        });
+    constructor(_apiKey: string, options: AiReviewServiceOptions = {}) {
+        const chatProvider = options.chatProvider;
+        if (!chatProvider) {
+            throw new Error('AiReviewService requires an injected chatProvider');
+        }
+
+        this.telemetryMeter = options.telemetryMeter ?? createRuntimeTelemetryMeter();
+        this.chat = chatProvider;
         this.budgetPolicy = { ...DEFAULT_BUDGET_POLICY, ...options.budgetPolicy };
-        this.budgetGuard = new BudgetGuard();
+        this.budgetGuard = options.budgetGuard ?? { filterCandidates: filterBudgetCandidates };
         this.interceptors = options.interceptors ?? [redactionInterceptor];
         this.defaultMaxInputChars = options.defaultMaxInputChars ?? 18000;
         this.defaultMaxOutputTokens = options.defaultMaxOutputTokens ?? 1200;
@@ -303,59 +307,16 @@ ${REVIEW_USER_SUFFIX}`;
             { role: 'user' as const, content: userPrompt },
         ];
 
-        let response: Awaited<ReturnType<ChatProvider['chat']>> | null = null;
-        let suggestions: AiSuggestion[] | null = null;
-        let previousAssistantContent: string | null = null;
-
         try {
             this.upsertRunState(runId, 'running', context.facts);
-
-            for (let attempt = 1; attempt <= MAX_SCHEMA_RETRIES; attempt += 1) {
-                const attemptMessages: ChatMessage[] = [...baseMessages];
-                if (previousAssistantContent) {
-                    attemptMessages.push({ role: 'assistant' as const, content: previousAssistantContent });
-                    attemptMessages.push({ role: 'user' as const, content: SCHEMA_RETRY_PROMPT });
-                }
-
-                response = await this.chat.chat(attemptMessages, {
-                    model: selectedCandidate.model,
-                    temperature: 0.3,
-                    maxTokens: maxOutputTokens,
-                    jsonMode: true,
-                    metadata: {
-                        requestId: randomUUID(),
-                        runId,
-                        stepId: `review-attempt-${attempt}`,
-                        partitionKey: runId,
-                        idempotencyKey: `${runId}:review:${attempt}`,
-                        agentId: 'ai_review_service',
-                    },
-                    runtime: {
-                        interceptors: this.interceptors,
-                        historyReducer: {
-                            enabled: true,
-                            maxInputChars,
-                            preserveRecentRawTurns: 4,
-                            summaryMaxChars: 1200,
-                        },
-                    },
-                    providerOptions: this.buildProviderOptions(modelConfig),
-                });
-
-                try {
-                    suggestions = this.parseResponseStrict(response.content);
-                    break;
-                } catch (error) {
-                    previousAssistantContent = response.content;
-                    if (attempt >= MAX_SCHEMA_RETRIES) {
-                        throw new Error(`schema_validation_failed: ${String(error)}`);
-                    }
-                }
-            }
-
-            if (!response || !suggestions) {
-                throw new Error('schema_validation_failed');
-            }
+            const { response, suggestions } = await this.performSchemaValidatedReview({
+                baseMessages,
+                runId,
+                model: selectedCandidate.model,
+                maxOutputTokens,
+                maxInputChars,
+                modelConfig,
+            });
 
             const revision = this.upsertRunState(
                 runId,
@@ -402,6 +363,64 @@ ${REVIEW_USER_SUFFIX}`;
             wrapped.code = (error as any)?.code ?? 'ai_review_failed';
             throw wrapped;
         }
+    }
+
+    private async performSchemaValidatedReview(args: {
+        baseMessages: ChatMessage[];
+        runId: string;
+        model: string;
+        maxOutputTokens: number;
+        maxInputChars: number;
+        modelConfig: AiReviewModelConfig;
+    }): Promise<{ response: ChatResponse; suggestions: AiSuggestion[] }> {
+        let previousAssistantContent: string | null = null;
+
+        for (let attempt = 1; attempt <= MAX_SCHEMA_RETRIES; attempt += 1) {
+            const attemptMessages: ChatMessage[] = [...args.baseMessages];
+            if (previousAssistantContent) {
+                attemptMessages.push({ role: 'assistant' as const, content: previousAssistantContent });
+                attemptMessages.push({ role: 'user' as const, content: SCHEMA_RETRY_PROMPT });
+            }
+
+            const response = await this.chat.chat(attemptMessages, {
+                model: args.model,
+                temperature: 0.3,
+                maxTokens: args.maxOutputTokens,
+                jsonMode: true,
+                metadata: {
+                    requestId: randomUUID(),
+                    runId: args.runId,
+                    stepId: `review-attempt-${attempt}`,
+                    partitionKey: args.runId,
+                    idempotencyKey: `${args.runId}:review:${attempt}`,
+                    agentId: 'ai_review_service',
+                },
+                runtime: {
+                    interceptors: this.interceptors,
+                    historyReducer: {
+                        enabled: true,
+                        maxInputChars: args.maxInputChars,
+                        preserveRecentRawTurns: 4,
+                        summaryMaxChars: 1200,
+                    },
+                },
+                providerOptions: this.buildProviderOptions(args.modelConfig),
+            });
+
+            try {
+                return {
+                    response,
+                    suggestions: this.parseResponseStrict(response.content),
+                };
+            } catch (error) {
+                previousAssistantContent = response.content;
+                if (attempt >= MAX_SCHEMA_RETRIES) {
+                    throw new Error(`schema_validation_failed: ${String(error)}`);
+                }
+            }
+        }
+
+        throw new Error('schema_validation_failed');
     }
 
     private parseResponseStrict(content: string): AiSuggestion[] {
