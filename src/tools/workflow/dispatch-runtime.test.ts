@@ -2,6 +2,11 @@ import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RoutingTable, type ITaskComplexityClassifier } from '../../core/routing/index.js';
+import {
+  InMemorySessionFactStore,
+  KeywordFactRetriever,
+  RuleBasedFactExtractor,
+} from '../../core/session/index.js';
 
 const SPEC_NAME = 'dispatch-task-progress-ledgers';
 const SPEC_DIR = join(process.cwd(), '.spec-context', 'specs', SPEC_NAME);
@@ -259,12 +264,16 @@ END_DISPATCH_RESULT`,
         throw new Error('classifier failure');
       },
     };
+    const factStore = new InMemorySessionFactStore();
     const manager = new DispatchRuntimeManagerClass(
       classifier,
       new RoutingTable({
         simple: 'codex',
         complex: 'claude',
       }),
+      factStore,
+      new RuleBasedFactExtractor(),
+      new KeywordFactRetriever(factStore),
     );
 
     const snapshot = await manager.initRun(

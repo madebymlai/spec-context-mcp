@@ -49,6 +49,15 @@ import {
   type ClassificationResult,
   type ITaskComplexityClassifier,
 } from '../../core/routing/index.js';
+import {
+  IFactExtractor,
+  IFactRetriever,
+  ISessionFactStore,
+  InMemorySessionFactStore,
+  KeywordFactRetriever,
+  RuleBasedFactExtractor,
+  formatSessionFacts,
+} from '../../core/session/index.js';
 
 type DispatchAction = 'init_run' | 'ingest_output' | 'get_snapshot' | 'compile_prompt' | 'get_telemetry';
 
@@ -482,21 +491,25 @@ function buildDispatchDynamicTail(input: {
   deltaPacket: Record<string, unknown>;
   guideMode: 'full' | 'compact';
   guideCacheKey: string;
+  sessionContext?: string;
 }): string {
   const guideInstruction = buildDispatchGuideInstruction({
     role: input.role,
     guideMode: input.guideMode,
     runId: input.runId,
   });
-  return [
+  const sections = [
     `Task ID: ${input.taskId}`,
     `Max output tokens: ${input.maxOutputTokens}`,
     `Delta context: ${JSON.stringify(input.deltaPacket)}`,
     `Guide cache key: ${input.guideCacheKey}`,
     guideInstruction,
-    'Task prompt:',
-    input.taskPrompt,
-  ].join('\n');
+  ];
+  if (input.sessionContext && input.sessionContext.trim()) {
+    sections.push(input.sessionContext.trim());
+  }
+  sections.push('Task prompt:', input.taskPrompt);
+  return sections.join('\n');
 }
 
 class DispatchPromptCompiler {
@@ -545,6 +558,7 @@ ${DISPATCH_RESULT_END}`,
     deltaPacket: Record<string, unknown>;
     guideMode: 'full' | 'compact';
     guideCacheKey: string;
+    sessionContext?: string;
     tokenCharsPerToken?: number;
   }): CompiledDispatchPrompt {
     const templateId = input.role === 'implementer' ? 'dispatch_implementer' : 'dispatch_reviewer';
@@ -625,6 +639,9 @@ export class DispatchRuntimeManager {
   constructor(
     private readonly classifier: ITaskComplexityClassifier,
     private readonly routingTable: RoutingTable,
+    private readonly factStore: ISessionFactStore,
+    private readonly factExtractor: IFactExtractor,
+    private readonly factRetriever: IFactRetriever,
   ) {
     this.registerSchemas();
   }
@@ -753,6 +770,8 @@ export class DispatchRuntimeManager {
         throw new DispatchContractError('schema_invalid', 'Implementer dispatch result failed schema validation');
       }
       const result = parsed as ImplementerResult;
+      const extractedFacts = this.factExtractor.extractFromImplementer(result, args.taskId);
+      this.factStore.add(extractedFacts);
       const responseEvent = await this.publishEvent({
         partition_key: args.runId,
         run_id: args.runId,
@@ -805,6 +824,8 @@ export class DispatchRuntimeManager {
       throw new DispatchContractError('schema_invalid', 'Reviewer dispatch result failed schema validation');
     }
     const result = parsed as ReviewerResult;
+    const extractedFacts = this.factExtractor.extractFromReviewer(result, args.taskId);
+    this.factStore.add(extractedFacts);
     const responseEvent = await this.publishEvent({
       partition_key: args.runId,
       run_id: args.runId,
@@ -967,6 +988,15 @@ export class DispatchRuntimeManager {
     let taskPrompt = args.taskPrompt?.trim()
       ? args.taskPrompt.trim()
       : ledgerPrompt.prompt;
+    const relevantFacts = this.factRetriever.retrieve({
+      taskDescription: taskPrompt,
+      taskId: args.taskId,
+      tags: undefined,
+      maxFacts: 10,
+      maxTokens: 500,
+      tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
+    });
+    const sessionContext = formatSessionFacts(relevantFacts);
 
     const promptBudget = this.resolvePromptInputBudget(args.role, args.maxOutputTokens);
     const autoCompaction = args.compactionAuto ?? this.compactionPolicy.auto;
@@ -981,6 +1011,7 @@ export class DispatchRuntimeManager {
       deltaPacket,
       guideMode,
       guideCacheKey,
+      sessionContext,
       tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
     });
     const promptTokensBefore = compiled.promptTokens;
@@ -1008,6 +1039,7 @@ export class DispatchRuntimeManager {
           deltaPacket,
           guideMode,
           guideCacheKey,
+          sessionContext,
           tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
         });
         if (stageACompiled.promptTokens <= compiled.promptTokens) {
@@ -1033,6 +1065,7 @@ export class DispatchRuntimeManager {
           deltaPacket,
           guideMode,
           guideCacheKey,
+          sessionContext,
           tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
         });
         if (stageBCompiled.promptTokens <= compiled.promptTokens) {
@@ -1059,6 +1092,7 @@ export class DispatchRuntimeManager {
           deltaPacket,
           guideMode,
           guideCacheKey,
+          sessionContext,
           tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
         });
         if (stageCCompiled.promptTokens <= compiled.promptTokens) {
@@ -1337,9 +1371,13 @@ export class DispatchRuntimeManager {
     registerDispatchContractSchemas(this.schemaRegistry);
   }
 }
+const factStore = new InMemorySessionFactStore();
 const dispatchRuntimeManager = new DispatchRuntimeManager(
   new HeuristicComplexityClassifier(),
   RoutingTable.fromEnvOrDefault(),
+  factStore,
+  new RuleBasedFactExtractor(),
+  new KeywordFactRetriever(factStore),
 );
 
 type DispatchToolErrorCode =
