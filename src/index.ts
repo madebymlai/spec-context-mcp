@@ -28,7 +28,7 @@ Environment Variables:
   VOYAGEAI_API_KEY    Alias for EMBEDDING_API_KEY when provider=voyageai
   CHUNKHOUND_PYTHON   Python executable for ChunkHound (default: python3)
   DASHBOARD_URL       Dashboard URL shown in prompts (default: http://localhost:3000)
-  OPENROUTER_API_KEY  Required only for dashboard AI review
+  OPENROUTER_API_KEY  Required for ChunkHound deep research and dashboard AI review
 
 Example:
   EMBEDDING_PROVIDER=voyageai EMBEDDING_API_KEY=sk-embed-xxx spec-context-mcp

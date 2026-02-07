@@ -10,13 +10,15 @@ from chunkhound.autodoc.docsite import CleanupConfig
 from chunkhound.core.config.config import Config
 from chunkhound.core.config.llm_config import LLMConfig
 from chunkhound.llm_manager import LLMManager
-from chunkhound.providers.llm.codex_cli_provider import CodexCLIProvider
 
 from .autodoc_errors import AutoDocCLIExitError
 
 
 def _has_llm_env() -> bool:
-    return any(key.startswith("CHUNKHOUND_LLM_") for key in os.environ)
+    return (
+        "OPENROUTER_API_KEY" in os.environ
+        or any(key.startswith("CHUNKHOUND_LLM_") for key in os.environ)
+    )
 
 
 def _build_cleanup_provider_configs(
@@ -24,24 +26,14 @@ def _build_cleanup_provider_configs(
 ) -> tuple[dict[str, object], dict[str, object]]:
     utility_config, synthesis_config = llm_config.get_provider_configs()
 
-    cleanup_provider = llm_config.autodoc_cleanup_provider
-    cleanup_model = llm_config.autodoc_cleanup_model
-    cleanup_effort = llm_config.autodoc_cleanup_reasoning_effort
-
-    if cleanup_provider:
-        synthesis_config = synthesis_config.copy()
-        synthesis_config["provider"] = cleanup_provider
+    cleanup_model = getattr(llm_config, "autodoc_cleanup_model", None)
+    cleanup_effort = getattr(llm_config, "autodoc_cleanup_reasoning_effort", None)
 
     if cleanup_model:
         synthesis_config = synthesis_config.copy()
         synthesis_config["model"] = cleanup_model
 
-    provider = synthesis_config.get("provider")
-    if (
-        cleanup_effort
-        and isinstance(provider, str)
-        and provider in ("codex-cli", "openai")
-    ):
+    if cleanup_effort:
         synthesis_config = synthesis_config.copy()
         synthesis_config["reasoning_effort"] = cleanup_effort
 
@@ -89,29 +81,15 @@ def _log_cleanup_model_selection(
     override_notes = [
         label
         for label, enabled in (
-            ("cleanup provider", llm_config.autodoc_cleanup_provider),
-            ("cleanup model", llm_config.autodoc_cleanup_model),
-            ("cleanup reasoning effort", llm_config.autodoc_cleanup_reasoning_effort),
+            ("cleanup model", getattr(llm_config, "autodoc_cleanup_model", None)),
+            (
+                "cleanup reasoning effort",
+                getattr(llm_config, "autodoc_cleanup_reasoning_effort", None),
+            ),
         )
         if enabled
     ]
     suffix = f" ({', '.join(override_notes)} override)" if override_notes else ""
-
-    if isinstance(provider, str) and provider == "codex-cli":
-        resolved_model, _model_source = CodexCLIProvider.describe_model_resolution(
-            model if isinstance(model, str) else None
-        )
-        resolved_effort, _effort_source = (
-            CodexCLIProvider.describe_reasoning_effort_resolution(
-                effort if isinstance(effort, str) else None
-            )
-        )
-        formatter.info(
-            "Cleanup model selection: "
-            f"provider={provider}, model={model} (resolved={resolved_model}), "
-            f"reasoning_effort={resolved_effort}{suffix}"
-        )
-        return
 
     effort_display = f", reasoning_effort={effort}" if effort else ""
     formatter.info(

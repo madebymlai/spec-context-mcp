@@ -87,6 +87,9 @@ def _render_index_metadata(index: CodeMapperIndex) -> list[str]:
         utility_model = llm_config.get("utility_model")
         if utility_model:
             lines.append(f"- Utility model: {utility_model}")
+        model = llm_config.get("model")
+        if model and not synthesis_model and not utility_model:
+            lines.append(f"- Model: {model}")
         synth_effort = llm_config.get("codex_reasoning_effort_synthesis")
         if synth_effort:
             lines.append(f"- Synthesis reasoning effort: {synth_effort}")
@@ -152,4 +155,3 @@ def _render_index_metadata(index: CodeMapperIndex) -> list[str]:
                 lines.append(f"- Chunks referenced: {detail}")
 
     return lines
-

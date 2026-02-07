@@ -95,7 +95,8 @@ Add to your Claude Code config (`.mcp.json` in project root):
 | `VOYAGEAI_API_KEY`    | No       | Alias for `EMBEDDING_API_KEY` when provider is `voyageai`              |
 | `CHUNKHOUND_PYTHON`   | No       | Python executable for ChunkHound (default: auto-detect `.venv/bin/python`, else `python3`) |
 | `DASHBOARD_URL`       | No       | Dashboard URL shown in prompts (default: `http://localhost:3000`) |
-| `OPENROUTER_API_KEY`  | No       | Required only for dashboard AI review                     |
+| `OPENROUTER_API_KEY`  | No       | Required for ChunkHound deep research and dashboard AI review |
+| `CHUNKHOUND_LLM_MODEL` | No      | OpenRouter model for deep research (default: `google/gemini-2.5-flash`) |
 | `SPEC_CONTEXT_DISABLE_VERSION_CHECK` | No | Disable dashboard startup version check (default: `false`) |
 | `CHUNKHOUND_EMBED_SWEEP_SECONDS` | No | Periodic safety sweep for missing embeddings (default: `300`) |
 | `CHUNKHOUND_EMBED_SWEEP_BACKOFF_SECONDS` | No | Skip sweep if recent per-file embeds occurred (default: `30`) |

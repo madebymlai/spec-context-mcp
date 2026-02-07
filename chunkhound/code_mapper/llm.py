@@ -23,34 +23,19 @@ def build_llm_metadata_and_map_hyde(
 
     llm = config.llm
     llm_meta["provider"] = llm.provider
-    if llm.synthesis_provider:
-        llm_meta["synthesis_provider"] = llm.synthesis_provider
-    if llm.synthesis_model:
-        llm_meta["synthesis_model"] = llm.synthesis_model
-    if llm.utility_model:
-        llm_meta["utility_model"] = llm.utility_model
-    if llm.codex_reasoning_effort_synthesis:
-        llm_meta["codex_reasoning_effort_synthesis"] = (
-            llm.codex_reasoning_effort_synthesis
-        )
-    if llm.codex_reasoning_effort_utility:
-        llm_meta["codex_reasoning_effort_utility"] = llm.codex_reasoning_effort_utility
+    if llm.model:
+        llm_meta["model"] = llm.model
 
-    map_hyde_provider_name = getattr(llm, "map_hyde_provider", None)
     map_hyde_model_name = getattr(llm, "map_hyde_model", None)
     map_hyde_effort = getattr(llm, "map_hyde_reasoning_effort", None)
 
     _utility_cfg, synth_cfg = llm.get_provider_configs()
 
-    needs_custom_map_hyde = bool(
-        map_hyde_provider_name or map_hyde_model_name or map_hyde_effort
-    )
+    needs_custom_map_hyde = bool(map_hyde_model_name or map_hyde_effort)
 
     if llm_manager is not None and needs_custom_map_hyde:
         try:
             map_hyde_cfg: dict[str, Any] = synth_cfg.copy()
-            if map_hyde_provider_name:
-                map_hyde_cfg["provider"] = map_hyde_provider_name
             if map_hyde_model_name:
                 map_hyde_cfg["model"] = map_hyde_model_name
             if map_hyde_effort:
