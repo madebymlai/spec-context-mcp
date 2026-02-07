@@ -4,9 +4,12 @@
  */
 
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { join } from 'path';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getDisciplineMode } from '../../config/discipline.js';
 import { getSteeringDocs, getMissingSteeringDocs } from './steering-loader.js';
+import type { FileContentFingerprint, IFileContentCache } from '../../core/cache/file-content-cache.js';
+import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
 import {
   DISPATCH_CONTRACT_SCHEMA_VERSION,
   DISPATCH_IMPLEMENTER_SCHEMA_ID,
@@ -18,10 +21,12 @@ interface ImplementerGuideCacheEntry {
   guide: string;
   disciplineMode: 'full' | 'standard' | 'minimal';
   steering: Record<string, string>;
+  steeringFingerprints: Record<string, FileContentFingerprint>;
   cachedAt: string;
 }
 
 const implementerGuideCache = new Map<string, ImplementerGuideCacheEntry>();
+const REQUIRED_STEERING_DOCS = ['tech', 'principles'] as const;
 
 export const getImplementerGuideTool: Tool = {
   name: 'get-implementer-guide',
@@ -61,6 +66,7 @@ export async function getImplementerGuideHandler(
   const input = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
   const guideMode = String(input.mode ?? 'full').trim() as GuideMode;
   const runId = String(input.runId ?? '').trim();
+  const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
   if (guideMode !== 'full' && guideMode !== 'compact') {
     return {
       success: false,
@@ -83,28 +89,33 @@ export async function getImplementerGuideHandler(
         message: `No cached implementer guide found for runId "${runId}". Call get-implementer-guide with mode:"full" first.`,
       };
     }
+    await getSteeringDocs(context.projectPath, [...REQUIRED_STEERING_DOCS], fileContentCache);
+    if (hasSteeringFingerprintMismatch(cached, context.projectPath, fileContentCache)) {
+      implementerGuideCache.delete(cacheKey);
+    } else {
+      return {
+        success: true,
+        message: `Implementer compact guide loaded (run: ${runId})`,
+        data: {
+          guide: buildCompactImplementerGuide(cached),
+          disciplineMode: cached.disciplineMode,
+          guideMode: 'compact',
+          guideCacheKey: cacheKey,
+          searchGuidance: getSearchGuidance(),
+        },
+        nextSteps: [
+          'Follow the compact guide and reuse previously loaded full rules',
+          'Call mode:"full" only if discipline mode or steering docs changed',
+        ],
+      };
+    }
 
-    return {
-      success: true,
-      message: `Implementer compact guide loaded (run: ${runId})`,
-      data: {
-        guide: buildCompactImplementerGuide(cached),
-        disciplineMode: cached.disciplineMode,
-        guideMode: 'compact',
-        guideCacheKey: cacheKey,
-        searchGuidance: getSearchGuidance(),
-      },
-      nextSteps: [
-        'Follow the compact guide and reuse previously loaded full rules',
-        'Call mode:"full" only if discipline mode or steering docs changed',
-      ],
-    };
   }
 
   const disciplineMode = getDisciplineMode();
 
   // Check for required steering docs
-  const missing = getMissingSteeringDocs(context.projectPath, ['tech', 'principles']);
+  const missing = getMissingSteeringDocs(context.projectPath, [...REQUIRED_STEERING_DOCS]);
   if (missing.length > 0) {
     return {
       success: false,
@@ -113,7 +124,7 @@ export async function getImplementerGuideHandler(
   }
 
   // Load steering docs
-  const steering = getSteeringDocs(context.projectPath, ['tech', 'principles']);
+  const steering = await getSteeringDocs(context.projectPath, [...REQUIRED_STEERING_DOCS], fileContentCache);
 
   const guide = buildImplementerGuide(disciplineMode);
 
@@ -144,6 +155,7 @@ export async function getImplementerGuideHandler(
       guide,
       disciplineMode,
       steering: steering ?? {},
+      steeringFingerprints: collectSteeringFingerprints(context.projectPath, fileContentCache),
       cachedAt: new Date().toISOString(),
     });
   }
@@ -719,6 +731,43 @@ Before implementing, use search tools to discover existing patterns:
 
 function buildGuideCacheKey(runId: string): string {
   return `implementer:${runId}`;
+}
+
+function collectSteeringFingerprints(
+  projectPath: string,
+  fileContentCache: IFileContentCache
+): Record<string, FileContentFingerprint> {
+  const fingerprints: Record<string, FileContentFingerprint> = {};
+  for (const doc of REQUIRED_STEERING_DOCS) {
+    const fingerprint = fileContentCache.getFingerprint(buildSteeringDocPath(projectPath, doc));
+    if (fingerprint) {
+      fingerprints[doc] = fingerprint;
+    }
+  }
+  return fingerprints;
+}
+
+function hasSteeringFingerprintMismatch(
+  entry: ImplementerGuideCacheEntry,
+  projectPath: string,
+  fileContentCache: IFileContentCache
+): boolean {
+  for (const doc of REQUIRED_STEERING_DOCS) {
+    const docPath = buildSteeringDocPath(projectPath, doc);
+    const current = fileContentCache.getFingerprint(docPath);
+    const previous = entry.steeringFingerprints[doc];
+    if (!current || !previous) {
+      return true;
+    }
+    if (current.mtimeMs !== previous.mtimeMs || current.hash !== previous.hash) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildSteeringDocPath(projectPath: string, doc: (typeof REQUIRED_STEERING_DOCS)[number]): string {
+  return join(projectPath, '.spec-context', 'steering', `${doc}.md`);
 }
 
 function clipSnippet(value: string, maxChars: number): string {

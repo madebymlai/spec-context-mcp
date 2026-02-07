@@ -1,7 +1,19 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { stat } from 'fs/promises';
+import { join } from 'path';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { PathUtils } from '../../core/workflow/path-utils.js';
 import { SpecParser } from '../../core/workflow/parser.js';
+import type { FileContentFingerprint, IFileContentCache } from '../../core/cache/file-content-cache.js';
+import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
+
+interface SpecStatusCacheEntry {
+  spec: Awaited<ReturnType<SpecParser['getSpec']>>;
+  tasksFingerprint: FileContentFingerprint | null;
+  specDirMtimeMs: number | null;
+}
+
+const specStatusCache = new Map<string, SpecStatusCacheEntry>();
 
 export const specStatusTool: Tool = {
   name: 'spec-status',
@@ -27,6 +39,7 @@ Call when resuming work on a spec or checking overall completion status. Shows w
 
 export async function specStatusHandler(args: any, context: ToolContext): Promise<ToolResponse> {
   const { specName } = args;
+  const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
   
   // Use context projectPath as default, allow override via args
   const projectPath = args.projectPath || context.projectPath;
@@ -41,8 +54,33 @@ export async function specStatusHandler(args: any, context: ToolContext): Promis
   try {
     // Translate path at tool entry point (components expect pre-translated paths)
     const translatedPath = PathUtils.translatePath(projectPath);
-    const parser = new SpecParser(translatedPath);
-    const spec = await parser.getSpec(specName);
+    const cacheKey = buildSpecStatusCacheKey(translatedPath, specName);
+    const specDirPath = PathUtils.getSpecPath(translatedPath, specName);
+    const tasksPath = join(specDirPath, 'tasks.md');
+    await fileContentCache.get(tasksPath, { namespace: 'spec-status' });
+    const tasksFingerprint = fileContentCache.getFingerprint(tasksPath);
+    const specDirMtimeMs = await getDirectoryMtimeMs(specDirPath);
+
+    const cached = specStatusCache.get(cacheKey);
+    const useCachedSpec =
+      cached !== undefined
+      && areFingerprintsEqual(cached.tasksFingerprint, tasksFingerprint)
+      && cached.specDirMtimeMs === specDirMtimeMs;
+
+    let spec = useCachedSpec ? cached.spec : null;
+    if (!useCachedSpec) {
+      const parser = new SpecParser(translatedPath);
+      spec = await parser.getSpec(specName);
+      if (spec) {
+        specStatusCache.set(cacheKey, {
+          spec,
+          tasksFingerprint,
+          specDirMtimeMs,
+        });
+      } else {
+        specStatusCache.delete(cacheKey);
+      }
+    }
     
     if (!spec) {
       return {
@@ -177,4 +215,33 @@ export async function specStatusHandler(args: any, context: ToolContext): Promis
       ]
     };
   }
+}
+
+function buildSpecStatusCacheKey(projectPath: string, specName: string): string {
+  return `${projectPath}:${specName}`;
+}
+
+async function getDirectoryMtimeMs(specDirPath: string): Promise<number | null> {
+  try {
+    const stats = await stat(specDirPath);
+    if (!stats.isDirectory()) {
+      return null;
+    }
+    return stats.mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function areFingerprintsEqual(
+  left: FileContentFingerprint | null,
+  right: FileContentFingerprint | null
+): boolean {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return left.mtimeMs === right.mtimeMs && left.hash === right.hash;
 }

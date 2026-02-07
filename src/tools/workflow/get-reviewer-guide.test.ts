@@ -3,10 +3,12 @@ import { getReviewerGuideHandler } from './get-reviewer-guide.js';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { FileContentCache } from '../../core/cache/file-content-cache.js';
 
 describe('get-reviewer-guide', () => {
   let testDir: string;
   let steeringDir: string;
+  let fileContentCache: FileContentCache;
   const originalEnv = process.env;
 
   beforeEach(() => {
@@ -16,6 +18,7 @@ describe('get-reviewer-guide', () => {
     testDir = join(tmpdir(), `reviewer-guide-test-${Date.now()}`);
     steeringDir = join(testDir, '.spec-context', 'steering');
     mkdirSync(steeringDir, { recursive: true });
+    fileContentCache = new FileContentCache();
   });
 
   afterEach(() => {
@@ -27,7 +30,8 @@ describe('get-reviewer-guide', () => {
 
   const createContext = () => ({
     projectPath: testDir,
-    dashboardUrl: 'http://localhost:3000'
+    dashboardUrl: 'http://localhost:3000',
+    fileContentCache,
   });
 
   const createSteeringDocs = () => {
@@ -129,6 +133,23 @@ describe('get-reviewer-guide', () => {
       expect(compact.data?.guide).toContain('Reviewer Compact Guide');
       expect(compact.data?.guide).toContain('strict contract block');
       expect(compact.meta).toBeUndefined();
+    });
+
+    it('invalidates compact cache when steering docs change', async () => {
+      const context = createContext();
+      await getReviewerGuideHandler({ mode: 'full', runId: 'run-review-steering-change' }, context);
+
+      const compactBefore = await getReviewerGuideHandler({ mode: 'compact', runId: 'run-review-steering-change' }, context);
+      expect(compactBefore.success).toBe(true);
+      expect(compactBefore.data?.guideMode).toBe('compact');
+
+      await new Promise(resolve => setTimeout(resolve, 5));
+      writeFileSync(join(steeringDir, 'principles.md'), '# Principles\nDDD');
+
+      const compactAfter = await getReviewerGuideHandler({ mode: 'compact', runId: 'run-review-steering-change' }, context);
+      expect(compactAfter.success).toBe(true);
+      expect(compactAfter.data?.guideMode).toBe('full');
+      expect(compactAfter.data?.guide).toContain('DDD');
     });
 
     it('rejects compact mode without runId', async () => {

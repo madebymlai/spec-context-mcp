@@ -39,6 +39,7 @@ import {
   type ImplementerResult,
   type ReviewerResult,
 } from './dispatch-contract-schemas.js';
+import { getSharedFileContentCacheTelemetry } from '../../core/cache/shared-file-content-cache.js';
 
 type DispatchAction = 'init_run' | 'ingest_output' | 'get_snapshot' | 'compile_prompt' | 'get_telemetry';
 type DispatchRole = 'implementer' | 'reviewer';
@@ -1433,7 +1434,10 @@ export async function dispatchRuntimeHandler(
     return {
       success: true,
       message: 'Dispatch runtime telemetry loaded',
-      data: dispatchRuntimeManager.getTelemetrySnapshot(),
+      data: {
+        ...dispatchRuntimeManager.getTelemetrySnapshot(),
+        file_content_cache: getSharedFileContentCacheTelemetry(),
+      },
     };
   }
 

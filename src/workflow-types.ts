@@ -1,5 +1,6 @@
 // Common types for the spec workflow MCP server
 import { encode } from '@toon-format/toon';
+import type { IFileContentCache } from './core/cache/file-content-cache.js';
 
 // Automation job types
 export interface AutomationJob {
@@ -59,6 +60,7 @@ export interface ToolContext {
   projectPath: string;
   dashboardUrl?: string;
   lang?: string; // Language code for i18n (e.g., 'en', 'ja')
+  fileContentCache?: IFileContentCache;
 }
 
 export interface SpecData {
@@ -93,6 +95,7 @@ export interface SteeringStatus {
     product: boolean;
     tech: boolean;
     structure: boolean;
+    principles: boolean;
   };
   lastModified?: string;
 }

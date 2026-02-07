@@ -3,8 +3,10 @@
  * Loads specific steering docs on demand
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
+import type { IFileContentCache } from '../../core/cache/file-content-cache.js';
 
 export type SteeringDocType = 'product' | 'tech' | 'structure' | 'principles';
 
@@ -19,10 +21,11 @@ export type SteeringDocsResult = {
  * @param docs - Array of document types to load
  * @returns Object with requested docs (only those that exist), or null if steering dir missing
  */
-export function getSteeringDocs(
+export async function getSteeringDocs(
   projectPath: string,
-  docs: SteeringDocType[]
-): SteeringDocsResult | null {
+  docs: SteeringDocType[],
+  cache?: IFileContentCache
+): Promise<SteeringDocsResult | null> {
   const steeringDir = join(projectPath, '.spec-context', 'steering');
 
   if (!existsSync(steeringDir)) {
@@ -35,7 +38,14 @@ export function getSteeringDocs(
     const docPath = join(steeringDir, `${doc}.md`);
     if (existsSync(docPath)) {
       try {
-        result[doc] = readFileSync(docPath, 'utf-8');
+        if (cache) {
+          const cached = await cache.get(docPath, { namespace: 'steering' });
+          if (cached !== null) {
+            result[doc] = cached;
+          }
+        } else {
+          result[doc] = await readFile(docPath, 'utf-8');
+        }
       } catch {
         // Skip if can't read
       }

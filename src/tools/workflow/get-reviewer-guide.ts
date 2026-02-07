@@ -4,9 +4,12 @@
  */
 
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { join } from 'path';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getDisciplineMode } from '../../config/discipline.js';
 import { getSteeringDocs, getMissingSteeringDocs } from './steering-loader.js';
+import type { FileContentFingerprint, IFileContentCache } from '../../core/cache/file-content-cache.js';
+import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
 import {
   DISPATCH_CONTRACT_SCHEMA_VERSION,
   DISPATCH_REVIEWER_SCHEMA_ID,
@@ -18,10 +21,12 @@ interface ReviewerGuideCacheEntry {
   guide: string;
   disciplineMode: 'full' | 'standard';
   steering: Record<string, string>;
+  steeringFingerprints: Record<string, FileContentFingerprint>;
   cachedAt: string;
 }
 
 const reviewerGuideCache = new Map<string, ReviewerGuideCacheEntry>();
+const REQUIRED_STEERING_DOCS = ['tech', 'principles'] as const;
 
 export const getReviewerGuideTool: Tool = {
   name: 'get-reviewer-guide',
@@ -62,6 +67,7 @@ export async function getReviewerGuideHandler(
   const input = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
   const guideMode = String(input.mode ?? 'full').trim() as GuideMode;
   const runId = String(input.runId ?? '').trim();
+  const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
   if (guideMode !== 'full' && guideMode !== 'compact') {
     return {
       success: false,
@@ -86,21 +92,26 @@ export async function getReviewerGuideHandler(
         message: `No cached reviewer guide found for runId "${runId}". Call get-reviewer-guide with mode:"full" first.`,
       };
     }
-    return {
-      success: true,
-      message: `Reviewer compact guide loaded (run: ${runId})`,
-      data: {
-        guide: buildCompactReviewerGuide(cached),
-        disciplineMode: cached.disciplineMode,
-        guideMode: 'compact',
-        guideCacheKey: cacheKey,
-        searchGuidance: getSearchGuidance(),
-      },
-      nextSteps: [
-        'Review against compact checklist and cached full criteria',
-        'Call mode:"full" only when steering docs or discipline mode changes',
-      ],
-    };
+    await getSteeringDocs(context.projectPath, [...REQUIRED_STEERING_DOCS], fileContentCache);
+    if (hasSteeringFingerprintMismatch(cached, context.projectPath, fileContentCache)) {
+      reviewerGuideCache.delete(cacheKey);
+    } else {
+      return {
+        success: true,
+        message: `Reviewer compact guide loaded (run: ${runId})`,
+        data: {
+          guide: buildCompactReviewerGuide(cached),
+          disciplineMode: cached.disciplineMode,
+          guideMode: 'compact',
+          guideCacheKey: cacheKey,
+          searchGuidance: getSearchGuidance(),
+        },
+        nextSteps: [
+          'Review against compact checklist and cached full criteria',
+          'Call mode:"full" only when steering docs or discipline mode changes',
+        ],
+      };
+    }
   }
 
   // Reviews not active in minimal mode
@@ -112,7 +123,7 @@ export async function getReviewerGuideHandler(
   }
 
   // Check for required steering docs
-  const missing = getMissingSteeringDocs(context.projectPath, ['tech', 'principles']);
+  const missing = getMissingSteeringDocs(context.projectPath, [...REQUIRED_STEERING_DOCS]);
   if (missing.length > 0) {
     return {
       success: false,
@@ -121,7 +132,7 @@ export async function getReviewerGuideHandler(
   }
 
   // Load steering docs
-  const steering = getSteeringDocs(context.projectPath, ['tech', 'principles']);
+  const steering = await getSteeringDocs(context.projectPath, [...REQUIRED_STEERING_DOCS], fileContentCache);
 
   const guide = buildReviewerGuide(mode, steering ?? {});
 
@@ -151,6 +162,7 @@ export async function getReviewerGuideHandler(
       guide,
       disciplineMode: mode,
       steering: steering ?? {},
+      steeringFingerprints: collectSteeringFingerprints(context.projectPath, fileContentCache),
       cachedAt: new Date().toISOString(),
     });
   }
@@ -376,6 +388,43 @@ Use search tools to verify implementation quality:
 
 function buildGuideCacheKey(runId: string): string {
   return `reviewer:${runId}`;
+}
+
+function collectSteeringFingerprints(
+  projectPath: string,
+  fileContentCache: IFileContentCache
+): Record<string, FileContentFingerprint> {
+  const fingerprints: Record<string, FileContentFingerprint> = {};
+  for (const doc of REQUIRED_STEERING_DOCS) {
+    const fingerprint = fileContentCache.getFingerprint(buildSteeringDocPath(projectPath, doc));
+    if (fingerprint) {
+      fingerprints[doc] = fingerprint;
+    }
+  }
+  return fingerprints;
+}
+
+function hasSteeringFingerprintMismatch(
+  entry: ReviewerGuideCacheEntry,
+  projectPath: string,
+  fileContentCache: IFileContentCache
+): boolean {
+  for (const doc of REQUIRED_STEERING_DOCS) {
+    const docPath = buildSteeringDocPath(projectPath, doc);
+    const current = fileContentCache.getFingerprint(docPath);
+    const previous = entry.steeringFingerprints[doc];
+    if (!current || !previous) {
+      return true;
+    }
+    if (current.mtimeMs !== previous.mtimeMs || current.hash !== previous.hash) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildSteeringDocPath(projectPath: string, doc: (typeof REQUIRED_STEERING_DOCS)[number]): string {
+  return join(projectPath, '.spec-context', 'steering', `${doc}.md`);
 }
 
 function clipSnippet(value: string, maxChars: number): string {

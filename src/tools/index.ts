@@ -6,6 +6,7 @@ import { TOOL_CATALOG_ORDER, type ToolName } from './catalog.js';
 import { mkdir, readdir, rm, stat, writeFile } from 'fs/promises';
 import { join, relative } from 'path';
 import { randomUUID } from 'crypto';
+import { getSharedFileContentCache } from '../core/cache/shared-file-content-cache.js';
 
 // Workflow tools
 import {
@@ -323,10 +324,12 @@ export async function handleToolCall(
     // Create workflow context if not provided
     const projectPath = (args.projectPath as string) || workflowContext?.projectPath || process.cwd();
     const dashboardUrl = workflowContext?.dashboardUrl || await resolveDashboardUrl();
+    const fileContentCache = workflowContext?.fileContentCache ?? getSharedFileContentCache();
     const wfCtx: WorkflowToolContext = {
         ...workflowContext,
         projectPath,
         dashboardUrl,
+        fileContentCache,
     };
 
     const buildSuccess = (message: string, data?: unknown): ToolResponse => ({

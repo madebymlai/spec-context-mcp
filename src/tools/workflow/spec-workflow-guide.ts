@@ -3,6 +3,7 @@ import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getSteeringDocs } from './steering-loader.js';
 import { getDisciplineMode, getDispatchCli } from '../../config/discipline.js';
 import { isDispatchRuntimeV2Enabled } from '../../config/dispatch-runtime.js';
+import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
 
 export const specWorkflowGuideTool: Tool = {
   name: 'spec-workflow-guide',
@@ -31,7 +32,12 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
   const reviewerCli = getDispatchCli('reviewer');
 
   // Read steering docs if they exist
-  const steeringContent = getSteeringDocs(context.projectPath, ['product', 'tech', 'structure', 'principles']);
+  const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
+  const steeringContent = await getSteeringDocs(
+    context.projectPath,
+    ['product', 'tech', 'structure', 'principles'],
+    fileContentCache
+  );
 
   return {
     success: true,

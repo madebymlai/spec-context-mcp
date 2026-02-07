@@ -3,10 +3,12 @@ import { getImplementerGuideHandler } from './get-implementer-guide.js';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { FileContentCache } from '../../core/cache/file-content-cache.js';
 
 describe('get-implementer-guide', () => {
   let testDir: string;
   let steeringDir: string;
+  let fileContentCache: FileContentCache;
   const originalEnv = process.env;
 
   beforeEach(() => {
@@ -16,6 +18,7 @@ describe('get-implementer-guide', () => {
     testDir = join(tmpdir(), `implementer-guide-test-${Date.now()}`);
     steeringDir = join(testDir, '.spec-context', 'steering');
     mkdirSync(steeringDir, { recursive: true });
+    fileContentCache = new FileContentCache();
   });
 
   afterEach(() => {
@@ -27,7 +30,8 @@ describe('get-implementer-guide', () => {
 
   const createContext = () => ({
     projectPath: testDir,
-    dashboardUrl: 'http://localhost:3000'
+    dashboardUrl: 'http://localhost:3000',
+    fileContentCache,
   });
 
   const createSteeringDocs = () => {
@@ -121,6 +125,23 @@ describe('get-implementer-guide', () => {
       expect(compact.data?.guide).toContain('Implementer Compact Guide');
       expect(compact.data?.guide).toContain('strict contract block');
       expect(compact.meta).toBeUndefined();
+    });
+
+    it('invalidates compact cache when steering docs change', async () => {
+      const context = createContext();
+      await getImplementerGuideHandler({ mode: 'full', runId: 'run-steering-change' }, context);
+
+      const compactBefore = await getImplementerGuideHandler({ mode: 'compact', runId: 'run-steering-change' }, context);
+      expect(compactBefore.success).toBe(true);
+      expect(compactBefore.data?.guideMode).toBe('compact');
+
+      await new Promise(resolve => setTimeout(resolve, 5));
+      writeFileSync(join(steeringDir, 'tech.md'), '# Tech Stack\nRust');
+
+      const compactAfter = await getImplementerGuideHandler({ mode: 'compact', runId: 'run-steering-change' }, context);
+      expect(compactAfter.success).toBe(true);
+      expect(compactAfter.data?.guideMode).toBe('full');
+      expect(compactAfter.data?.steering?.tech).toContain('Rust');
     });
 
     it('rejects compact mode without runId', async () => {

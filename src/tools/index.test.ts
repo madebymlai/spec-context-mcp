@@ -87,4 +87,33 @@ describe('handleToolCall tool-result offloading', () => {
     const remaining = readdirSync(offloadDir);
     expect(remaining.length).toBeGreaterThanOrEqual(1);
   });
+
+  it('shares file-content cache across tool calls and exposes telemetry via dispatch-runtime', async () => {
+    process.env.SPEC_CONTEXT_TOOL_RESULT_OFFLOAD_CHARS = '999999';
+
+    const context = { projectPath: testDir, dashboardUrl: undefined };
+    const implementer = await handleToolCall(
+      'get-implementer-guide',
+      { mode: 'full', runId: 'cache-shared-impl' },
+      context
+    ) as ToolResponse;
+    expect(implementer.success).toBe(true);
+
+    const reviewer = await handleToolCall(
+      'get-reviewer-guide',
+      { mode: 'full', runId: 'cache-shared-rev' },
+      context
+    ) as ToolResponse;
+    expect(reviewer.success).toBe(true);
+
+    const telemetry = await handleToolCall(
+      'dispatch-runtime',
+      { action: 'get_telemetry', runId: 'cache-shared-telemetry' },
+      context
+    ) as ToolResponse;
+
+    expect(telemetry.success).toBe(true);
+    expect(telemetry.data?.file_content_cache?.namespaces?.steering?.misses).toBeGreaterThan(0);
+    expect(telemetry.data?.file_content_cache?.namespaces?.steering?.hits).toBeGreaterThan(0);
+  });
 });
