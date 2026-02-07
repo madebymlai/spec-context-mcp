@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleToolCall } from '../index.js';
 import type { ToolResponse } from '../../workflow-types.js';
 
@@ -41,7 +41,29 @@ function findFact(response: ToolResponse, key: string): string | undefined {
   return facts?.find(fact => fact.k === key)?.v;
 }
 
+const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
+const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
+
 describe('dispatch-runtime integration (no mocks)', () => {
+  beforeEach(() => {
+    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_IMPLEMENTER === undefined) {
+      delete process.env.SPEC_CONTEXT_IMPLEMENTER;
+    } else {
+      process.env.SPEC_CONTEXT_IMPLEMENTER = ORIGINAL_IMPLEMENTER;
+    }
+
+    if (ORIGINAL_REVIEWER === undefined) {
+      delete process.env.SPEC_CONTEXT_REVIEWER;
+    } else {
+      process.env.SPEC_CONTEXT_REVIEWER = ORIGINAL_REVIEWER;
+    }
+  });
+
   it('runs init -> compile -> ingest implementer/reviewer using real output files', async () => {
     const projectPath = await createTempProject();
     try {
@@ -159,7 +181,7 @@ END_DISPATCH_RESULT`,
     }
   });
 
-  it('enforces maxOutputTokens and does not mark schema retry for token budget errors', async () => {
+  it('enforces maxOutputTokens without recording contract schema failure', async () => {
     const projectPath = await createTempProject();
     try {
       const runId = `int-budget-${randomUUID()}`;
@@ -199,13 +221,13 @@ END_DISPATCH_RESULT`,
       });
       expect(snapshot.success).toBe(true);
       expect(snapshot.data?.snapshot?.status).toBe('running');
-      expect(findFact(snapshot, `schema_invalid_retries:implementer:${taskId}`)).toBeUndefined();
+      expect(findFact(snapshot, 'schema_contract_failure:last')).toBeUndefined();
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }
   });
 
-  it('tracks exactly one schema-invalid retry before terminal failure', async () => {
+  it('treats schema-invalid output as immediate terminal failure', async () => {
     const projectPath = await createTempProject();
     try {
       const runId = `int-schema-${randomUUID()}`;
@@ -234,8 +256,9 @@ END_DISPATCH_RESULT`,
         outputFilePath: 'invalid-review.log',
       });
       expect(first.success).toBe(false);
-      expect(first.data?.nextAction).toBe('retry_once_schema_invalid');
-      expect(first.data?.retryCount).toBe(1);
+      expect(first.data?.errorCode).toBe('schema_invalid');
+      expect(first.data?.nextAction).toBe('halt_schema_invalid_terminal');
+      expect(first.data?.snapshot?.status).toBe('failed');
 
       const second = await callDispatch(projectPath, {
         action: 'ingest_output',
@@ -245,10 +268,41 @@ END_DISPATCH_RESULT`,
         outputFilePath: 'invalid-review.log',
       });
       expect(second.success).toBe(false);
+      expect(second.data?.errorCode).toBe('schema_invalid');
       expect(second.data?.nextAction).toBe('halt_schema_invalid_terminal');
-      expect(second.data?.retryCount).toBe(2);
       expect(second.data?.snapshot?.status).toBe('failed');
-      expect(findFact(second, `schema_invalid_retries:reviewer:${taskId}`)).toBe('2');
+      expect(findFact(second, 'schema_contract_failure:last')).toBe('schema_invalid');
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('fails compile_prompt with mode_unsupported for unknown provider', async () => {
+    const projectPath = await createTempProject();
+    try {
+      process.env.SPEC_CONTEXT_IMPLEMENTER = 'custom-provider --json';
+      const runId = `int-provider-${randomUUID()}`;
+      const taskId = '3.2';
+      await ensureSpecTasks(projectPath, 'feature-provider-gate', taskId);
+      await callDispatch(projectPath, {
+        action: 'init_run',
+        runId,
+        specName: 'feature-provider-gate',
+        taskId,
+      });
+
+      const compile = await callDispatch(projectPath, {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: 'Implement provider gate test',
+        maxOutputTokens: 500,
+      });
+
+      expect(compile.success).toBe(false);
+      expect(compile.data?.errorCode).toBe('mode_unsupported');
+      expect(compile.message).toContain('mode_unsupported');
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }

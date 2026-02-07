@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { dispatchRuntimeHandler } from './dispatch-runtime.js';
 
 const context = {
@@ -6,7 +6,29 @@ const context = {
   dashboardUrl: undefined,
 };
 
+const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
+const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
+
 describe('dispatch-runtime tool', () => {
+  beforeEach(() => {
+    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_IMPLEMENTER === undefined) {
+      delete process.env.SPEC_CONTEXT_IMPLEMENTER;
+    } else {
+      process.env.SPEC_CONTEXT_IMPLEMENTER = ORIGINAL_IMPLEMENTER;
+    }
+
+    if (ORIGINAL_REVIEWER === undefined) {
+      delete process.env.SPEC_CONTEXT_REVIEWER;
+    } else {
+      process.env.SPEC_CONTEXT_REVIEWER = ORIGINAL_REVIEWER;
+    }
+  });
+
   it('returns typed error when init_run cannot find tasks.md', async () => {
     const result = await dispatchRuntimeHandler(
       {
@@ -250,10 +272,12 @@ END_DISPATCH_RESULT`,
     );
 
     expect(result.success).toBe(false);
-    expect(result.data?.nextAction).toBe('retry_once_schema_invalid');
+    expect(result.data?.errorCode).toBe('schema_invalid');
+    expect(result.data?.nextAction).toBe('halt_schema_invalid_terminal');
+    expect(result.data?.snapshot?.status).toBe('failed');
   });
 
-  it('halts after one schema-invalid retry', async () => {
+  it('treats schema-invalid output as terminal on first attempt', async () => {
     await dispatchRuntimeHandler(
       {
         action: 'init_run',
@@ -290,9 +314,40 @@ END_DISPATCH_RESULT`;
     );
 
     expect(first.success).toBe(false);
-    expect(first.data?.nextAction).toBe('retry_once_schema_invalid');
+    expect(first.data?.errorCode).toBe('schema_invalid');
+    expect(first.data?.nextAction).toBe('halt_schema_invalid_terminal');
     expect(second.success).toBe(false);
+    expect(second.data?.errorCode).toBe('schema_invalid');
     expect(second.data?.nextAction).toBe('halt_schema_invalid_terminal');
+  });
+
+  it('fails compile_prompt when provider is unsupported', async () => {
+    process.env.SPEC_CONTEXT_IMPLEMENTER = 'custom-provider --json';
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-unsupported-provider',
+        specName: 'dispatch-task-progress-ledgers',
+        taskId: '6.1',
+      },
+      context
+    );
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId: 'test-run-unsupported-provider',
+        role: 'implementer',
+        taskId: '6.1',
+        taskPrompt: 'Implement provider gate enforcement',
+        maxOutputTokens: 600,
+      },
+      context
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.data?.errorCode).toBe('mode_unsupported');
+    expect(result.message).toContain('mode_unsupported');
   });
 
   it('rejects extra prose outside dispatch contract markers', async () => {

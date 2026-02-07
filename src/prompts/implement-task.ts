@@ -72,7 +72,7 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      - \`taskId: "${taskId || '{taskId}'}"\`
      - \`maxOutputTokens: 1200\`
      - \`outputFilePath: "/tmp/spec-impl.log"\`
-   - If schema invalid: re-dispatch implementer once with stricter reminder.
+   - If contract validation fails: halt this dispatch attempt and surface the terminal error.
 ` : `
 6. **Legacy Result Handling (runtime v2 disabled):**
    - Use task marker changes + targeted diagnostics from logs.

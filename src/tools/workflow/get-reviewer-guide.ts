@@ -7,6 +7,10 @@ import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { getDisciplineMode } from '../../config/discipline.js';
 import { getSteeringDocs, getMissingSteeringDocs } from './steering-loader.js';
+import {
+  DISPATCH_CONTRACT_SCHEMA_VERSION,
+  DISPATCH_REVIEWER_SCHEMA_ID,
+} from './dispatch-contract-schemas.js';
 
 type GuideMode = 'full' | 'compact';
 
@@ -323,7 +327,9 @@ Rules:
 - \`issues[].severity\` must be one of: \`critical\`, \`important\`, \`minor\`
 - Use empty arrays when no issues/fixes
 - Output must start with \`BEGIN_DISPATCH_RESULT\` and end with \`END_DISPATCH_RESULT\` (no extra prose)
-- This contract is parsed by \`dispatch-runtime\`; invalid schema triggers one retry, then terminal failure
+- Schema ID: \`${DISPATCH_REVIEWER_SCHEMA_ID}\`
+- Schema Version: \`${DISPATCH_CONTRACT_SCHEMA_VERSION}\`
+- This contract is parsed by \`dispatch-runtime\`; invalid contract is a terminal failure
 
 ## Red Flags in Review
 
@@ -398,6 +404,7 @@ Discipline mode: ${entry.disciplineMode}
 - If unclear requirement exists, block and request clarification.
 - Final output MUST be strict contract block: BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT
 - No prose outside the final contract block.
+- Schema contract: ${DISPATCH_REVIEWER_SCHEMA_ID}@${DISPATCH_CONTRACT_SCHEMA_VERSION}
 
 ## Compact Checklist
 - Spec compliance: requirements met, no scope creep.

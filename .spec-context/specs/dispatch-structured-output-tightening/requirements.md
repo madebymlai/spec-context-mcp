@@ -2,112 +2,99 @@
 
 ## Introduction
 
-Tighten subagent structured output contracts for dispatch orchestration so outputs are reliably machine-parseable with minimal wasted tokens. The system already enforces marker-delimited JSON (`BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT`) and validates parsed payloads. This spec upgrades that baseline with capability-aware constrained decoding and stronger schema contracts.
+Enforce strict schema-constrained structured output for dispatch subagents. Output must be machine-parseable JSON inside the `BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT` envelope with zero prose outside the envelope.
 
-This corresponds to Dimension 3 P0 in `docs/research/token-efficiency-findings.md`.
+This spec is intentionally fail-fast: no fallback output modes, no degraded parsing paths, and no defensive retry loops for malformed output.
 
 ## Evidence Notes (from references)
 
-- JSONSchemaBench shows constrained decoding meaningfully impacts **efficiency, coverage, and quality** across frameworks/models.
-- The paper reports up to ~50% generation speedup and up to ~4% quality gain in some setups, but also large coverage variance (around 2x between frameworks for certain schema classes).
-- Therefore this spec requires capability-aware fallback modes instead of a one-size-fits-all schema-constrained path.
-
-## Alignment with Product Vision
-
-This feature supports spec-context-mcp by:
-- Reducing verbose/free-form subagent output
-- Increasing deterministic orchestrator behavior
-- Lowering schema-invalid retry loops
-- Preserving strict contracts across heterogeneous CLI providers
+- JSONSchemaBench demonstrates that constrained decoding materially affects reliability/efficiency.
+- Coverage differs across frameworks/providers, so capability checks must be explicit.
+- This spec chooses strictness over graceful degradation: unsupported providers are blocked rather than silently downgraded.
 
 ## Requirements
 
-### Requirement 1: Strict Contract Boundary (No Prose)
+### Requirement 1: Strict Envelope and Terminal Failure
 
-**User Story:** As an orchestrator, I want subagent outputs to be strictly machine-readable, so dispatch ingestion can avoid manual/parsing ambiguity.
-
-#### Acceptance Criteria
-
-1. WHEN an implementer/reviewer response is produced THEN output SHALL contain exactly one trailing `BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT` block.
-2. WHEN any non-whitespace text exists outside markers THEN response SHALL be rejected as contract-invalid.
-3. WHEN contract-invalid output occurs THEN runtime SHALL trigger deterministic retry policy (single retry then terminal failure).
-4. Contract rules SHALL be present in both full and compact guide variants.
-
-### Requirement 2: Canonical JSON Schema Contracts
-
-**User Story:** As a maintainer, I want explicit versioned JSON schemas for dispatch outputs, so contract evolution is controlled and testable.
+**User Story:** As an orchestrator, I want deterministic machine output only, so ingestion never depends on prose handling.
 
 #### Acceptance Criteria
 
-1. Define canonical versioned schemas for `ImplementerResult` and `ReviewerResult` in a reusable schema module.
-2. Runtime validation SHALL use canonical schema definitions (or equivalent strict validators generated from them).
-3. Schema versions SHALL be included in validation paths and telemetry.
-4. Backward compatibility strategy SHALL be explicit (e.g., `v1` accepted until migration cutoff).
+1. Output SHALL contain exactly one trailing `BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT` block.
+2. Any non-whitespace content outside the block SHALL be rejected.
+3. Envelope/parse/schema failures SHALL be terminal for that dispatch attempt (no auto-retry loop in runtime).
+4. Full and compact guides SHALL both state the no-prose rule explicitly.
 
-### Requirement 3: Capability-Aware Constrained Decoding Modes
+### Requirement 2: Canonical Versioned Schema as Single Source of Truth
 
-**User Story:** As an orchestrator, I want the best available structured-output mode per provider, so schema compliance is maximized without breaking unsupported CLIs.
-
-#### Acceptance Criteria
-
-1. Introduce dispatch output modes:
-   - `schema_constrained` (provider supports JSON schema constrained decoding)
-   - `json_mode` (provider supports JSON object mode but not full schema constraints)
-   - `contract_only` (marker + instruction + post-parse validation fallback)
-2. Mode selection SHALL be driven by provider capability mapping, not hardcoded assumptions.
-3. WHEN a provider lacks a higher mode THEN runtime SHALL degrade to next safe mode deterministically.
-4. Degraded mode SHALL preserve strict marker contract and runtime schema validation.
-
-### Requirement 4: Schema Profile for Decode-Time Compatibility
-
-**User Story:** As an engineer, I want decode-time schemas that avoid unsupported features, so constrained decoding remains reliable across engines.
+**User Story:** As a maintainer, I want one authoritative contract definition, so validation and prompting cannot drift.
 
 #### Acceptance Criteria
 
-1. Maintain two schema profiles:
-   - `full` (complete runtime validation)
-   - `decode_safe` (feature subset for constrained decoding compatibility)
-2. Decode-time paths SHALL use `decode_safe`; ingest-time validation SHALL use `full`.
-3. Unsupported schema features SHALL be documented and test-covered in compatibility tests.
-4. Profile divergence SHALL never allow invalid payloads to bypass ingest-time validation.
+1. Define canonical versioned schemas for implementer and reviewer results.
+2. Runtime validation SHALL be derived from these schema artifacts.
+3. Prompt/guide contract examples SHALL match canonical schema fields exactly.
+4. Schema version used for validation SHALL be exposed in telemetry.
 
-### Requirement 5: Telemetry and Failure Diagnostics
+### Requirement 3: Schema-Constrained Mode Only
 
-**User Story:** As an operator, I want visibility into output contract health by mode/provider, so regressions are measurable.
+**User Story:** As an operator, I want guaranteed constrained decoding behavior, so output contract compliance is enforced at generation time.
 
 #### Acceptance Criteria
 
-1. Telemetry SHALL record selected output mode per dispatch (`schema_constrained` | `json_mode` | `contract_only`).
-2. Telemetry SHALL record schema-invalid retry count and terminal schema failures by provider/role.
-3. Telemetry SHALL record output token usage and schema-compliance success rate by mode.
-4. Error responses SHALL carry typed reason categories (`marker_missing`, `json_parse_failed`, `schema_invalid`, `mode_unsupported`).
+1. Dispatch output policy SHALL be `schema_constrained` only.
+2. If provider/CLI cannot satisfy schema-constrained output, dispatch SHALL fail fast with `mode_unsupported`.
+3. No fallback to `json_mode` or `contract_only` SHALL be allowed.
+4. Capability checks SHALL run before dispatch execution.
 
-### Requirement 6: Test Matrix for Structured Output Guarantees
+### Requirement 4: Provider Capability Gate
 
-**User Story:** As a developer, I want deterministic tests across modes, so future changes cannot silently degrade structured-output reliability.
+**User Story:** As an operator, I want unsupported providers rejected early, so failures are explicit and immediate.
 
 #### Acceptance Criteria
 
-1. Unit tests SHALL cover canonical schemas, decode-safe profile derivation, and mode selection logic.
-2. Runtime tests SHALL cover accept/reject behavior for all failure classes and retry policy.
-3. Integration tests SHALL cover at least one path per output mode.
-4. Existing dispatch-runtime contract tests SHALL remain passing.
+1. Maintain explicit provider capability mapping for schema-constrained support.
+2. `compile_prompt`/dispatch SHALL refuse unsupported providers with typed error.
+3. Unknown providers SHALL be treated as unsupported by default.
+4. Overrides (if any) SHALL be explicit and audited.
+
+### Requirement 5: Operational Telemetry
+
+**User Story:** As an engineer, I want clear contract-health metrics, so strict mode impact is measurable.
+
+#### Acceptance Criteria
+
+1. Telemetry SHALL record schema version and provider capability decisions.
+2. Telemetry SHALL record categorized terminal failures: `marker_missing`, `json_parse_failed`, `schema_invalid`, `mode_unsupported`.
+3. Telemetry SHALL record output token stats for successful dispatches.
+4. Telemetry SHALL not report degraded/fallback modes (none exist in this spec).
+
+### Requirement 6: Test Matrix for Strictness
+
+**User Story:** As a developer, I want tests that fail on any softening of strict contracts, so behavior remains deterministic.
+
+#### Acceptance Criteria
+
+1. Unit tests SHALL validate schema artifacts and capability gate behavior.
+2. Runtime tests SHALL verify terminal failure on each failure category.
+3. Integration tests SHALL verify unsupported providers fail before execution.
+4. Existing strict-envelope tests SHALL remain passing.
 
 ## Non-Functional Requirements
 
 ### Reliability
-- Ingest-time validation remains authoritative gate regardless of provider mode.
-- No mode may bypass strict runtime validation.
-
-### Performance
-- Mode selection and schema profile operations must add negligible overhead.
-- Output tightening should reduce average output tokens and/or schema-invalid retries.
+- Ingest-time schema validation is mandatory and authoritative.
+- No auto-recovery or fallback path for malformed output.
 
 ### Compatibility
-- Preserve current dispatch-runtime public API behavior while adding mode-aware metadata.
+- Public dispatch-runtime API stays compatible where possible, with additive typed error metadata.
 
-### Observability
-- Structured-output mode and schema version must be queryable from telemetry.
+### Performance
+- Capability checks and schema selection add negligible overhead.
+
+### Simplicity
+- No fallback ladders.
+- No alternate parsing branches.
 
 ## References
 

@@ -33,6 +33,19 @@ import {
   taskLedgerFromFacts,
   taskLedgerToFacts,
 } from './dispatch-ledger.js';
+import {
+  DISPATCH_CONTRACT_SCHEMA_VERSION,
+  DISPATCH_IMPLEMENTER_SCHEMA_ID,
+  DISPATCH_REVIEWER_SCHEMA_ID,
+  type ImplementerResult,
+  type ReviewerResult,
+  isImplementerResult,
+  isReviewerResult,
+} from './dispatch-contract-schemas.js';
+import {
+  type DispatchOutputMode,
+  resolveDispatchOutputMode,
+} from './dispatch-output-mode.js';
 
 type DispatchAction = 'init_run' | 'ingest_output' | 'get_snapshot' | 'compile_prompt' | 'get_telemetry';
 type DispatchRole = 'implementer' | 'reviewer';
@@ -40,112 +53,20 @@ type DispatchRole = 'implementer' | 'reviewer';
 const DISPATCH_RESULT_BEGIN = 'BEGIN_DISPATCH_RESULT';
 const DISPATCH_RESULT_END = 'END_DISPATCH_RESULT';
 
-interface ImplementerResult {
-  task_id: string;
-  status: 'completed' | 'blocked' | 'failed';
-  summary: string;
-  files_changed: string[];
-  tests: Array<{
-    command: string;
-    passed: boolean;
-    failures?: string[];
-  }>;
-  follow_up_actions: string[];
-}
+type DispatchContractErrorCode =
+  | 'marker_missing'
+  | 'json_parse_failed'
+  | 'schema_invalid'
+  | 'mode_unsupported';
 
-interface ReviewerIssue {
-  severity: 'critical' | 'important' | 'minor';
-  file?: string;
-  message: string;
-  fix: string;
-}
-
-interface ReviewerResult {
-  task_id: string;
-  assessment: 'approved' | 'needs_changes' | 'blocked';
-  strengths: string[];
-  issues: ReviewerIssue[];
-  required_fixes: string[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(item => typeof item === 'string');
-}
-
-function isImplementerResult(value: unknown): value is ImplementerResult {
-  if (!isRecord(value)) {
-    return false;
+class DispatchContractError extends Error {
+  constructor(
+    public readonly code: DispatchContractErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DispatchContractError';
   }
-  if (typeof value.task_id !== 'string') {
-    return false;
-  }
-  if (!['completed', 'blocked', 'failed'].includes(String(value.status))) {
-    return false;
-  }
-  if (typeof value.summary !== 'string') {
-    return false;
-  }
-  if (!isStringArray(value.files_changed)) {
-    return false;
-  }
-  if (!isStringArray(value.follow_up_actions)) {
-    return false;
-  }
-  if (!Array.isArray(value.tests)) {
-    return false;
-  }
-
-  return value.tests.every(test => {
-    if (!isRecord(test)) {
-      return false;
-    }
-    if (typeof test.command !== 'string' || typeof test.passed !== 'boolean') {
-      return false;
-    }
-    if (typeof test.failures !== 'undefined' && !isStringArray(test.failures)) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function isReviewerIssue(value: unknown): value is ReviewerIssue {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (!['critical', 'important', 'minor'].includes(String(value.severity))) {
-    return false;
-  }
-  if (typeof value.message !== 'string' || typeof value.fix !== 'string') {
-    return false;
-  }
-  if (typeof value.file !== 'undefined' && typeof value.file !== 'string') {
-    return false;
-  }
-  return true;
-}
-
-function isReviewerResult(value: unknown): value is ReviewerResult {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (typeof value.task_id !== 'string') {
-    return false;
-  }
-  if (!['approved', 'needs_changes', 'blocked'].includes(String(value.assessment))) {
-    return false;
-  }
-  if (!isStringArray(value.strengths) || !isStringArray(value.required_fixes)) {
-    return false;
-  }
-  if (!Array.isArray(value.issues) || !value.issues.every(isReviewerIssue)) {
-    return false;
-  }
-  return true;
 }
 
 function extractStructuredJson(rawOutput: string): unknown {
@@ -154,14 +75,17 @@ function extractStructuredJson(rawOutput: string): unknown {
   const endCount = (trimmed.match(new RegExp(DISPATCH_RESULT_END, 'g')) ?? []).length;
 
   if (beginCount !== 1 || endCount !== 1) {
-    throw new Error(`Invalid dispatch contract markers; expected exactly one ${DISPATCH_RESULT_BEGIN}/${DISPATCH_RESULT_END} block`);
+    throw new DispatchContractError(
+      'marker_missing',
+      `Invalid dispatch contract markers; expected exactly one ${DISPATCH_RESULT_BEGIN}/${DISPATCH_RESULT_END} block`,
+    );
   }
 
   if (!trimmed.startsWith(DISPATCH_RESULT_BEGIN)) {
-    throw new Error('Dispatch result must start with BEGIN_DISPATCH_RESULT marker');
+    throw new DispatchContractError('marker_missing', 'Dispatch result must start with BEGIN_DISPATCH_RESULT marker');
   }
   if (!trimmed.endsWith(DISPATCH_RESULT_END)) {
-    throw new Error('Dispatch result must end with END_DISPATCH_RESULT marker');
+    throw new DispatchContractError('marker_missing', 'Dispatch result must end with END_DISPATCH_RESULT marker');
   }
 
   const jsonBody = trimmed
@@ -169,18 +93,18 @@ function extractStructuredJson(rawOutput: string): unknown {
     .trim();
 
   if (!jsonBody) {
-    throw new Error('Dispatch result JSON body is empty');
+    throw new DispatchContractError('json_parse_failed', 'Dispatch result JSON body is empty');
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonBody);
   } catch {
-    throw new Error('Dispatch result JSON is invalid');
+    throw new DispatchContractError('json_parse_failed', 'Dispatch result JSON is invalid');
   }
 
-  if (!isRecord(parsed)) {
-    throw new Error('Dispatch result JSON must be an object');
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new DispatchContractError('schema_invalid', 'Dispatch result JSON must be an object');
   }
   return parsed;
 }
@@ -461,7 +385,6 @@ interface DispatchTelemetrySnapshot {
   dispatch_count: number;
   total_output_tokens: number;
   avg_output_tokens: number;
-  schema_invalid_retries: number;
   approval_loops: number;
   compaction_count: number;
   compaction_auto_count: number;
@@ -475,6 +398,9 @@ interface DispatchTelemetrySnapshot {
   ledger_prompt_tokens_baseline: number;
   ledger_prompt_tokens_actual: number;
   ledger_prompt_token_delta: number;
+  output_mode_counts: Record<DispatchOutputMode | 'unsupported', number>;
+  schema_error_counts: Record<DispatchContractErrorCode, number>;
+  schema_version_counts: Record<string, number>;
 }
 
 function buildDispatchGuideInstruction(input: {
@@ -498,6 +424,8 @@ function buildDispatchDynamicTail(input: {
   deltaPacket: Record<string, unknown>;
   guideMode: 'full' | 'compact';
   guideCacheKey: string;
+  outputMode: DispatchOutputMode;
+  schemaVersion: string;
 }): string {
   const guideInstruction = buildDispatchGuideInstruction({
     role: input.role,
@@ -509,6 +437,8 @@ function buildDispatchDynamicTail(input: {
     `Max output tokens: ${input.maxOutputTokens}`,
     `Delta context: ${JSON.stringify(input.deltaPacket)}`,
     `Guide cache key: ${input.guideCacheKey}`,
+    `Output mode: ${input.outputMode}`,
+    `Output schema version: ${input.schemaVersion}`,
     guideInstruction,
     'Task prompt:',
     input.taskPrompt,
@@ -561,6 +491,8 @@ ${DISPATCH_RESULT_END}`,
     deltaPacket: Record<string, unknown>;
     guideMode: 'full' | 'compact';
     guideCacheKey: string;
+    outputMode: DispatchOutputMode;
+    schemaVersion: string;
     tokenCharsPerToken?: number;
   }): CompiledDispatchPrompt {
     const templateId = input.role === 'implementer' ? 'dispatch_implementer' : 'dispatch_reviewer';
@@ -610,7 +542,6 @@ class DispatchRuntimeManager {
     dispatch_count: 0,
     total_output_tokens: 0,
     avg_output_tokens: 0,
-    schema_invalid_retries: 0,
     approval_loops: 0,
     compaction_count: 0,
     compaction_auto_count: 0,
@@ -631,6 +562,17 @@ class DispatchRuntimeManager {
     ledger_prompt_tokens_baseline: 0,
     ledger_prompt_tokens_actual: 0,
     ledger_prompt_token_delta: 0,
+    output_mode_counts: {
+      schema_constrained: 0,
+      unsupported: 0,
+    },
+    schema_error_counts: {
+      marker_missing: 0,
+      json_parse_failed: 0,
+      schema_invalid: 0,
+      mode_unsupported: 0,
+    },
+    schema_version_counts: {},
   };
 
   constructor() {
@@ -723,7 +665,11 @@ class DispatchRuntimeManager {
     }
 
     if (args.role === 'implementer') {
-      this.schemaRegistry.assert('dispatch.result.implementer', parsed, 'v1');
+      try {
+        this.schemaRegistry.assert('dispatch.result.implementer', parsed, DISPATCH_CONTRACT_SCHEMA_VERSION);
+      } catch {
+        throw new DispatchContractError('schema_invalid', 'Implementer dispatch result failed schema validation');
+      }
       const result = parsed as ImplementerResult;
       const responseEvent = await this.publishEvent({
         partition_key: args.runId,
@@ -771,7 +717,11 @@ class DispatchRuntimeManager {
       };
     }
 
-    this.schemaRegistry.assert('dispatch.result.reviewer', parsed, 'v1');
+    try {
+      this.schemaRegistry.assert('dispatch.result.reviewer', parsed, DISPATCH_CONTRACT_SCHEMA_VERSION);
+    } catch {
+      throw new DispatchContractError('schema_invalid', 'Reviewer dispatch result failed schema validation');
+    }
     const result = parsed as ReviewerResult;
     const responseEvent = await this.publishEvent({
       partition_key: args.runId,
@@ -853,6 +803,19 @@ class DispatchRuntimeManager {
     compactionTrace: DispatchCompactionTrace[];
   }> {
     let snapshot = await this.assertRunBinding(args.runId, args.taskId);
+    const outputModeResolution = resolveDispatchOutputMode({ role: args.role });
+    if (outputModeResolution.decision === 'unsupported') {
+      this.bumpOutputModeTelemetry('unsupported');
+      this.bumpSchemaErrorTelemetry('mode_unsupported');
+      throw new DispatchContractError(
+        'mode_unsupported',
+        `mode_unsupported: role ${args.role} provider is not configured for schema-constrained output`,
+      );
+    }
+    const outputMode: DispatchOutputMode = outputModeResolution.mode ?? 'schema_constrained';
+    this.bumpOutputModeTelemetry(outputMode);
+    this.bumpSchemaVersionTelemetry(DISPATCH_CONTRACT_SCHEMA_VERSION);
+
     const snapshotFactMap = new Map((snapshot.facts ?? []).map(fact => [fact.k, fact.v]));
     let progressLedger = progressLedgerFromFacts(snapshot.facts ?? []);
     const missingProgressLedger = !progressLedger;
@@ -941,6 +904,8 @@ class DispatchRuntimeManager {
       deltaPacket,
       guideMode,
       guideCacheKey,
+      outputMode,
+      schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
       tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
     });
     const promptTokensBefore = compiled.promptTokens;
@@ -967,6 +932,8 @@ class DispatchRuntimeManager {
           deltaPacket,
           guideMode,
           guideCacheKey,
+          outputMode,
+          schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
           tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
         });
         if (stageACompiled.promptTokens <= compiled.promptTokens) {
@@ -992,6 +959,8 @@ class DispatchRuntimeManager {
           deltaPacket,
           guideMode,
           guideCacheKey,
+          outputMode,
+          schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
           tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
         });
         if (stageBCompiled.promptTokens <= compiled.promptTokens) {
@@ -1018,6 +987,8 @@ class DispatchRuntimeManager {
           deltaPacket,
           guideMode,
           guideCacheKey,
+          outputMode,
+          schemaVersion: DISPATCH_CONTRACT_SCHEMA_VERSION,
           tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
         });
         if (stageCCompiled.promptTokens <= compiled.promptTokens) {
@@ -1097,25 +1068,24 @@ class DispatchRuntimeManager {
       ...this.telemetry,
       compaction_stage_distribution: { ...this.telemetry.compaction_stage_distribution },
       ledger_mode_usage: { ...this.telemetry.ledger_mode_usage },
+      output_mode_counts: { ...this.telemetry.output_mode_counts },
+      schema_error_counts: { ...this.telemetry.schema_error_counts },
+      schema_version_counts: { ...this.telemetry.schema_version_counts },
     };
   }
 
-  async recordSchemaInvalidRetry(args: {
+  async recordTerminalContractFailure(args: {
     runId: string;
     role: DispatchRole;
     taskId: string;
+    errorCode: DispatchContractErrorCode;
     errorMessage: string;
-  }): Promise<{
-    retryCount: number;
-    terminal: boolean;
-    snapshot: StateSnapshot;
-  }> {
-    const snapshot = await this.requireSnapshot(args.runId);
-    const retriesKey = `schema_invalid_retries:${args.role}:${args.taskId}`;
-    const existingRetryValue = Number(snapshot.facts.find(f => f.k === retriesKey)?.v ?? '0');
-    const retryCount = existingRetryValue + 1;
-    this.telemetry.schema_invalid_retries += 1;
-
+  }): Promise<StateSnapshot | null> {
+    this.bumpSchemaErrorTelemetry(args.errorCode);
+    const snapshot = await this.snapshotStore.get(args.runId);
+    if (!snapshot) {
+      return null;
+    }
     const errorEvent = await this.publishEvent({
       partition_key: args.runId,
       run_id: args.runId,
@@ -1123,32 +1093,26 @@ class DispatchRuntimeManager {
       agent_id: args.role,
       type: 'ERROR',
       payload: {
-        code: 'schema_invalid',
+        code: args.errorCode,
         role: args.role,
         task_id: args.taskId,
-        retry_count: retryCount,
         message: args.errorMessage,
       },
     });
-
-    const updatedFacts = this.mergeFacts(snapshot.facts, [
-      { k: retriesKey, v: String(retryCount), confidence: 1 },
-    ]);
-
-    const terminal = retryCount >= 2;
     await this.updateSnapshot(
       args.runId,
       errorEvent,
-      updatedFacts,
+      [
+        {
+          k: `schema_contract_failure:last`,
+          v: args.errorCode,
+          confidence: 1,
+        },
+      ],
       args.taskId,
-      terminal ? 'failed' : 'blocked'
+      'failed',
     );
-
-    return {
-      retryCount,
-      terminal,
-      snapshot: await this.requireSnapshot(args.runId),
-    };
+    return this.requireSnapshot(args.runId);
   }
 
   private async publishEvent(draft: RuntimeEventDraft): Promise<RuntimeEventEnvelope> {
@@ -1204,6 +1168,19 @@ class DispatchRuntimeManager {
     this.telemetry.ledger_prompt_tokens_actual += actualTokens;
     this.telemetry.ledger_prompt_token_delta =
       this.telemetry.ledger_prompt_tokens_actual - this.telemetry.ledger_prompt_tokens_baseline;
+  }
+
+  private bumpOutputModeTelemetry(mode: DispatchOutputMode | 'unsupported'): void {
+    this.telemetry.output_mode_counts[mode] += 1;
+  }
+
+  private bumpSchemaErrorTelemetry(errorCode: DispatchContractErrorCode): void {
+    this.telemetry.schema_error_counts[errorCode] += 1;
+  }
+
+  private bumpSchemaVersionTelemetry(schemaVersion: string): void {
+    this.telemetry.schema_version_counts[schemaVersion] =
+      (this.telemetry.schema_version_counts[schemaVersion] ?? 0) + 1;
   }
 
   private resolvePromptInputBudget(role: DispatchRole, maxOutputTokens: number): number {
@@ -1285,14 +1262,14 @@ class DispatchRuntimeManager {
   private registerSchemas(): void {
     this.schemaRegistry.register(
       'dispatch.result.implementer',
-      'dispatch_result_implementer',
-      'v1',
+      DISPATCH_IMPLEMENTER_SCHEMA_ID,
+      DISPATCH_CONTRACT_SCHEMA_VERSION,
       isImplementerResult
     );
     this.schemaRegistry.register(
       'dispatch.result.reviewer',
-      'dispatch_result_reviewer',
-      'v1',
+      DISPATCH_REVIEWER_SCHEMA_ID,
+      DISPATCH_CONTRACT_SCHEMA_VERSION,
       isReviewerResult
     );
   }
@@ -1308,6 +1285,7 @@ function errorCodeFromMessage(
   | 'progress_ledger_missing_tasks'
   | 'progress_ledger_parse_failed'
   | 'progress_ledger_incomplete'
+  | 'mode_unsupported'
   | null {
   if (message.startsWith('run_not_initialized:')) {
     return 'run_not_initialized';
@@ -1326,6 +1304,9 @@ function errorCodeFromMessage(
   }
   if (message.startsWith('progress_ledger_incomplete:')) {
     return 'progress_ledger_incomplete';
+  }
+  if (message.startsWith('mode_unsupported:')) {
+    return 'mode_unsupported';
   }
   return null;
 }
@@ -1624,51 +1605,30 @@ export async function dispatchRuntimeHandler(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const errorCode = errorCodeFromMessage(message);
-    const isSchemaInvalid =
-      message.includes('Schema validation failed') ||
-      message.includes('Dispatch result') ||
-      message.includes('No valid JSON');
-
-    if (isSchemaInvalid) {
-      try {
-        const retry = await dispatchRuntimeManager.recordSchemaInvalidRetry({
+    if (error instanceof DispatchContractError) {
+      const snapshot = await dispatchRuntimeManager.recordTerminalContractFailure({
+        runId,
+        role,
+        taskId,
+        errorCode: error.code,
+        errorMessage: message,
+      });
+      return {
+        success: false,
+        message,
+        data: {
           runId,
           role,
           taskId,
-          errorMessage: message,
-        });
-        const nextAction = retry.terminal
-          ? 'halt_schema_invalid_terminal'
-          : 'retry_once_schema_invalid';
-        return {
-          success: false,
-          message,
-          data: {
-            runId,
-            role,
-            taskId,
-            retryCount: retry.retryCount,
-            nextAction,
-            snapshot: retry.snapshot,
-            telemetry: dispatchRuntimeManager.getTelemetrySnapshot(),
-          },
-        };
-      } catch {
-        return {
-          success: false,
-          message,
-          data: {
-            runId,
-            role,
-            taskId,
-            nextAction: 'halt_schema_invalid_terminal',
-            telemetry: dispatchRuntimeManager.getTelemetrySnapshot(),
-          },
-        };
-      }
+          errorCode: error.code,
+          nextAction: 'halt_schema_invalid_terminal',
+          snapshot,
+          telemetry: dispatchRuntimeManager.getTelemetrySnapshot(),
+        },
+      };
     }
 
+    const errorCode = errorCodeFromMessage(message);
     return {
       success: false,
       message,

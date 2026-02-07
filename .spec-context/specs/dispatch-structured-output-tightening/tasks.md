@@ -1,165 +1,168 @@
 # Tasks Document: Dispatch Structured Output Tightening (Dimension 3 P0)
 
-> Tasks follow TDD. Keep existing dispatch-runtime behavior compatible while tightening contracts.
+> Tasks follow TDD and fail-fast principles. No fallback or defensive recovery paths.
 
-- [ ] 1. Create canonical dispatch schema module
+- [x] 1. Create canonical dispatch schema module
   - File: `src/tools/workflow/dispatch-contract-schemas.ts` (new)
   - Define canonical `v1` schemas for implementer/reviewer outputs
-  - Export `full` + `decode_safe` profiles and helper validators
-  - Purpose: Establish a single source of truth for structured output contracts
-  - _Leverage: `src/tools/workflow/dispatch-runtime.ts` existing interfaces_
-  - _Requirements: 2, 4_
+  - Export strict validators and schema metadata (id/version)
+  - Purpose: single source of truth for runtime and guide contracts
+  - _Leverage: `src/tools/workflow/dispatch-runtime.ts` existing result interfaces_
+  - _Requirements: 2_
   - _Prompt: |
       Implement the task for spec dispatch-structured-output-tightening, first call get-implementer-guide to load implementation rules then implement the task:
 
       Role: TypeScript Developer specializing in schema contracts
 
-      Task: Add canonical dispatch JSON schemas with full/decode-safe profiles and strict typing.
+      Task: Add canonical dispatch JSON schema artifacts and strict validators for implementer/reviewer outputs.
 
       Restrictions:
-      - No new runtime dependencies
-      - Keep schema keys aligned with existing interfaces
-      - Maintain current `v1` payload compatibility
+      - No alternate relaxed schema profiles
+      - No new dependencies
+      - Preserve current `v1` payload shape
 
       Success:
-      - Canonical schemas compile and are reusable
-      - decode_safe profile is explicit and documented in code
-      - Existing contract fields remain compatible
+      - Canonical schemas are explicit and reusable
+      - Validators are derived from canonical artifacts
+      - Schema metadata is available for telemetry/guides
 
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 2. Add output mode capability resolver
+- [x] 2. Add strict provider capability gate (no fallback)
   - File: `src/tools/workflow/dispatch-output-mode.ts` (new)
-  - Implement mode resolver: `schema_constrained` -> `json_mode` -> `contract_only`
-  - Add provider capability map + optional env override support
-  - Purpose: Avoid invalid assumptions about provider constrained-decoding support
+  - Implement capability resolver returning `schema_constrained` or terminal `unsupported`
+  - Unknown providers must resolve to `unsupported`
+  - Purpose: block unsupported providers before dispatch execution
   - _Leverage: `src/config/discipline.ts` provider catalog_
-  - _Requirements: 3_
+  - _Requirements: 3, 4_
   - _Prompt: |
       Implement the task for spec dispatch-structured-output-tightening, first call get-implementer-guide to load implementation rules then implement the task:
 
-      Role: TypeScript Developer specializing in capability negotiation
+      Role: TypeScript Developer specializing in capability enforcement
 
-      Task: Create deterministic output-mode selection based on provider capabilities and fallback rules.
+      Task: Build a strict capability gate for schema-constrained dispatch output with no fallback modes.
 
       Restrictions:
-      - Deterministic behavior only (no heuristics)
-      - Unknown providers must degrade safely to contract_only
-      - Keep role-aware extension points
+      - No `json_mode` or `contract_only` fallback path
+      - Unknown providers are terminally unsupported
+      - Deterministic behavior only
 
       Success:
-      - Mode selection is predictable and testable
-      - Unsupported mode requests are surfaced cleanly
-      - Fallback chain is enforced
+      - Capability checks pass/fail deterministically
+      - Unsupported providers fail before dispatch
+      - Gate results are testable and typed
 
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 3. Integrate canonical schemas into dispatch runtime validation
+- [x] 3. Integrate canonical schemas and fail-fast ingest errors
   - File: `src/tools/workflow/dispatch-runtime.ts`
-  - Register validators from schema module instead of ad-hoc-only validators
-  - Add typed schema error categories (`marker_missing`, `json_parse_failed`, `schema_invalid`)
-  - Preserve retry-on-invalid behavior
-  - Purpose: Tighten ingest gate while maintaining current runtime contract
-  - _Leverage: `SchemaRegistry`, existing retry flow in dispatch-runtime_
-  - _Requirements: 1, 2, 5_
+  - Replace ad-hoc schema registration with canonical schema validators
+  - Add explicit contract error categories (`marker_missing`, `json_parse_failed`, `schema_invalid`)
+  - Remove defensive schema-invalid retry loop in runtime
+  - Purpose: deterministic terminal behavior for malformed output
+  - _Leverage: existing ingest parser + telemetry path_
+  - _Requirements: 1, 2_
   - _Prompt: |
       Implement the task for spec dispatch-structured-output-tightening, first call get-implementer-guide to load implementation rules then implement the task:
 
-      Role: TypeScript Developer specializing in runtime validation pipelines
+      Role: TypeScript Developer specializing in runtime validation
 
-      Task: Wire canonical schema validation and categorized contract errors into ingest_output.
+      Task: Wire canonical validators into ingest_output and make contract violations terminal with typed error categories.
 
       Restrictions:
-      - Do not remove existing retry policy semantics
-      - Keep output parsing deterministic
-      - Preserve current public response shape unless extending with additive fields
+      - No auto-retry for malformed contract output
+      - No silent parse fallbacks
+      - Preserve successful-path behavior
 
       Success:
-      - Runtime validates with canonical schema source
-      - Error categories are explicit
-      - Existing tests remain green with additive updates
+      - Contract violations fail fast and categorically
+      - Runtime uses canonical schema module
+      - Existing valid outputs continue to pass
 
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 4. Add mode-aware guidance text for implementer/reviewer dispatch
+- [x] 4. Align guide/prompt contract text with strict schema policy
   - File: `src/tools/workflow/get-implementer-guide.ts`, `src/tools/workflow/get-reviewer-guide.ts`, `src/prompts/implement-task.ts`
-  - Add output-mode-specific contract instructions while preserving strict marker rules
-  - Ensure compact and full guides both include hard no-prose requirement
-  - Purpose: Increase first-pass schema compliance from subagents
-  - _Leverage: existing output contract sections in guide files_
-  - _Requirements: 1, 3_
+  - Keep strict no-prose marker contract language
+  - Add schema id/version references used by runtime
+  - Remove fallback/soft-language wording
+  - Purpose: keep producer instructions identical to runtime gate
+  - _Leverage: existing output contract sections_
+  - _Requirements: 1, 2_
   - _Prompt: |
       Implement the task for spec dispatch-structured-output-tightening, first call get-implementer-guide to load implementation rules then implement the task:
 
       Role: Technical Writer + TypeScript Developer
 
-      Task: Add mode-aware structured-output guidance without weakening existing strict contract instructions.
+      Task: Update guide/prompt contract instructions to match strict schema-constrained policy with no fallback language.
 
       Restrictions:
-      - Keep contract examples concise
-      - No provider marketing language
-      - Preserve existing discipline mode behavior
+      - Keep examples concise and schema-accurate
+      - Preserve discipline mode behavior
+      - Do not introduce optional/defensive wording
 
       Success:
-      - Guidance includes mode-specific instructions
-      - No-prose and marker rules remain explicit in all variants
-      - Prompt orchestration text references selected mode cleanly
+      - Contract text is unambiguous and strict
+      - Schema metadata is visible to agents
+      - Instructions match runtime enforcement exactly
 
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 5. Extend telemetry for structured output modes and errors
+- [x] 5. Extend telemetry for strict contract enforcement
   - File: `src/tools/workflow/dispatch-runtime.ts`
-  - Add telemetry counters for mode usage, schema versions, and categorized failures
+  - Add counters for capability gate outcomes and categorized terminal failures
+  - Add schema version counters
   - Expose through `get_telemetry`
-  - Purpose: Measure real impact and detect regressions per mode/provider
-  - _Leverage: existing compaction and schema retry telemetry patterns_
+  - Purpose: measure strict enforcement health and failure hotspots
+  - _Leverage: existing dispatch telemetry structure_
   - _Requirements: 5_
   - _Prompt: |
       Implement the task for spec dispatch-structured-output-tightening, first call get-implementer-guide to load implementation rules then implement the task:
 
-      Role: TypeScript Developer specializing in operational telemetry
+      Role: TypeScript Developer specializing in telemetry
 
-      Task: Extend dispatch telemetry with structured-output mode and error-category metrics.
+      Task: Add strict-output telemetry for gate decisions, schema version usage, and terminal failure categories.
 
       Restrictions:
-      - Do not remove existing fields
-      - Keep metric keys stable and machine-readable
-      - Maintain backward-compatible numeric defaults
+      - Keep existing fields intact
+      - No degraded/fallback metrics
+      - Machine-readable stable metric keys
 
       Success:
-      - Telemetry reports mode counts and error breakdowns
-      - Metrics are updated in ingest/compile flows
+      - Telemetry surfaces strict-output health clearly
+      - Metrics update on both success and failure paths
       - get_telemetry remains backward compatible
 
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
 
-- [ ] 6. Add full test matrix for mode selection and validation paths
+- [x] 6. Add strictness test matrix
   - File: `src/tools/workflow/dispatch-contract-schemas.test.ts` (new), `src/tools/workflow/dispatch-output-mode.test.ts` (new), `src/tools/workflow/dispatch-runtime.test.ts`, `src/tools/workflow/dispatch-runtime.integration.test.ts`
-  - Cover success + failure classes for each output mode and retry behavior
-  - Purpose: lock in deterministic structured-output guarantees
+  - Cover strict schema pass/fail, capability gate, terminal failure categories
+  - Ensure no retry-on-invalid behavior remains
+  - Purpose: prevent regression to defensive or fallback behavior
   - _Leverage: existing dispatch runtime tests_
   - _Requirements: 6_
   - _Prompt: |
       Implement the task for spec dispatch-structured-output-tightening, first call get-implementer-guide to load implementation rules then implement the task:
 
-      Role: QA Engineer specializing in contract/integration testing
+      Role: QA Engineer specializing in contract testing
 
-      Task: Add tests for schema profiles, output-mode fallback, strict marker enforcement, and categorized failure telemetry.
+      Task: Add tests enforcing strict no-fallback behavior across schema validation and provider capability gating.
 
       Restrictions:
       - Do not remove existing tests
-      - Keep integration tests deterministic
-      - Ensure one test covers each failure category
+      - Add explicit assertions for terminal failures
+      - Keep tests deterministic
 
       Success:
-      - Unit and integration tests cover all modes and failure paths
-      - Existing dispatch-runtime tests remain passing
-      - Regression risk for structured-output drift is significantly reduced
+      - Contract and capability failures are terminal and categorized
+      - No retry-on-invalid tests remain
+      - Existing valid-path tests still pass
 
       Before starting, mark this task as in-progress in tasks.md [-]
       When complete, mark this task as done in tasks.md [x]_
