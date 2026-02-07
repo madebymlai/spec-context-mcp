@@ -45,18 +45,6 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **Relationship to observation masking:** These are complementary, not competing. Offloading gates large results at the point of entry. Masking handles the long tail of accumulated normal-sized results. Implement both — offloading first (prevents blowouts), masking second (steady-state compression).
 
-### Later if needed: ACON Compression Guidelines — P1
-
-**What:** A framework that optimizes natural-language "compression guidelines" by analyzing failure cases where compressed context led to errors. Can distill the strategy into smaller models preserving 95% accuracy. Subsumes observation masking with a more sophisticated, learned selection strategy.
-
-**Evidence:** 26-54% peak token reduction. 95% accuracy in distilled compressors. October 2025. Grade: **[medium]** — no public code yet.
-
-**Implementation reference:** Paper: [arxiv.org/abs/2510.00615](https://arxiv.org/abs/2510.00615).
-
-**Maps to our system:** The `StateProjector` and `StateSnapshotFact` types align with ACON's factual state abstraction. The `ingest_output` action could use learned compression guidelines. Only worth pursuing if observation masking + offloading prove insufficient — ACON adds complexity for marginal gains on top of the simpler techniques.
-
-**Relationship to observation masking:** ACON subsumes observation masking. If you implement ACON fully, observation masking becomes redundant. Start with masking (simple, proven, free); graduate to ACON only if the orchestrator handles long-horizon tasks (15+ dispatch cycles) where masking alone loses important context.
-
 ### Later if needed: Context Compaction (Pre-Dispatch) — P1 [OK]
 
 **What:** Summarize orchestrator context into compact form before dispatching to subagent. Key insight: aggressive early compaction preserves more working memory than late compaction. Prevents subagents from losing orchestrator-injected rules during their own internal compaction.
@@ -68,6 +56,18 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 **Maps to our system:** The `compile_prompt` action already does partial pre-compaction via stable prefix + dynamic tail. The key value is defensive: ensure the orchestrator sends minimum viable context so subagents never trigger their own internal compaction, which may lose orchestrator instructions.
 
 **Relationship to observation masking:** Pre-dispatch compaction is the umbrella; observation masking is the specific technique within it. If masking + offloading keep the dispatch prompt small enough that subagents don't trigger internal compaction, explicit pre-compaction adds nothing.
+
+### Later if needed: ACON Compression Guidelines — P2 [SKIP]
+
+**What:** A framework that optimizes natural-language "compression guidelines" by analyzing failure cases where compressed context led to errors. Can distill the strategy into smaller models preserving 95% accuracy. Subsumes observation masking with a more sophisticated, learned selection strategy.
+
+**Evidence:** 26-54% peak token reduction. 95% accuracy in distilled compressors. October 2025. Grade: **[medium]** — no public code yet.
+
+**Implementation reference:** Paper: [arxiv.org/abs/2510.00615](https://arxiv.org/abs/2510.00615).
+
+**Maps to our system:** The `StateProjector` and `StateSnapshotFact` types align with ACON's factual state abstraction. The `ingest_output` action could use learned compression guidelines. Only worth pursuing if observation masking + offloading prove insufficient — ACON adds complexity for marginal gains on top of the simpler techniques.
+
+**Relationship to observation masking:** ACON subsumes observation masking. If you implement ACON fully, observation masking becomes redundant. Start with masking (simple, proven, free); graduate to ACON only if the orchestrator handles long-horizon tasks (15+ dispatch cycles) where masking alone loses important context.
 
 ### Dimension 1 summary
 
@@ -199,7 +199,7 @@ These compound multiplicatively. Within each dimension, techniques have diminish
 
 **Maps to our system:** Tools like `spec-status`, `get-implementer-guide`, `get-reviewer-guide` all read files from disk. Add TTL-based in-memory cache keyed on file path + mtime. Reduces token volume sent through MCP to the host agent.
 
-### Then: Agentic Plan Caching — P1
+### Then: Agentic Plan Caching — P1 [SKIP]
 
 **What:** Cache successful dispatch sequences as reusable plan templates. When a semantically similar task arrives, adapt the cached plan using a lightweight model instead of running the full dispatch from scratch.
 
