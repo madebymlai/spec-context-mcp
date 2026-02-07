@@ -1,7 +1,8 @@
 import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { dispatchRuntimeHandler } from './dispatch-runtime.js';
+import { RoutingTable, type ITaskComplexityClassifier } from '../../core/routing/index.js';
+import { DispatchRuntimeManager, dispatchRuntimeHandler } from './dispatch-runtime.js';
 
 const SPEC_NAME = 'dispatch-task-progress-ledgers';
 const SPEC_DIR = join(process.cwd(), '.spec-context', 'specs', SPEC_NAME);
@@ -45,6 +46,12 @@ describe('dispatch-runtime tool', () => {
 - [ ] 6.1 Provider gate fixture
   - _Requirements: 1_
   - _Prompt: Role: TypeScript Developer | Task: Implement task 6.1_
+- [ ] 8.1 Simple routing fixture
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Fix typo in README.md_
+- [ ] 9.1 Classifier fallback fixture
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Implement task 9.1_
 `,
       'utf8'
     );
@@ -196,6 +203,56 @@ END_DISPATCH_RESULT`,
     expect(result.success).toBe(true);
     expect(result.data?.runId).toBe('test-run-init');
     expect(result.data?.snapshot?.goal).toContain('dispatch_task');
+    expect(result.data?.classification_level).toBeTypeOf('string');
+    expect(result.data?.selected_provider).toBeTypeOf('string');
+  });
+
+  it('classifies simple tasks and selects the mapped provider during init_run', async () => {
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-init-simple-routing',
+        specName: SPEC_NAME,
+        taskId: '8.1',
+      },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.classification_level).toBe('simple');
+    expect(result.data?.selected_provider).toBe('codex');
+    const facts = (result.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
+    expect(facts.find(fact => fact.k === 'classification_level')?.v).toBe('simple');
+    expect(facts.find(fact => fact.k === 'selected_provider')?.v).toBe('codex');
+    expect(facts.find(fact => fact.k === 'classification_features')?.v).toContain('keyword_match');
+  });
+
+  it('defaults classification to complex when classifier strategy throws', async () => {
+    const classifier: ITaskComplexityClassifier = {
+      classify: () => {
+        throw new Error('classifier failure');
+      },
+    };
+    const manager = new DispatchRuntimeManager(
+      classifier,
+      new RoutingTable({
+        simple: 'codex',
+        moderate: 'claude',
+        complex: 'claude',
+      }),
+    );
+
+    const snapshot = await manager.initRun(
+      'test-run-classifier-fallback',
+      SPEC_NAME,
+      '9.1',
+      context.projectPath
+    );
+
+    const facts = snapshot.facts as Array<{ k: string; v: string }>;
+    expect(facts.find(fact => fact.k === 'classification_level')?.v).toBe('complex');
+    expect(facts.find(fact => fact.k === 'selected_provider')?.v).toBe('claude');
+    expect(facts.find(fact => fact.k === 'classification_classifier_id')?.v).toBe('fallback');
   });
 
   it('ingests implementer output using strict JSON contract', async () => {

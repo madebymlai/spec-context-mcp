@@ -86,6 +86,8 @@ describe('dispatch-runtime integration (no mocks)', () => {
       });
       expect(init.success).toBe(true);
       expect(findFact(init, 'ledger.progress.active_task_id')).toBe(taskId);
+      expect(init.data?.selected_provider).toBeTypeOf('string');
+      expect(init.data?.classification_level).toBeTypeOf('string');
 
       const compileImplementer = await callDispatch(projectPath, {
         action: 'compile_prompt',

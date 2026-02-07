@@ -40,9 +40,22 @@ import {
   type ReviewerResult,
 } from './dispatch-contract-schemas.js';
 import { getSharedFileContentCacheTelemetry } from '../../core/cache/shared-file-content-cache.js';
+import {
+  HeuristicComplexityClassifier,
+  RoutingTable,
+  type ClassificationResult,
+  type ITaskComplexityClassifier,
+} from '../../core/routing/index.js';
 
 type DispatchAction = 'init_run' | 'ingest_output' | 'get_snapshot' | 'compile_prompt' | 'get_telemetry';
 type DispatchRole = 'implementer' | 'reviewer';
+
+const DISPATCH_CLASSIFICATION_FACT_KEYS = {
+  level: 'classification_level',
+  selectedProvider: 'selected_provider',
+  features: 'classification_features',
+  classifierId: 'classification_classifier_id',
+} as const;
 
 const DISPATCH_RESULT_BEGIN = 'BEGIN_DISPATCH_RESULT';
 const DISPATCH_RESULT_END = 'END_DISPATCH_RESULT';
@@ -401,6 +414,13 @@ interface DispatchCoreTelemetry {
   approval_loops: number;
 }
 
+const FALLBACK_CLASSIFICATION_RESULT: ClassificationResult = {
+  level: 'complex',
+  confidence: 0,
+  features: [],
+  classifierId: 'fallback',
+};
+
 interface DispatchCompactionTelemetry {
   compaction_count: number;
   compaction_auto_count: number;
@@ -546,7 +566,7 @@ ${DISPATCH_RESULT_END}`,
   }
 }
 
-class DispatchRuntimeManager {
+export class DispatchRuntimeManager {
   private readonly eventStream = new RuntimeEventStream();
   private readonly snapshotStore = new RuntimeSnapshotStore();
   private readonly schemaRegistry = new SchemaRegistry();
@@ -591,7 +611,10 @@ class DispatchRuntimeManager {
     schema_version_counts: {},
   };
 
-  constructor() {
+  constructor(
+    private readonly classifier: ITaskComplexityClassifier,
+    private readonly routingTable: RoutingTable,
+  ) {
     this.registerSchemas();
   }
 
@@ -610,6 +633,22 @@ class DispatchRuntimeManager {
 
     this.guidePromptCounts.delete(`${runId}:implementer`);
     this.guidePromptCounts.delete(`${runId}:reviewer`);
+
+    const taskDescription = progressLedger.currentTask?.prompt?.trim()
+      || progressLedger.currentTask?.description?.trim()
+      || '';
+    let classification = FALLBACK_CLASSIFICATION_RESULT;
+    try {
+      classification = this.classifier.classify({
+        taskDescription,
+        taskId,
+        specName,
+      });
+    } catch (error) {
+      console.error('[dispatch-runtime] task complexity classification failed', error);
+    }
+    const routingEntry = this.routingTable.resolve(classification.level, 'implementer');
+
     const initEvent = await this.publishEvent({
       partition_key: runId,
       run_id: runId,
@@ -622,6 +661,8 @@ class DispatchRuntimeManager {
         dispatch_status: 'running',
         ledger_progress_totals: progressLedger.totals,
         ledger_progress_active_task_id: progressLedger.activeTaskId,
+        classification_level: classification.level,
+        selected_provider: routingEntry.provider,
       },
     });
 
@@ -632,6 +673,14 @@ class DispatchRuntimeManager {
       facts: [
         { k: 'spec_name', v: specName, confidence: 1 },
         { k: 'task_id', v: taskId, confidence: 1 },
+        { k: DISPATCH_CLASSIFICATION_FACT_KEYS.level, v: classification.level, confidence: classification.confidence },
+        { k: DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider, v: routingEntry.provider, confidence: 1 },
+        {
+          k: DISPATCH_CLASSIFICATION_FACT_KEYS.features,
+          v: JSON.stringify(classification.features),
+          confidence: 1,
+        },
+        { k: DISPATCH_CLASSIFICATION_FACT_KEYS.classifierId, v: classification.classifierId, confidence: 1 },
         ...progressLedgerToFacts(progressLedger),
         ...taskLedgerToFacts(taskLedger),
       ],
@@ -1267,8 +1316,10 @@ class DispatchRuntimeManager {
     registerDispatchContractSchemas(this.schemaRegistry);
   }
 }
-
-const dispatchRuntimeManager = new DispatchRuntimeManager();
+const dispatchRuntimeManager = new DispatchRuntimeManager(
+  new HeuristicComplexityClassifier(),
+  RoutingTable.fromEnvOrDefault(),
+);
 
 type DispatchToolErrorCode =
   | DispatchRuntimeErrorCode
@@ -1360,6 +1411,8 @@ export async function dispatchRuntimeHandler(
   args: Record<string, unknown>,
   context: ToolContext
 ): Promise<ToolResponse> {
+  const getFactValue = (snapshot: StateSnapshot, key: string): string | undefined =>
+    snapshot.facts.find(fact => fact.k === key)?.v;
   const action = String(args.action || '') as DispatchAction;
 
   if (!['init_run', 'ingest_output', 'get_snapshot', 'compile_prompt', 'get_telemetry'].includes(action)) {
@@ -1387,6 +1440,8 @@ export async function dispatchRuntimeHandler(
         data: {
           runId,
           snapshot,
+          selected_provider: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider),
+          classification_level: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.level),
         },
       };
     } catch (error) {
