@@ -152,44 +152,44 @@ function extractStructuredJson(rawOutput: string): unknown {
   return parsed;
 }
 
+const IMPLEMENTER_NEXT_ACTION_BY_STATUS: Record<ImplementerResult['status'], string> = {
+  completed: 'dispatch_reviewer',
+  blocked: 'retry_implementer_with_constraints',
+  failed: 'retry_implementer',
+};
+
+const REVIEWER_NEXT_ACTION_BY_ASSESSMENT: Record<ReviewerResult['assessment'], string> = {
+  approved: 'advance_to_next_task',
+  needs_changes: 'dispatch_implementer_fixes',
+  blocked: 'halt_and_escalate',
+};
+
+const SNAPSHOT_STATUS_BY_IMPLEMENTER_STATUS: Record<ImplementerResult['status'], StateSnapshot['status']> = {
+  completed: 'running',
+  blocked: 'blocked',
+  failed: 'failed',
+};
+
+const SNAPSHOT_STATUS_BY_REVIEWER_ASSESSMENT: Record<ReviewerResult['assessment'], StateSnapshot['status']> = {
+  approved: 'done',
+  needs_changes: 'blocked',
+  blocked: 'failed',
+};
+
 function nextActionForImplementer(result: ImplementerResult): string {
-  if (result.status === 'completed') {
-    return 'dispatch_reviewer';
-  }
-  if (result.status === 'blocked') {
-    return 'retry_implementer_with_constraints';
-  }
-  return 'retry_implementer';
+  return IMPLEMENTER_NEXT_ACTION_BY_STATUS[result.status];
 }
 
 function nextActionForReviewer(result: ReviewerResult): string {
-  if (result.assessment === 'approved') {
-    return 'advance_to_next_task';
-  }
-  if (result.assessment === 'needs_changes') {
-    return 'dispatch_implementer_fixes';
-  }
-  return 'halt_and_escalate';
+  return REVIEWER_NEXT_ACTION_BY_ASSESSMENT[result.assessment];
 }
 
 function statusForImplementer(result: ImplementerResult): StateSnapshot['status'] {
-  if (result.status === 'completed') {
-    return 'running';
-  }
-  if (result.status === 'blocked') {
-    return 'blocked';
-  }
-  return 'failed';
+  return SNAPSHOT_STATUS_BY_IMPLEMENTER_STATUS[result.status];
 }
 
 function statusForReviewer(result: ReviewerResult): StateSnapshot['status'] {
-  if (result.assessment === 'approved') {
-    return 'done';
-  }
-  if (result.assessment === 'needs_changes') {
-    return 'blocked';
-  }
-  return 'failed';
+  return SNAPSHOT_STATUS_BY_REVIEWER_ASSESSMENT[result.assessment];
 }
 
 function estimateTokensFromChars(value: string, charsPerToken = 4): number {

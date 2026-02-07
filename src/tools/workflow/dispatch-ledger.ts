@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import { resolve } from 'path';
 import type { StateSnapshotFact } from '../../core/llm/index.js';
 import { parseTasksFromMarkdown } from '../../core/workflow/task-parser.js';
+import type { ImplementerResult, ReviewerResult } from './dispatch-contract-schemas.js';
 
 export type LedgerMode = 'ledger_only';
 
@@ -405,15 +406,19 @@ export function updateStalledProgressState(
 
 function stalledSignalFromOutcome(outcome: TaskLedgerOutcome): 'progress' | 'non_progress' | 'neutral' {
   if (outcome.role === 'implementer') {
-    return outcome.status === 'completed' ? 'progress' : 'non_progress';
+    const implementerSignals: Record<ImplementerResult['status'], 'progress' | 'non_progress'> = {
+      completed: 'progress',
+      blocked: 'non_progress',
+      failed: 'non_progress',
+    };
+    return implementerSignals[outcome.status];
   }
-  if (outcome.assessment === 'approved') {
-    return 'progress';
-  }
-  if (outcome.assessment === 'blocked') {
-    return 'non_progress';
-  }
-  return 'neutral';
+  const reviewerSignals: Record<ReviewerResult['assessment'], 'progress' | 'non_progress' | 'neutral'> = {
+    approved: 'progress',
+    blocked: 'non_progress',
+    needs_changes: 'neutral',
+  };
+  return reviewerSignals[outcome.assessment];
 }
 
 function buildReplanHint(stalledCount: number, threshold: number): string {
@@ -433,23 +438,54 @@ export function applyOutcomeToTaskLedger(
     stalled: { ...currentLedger.stalled },
   };
 
+  const applyImplementerOutcome = (
+    ledger: TaskLedger,
+    implementerOutcome: Extract<TaskLedgerOutcome, { role: 'implementer' }>
+  ): void => {
+    ledger.summary = implementerOutcome.summary;
+    if (implementerOutcome.status === 'completed') {
+      ledger.blockers = [];
+      return;
+    }
+    ledger.blockers = dedupeStrings([...ledger.blockers, ...implementerOutcome.followUpActions]);
+  };
+
+  const applyReviewerOutcome = (
+    ledger: TaskLedger,
+    reviewerOutcome: Extract<TaskLedgerOutcome, { role: 'reviewer' }>
+  ): void => {
+    ledger.reviewerAssessment = reviewerOutcome.assessment;
+    ledger.reviewerIssues = [...reviewerOutcome.issues];
+    ledger.requiredFixes = dedupeStrings([...reviewerOutcome.requiredFixes]);
+
+    if (reviewerOutcome.assessment === 'approved') {
+      ledger.blockers = [];
+      ledger.requiredFixes = [];
+      return;
+    }
+    if (reviewerOutcome.assessment === 'blocked') {
+      ledger.blockers = dedupeStrings([...ledger.blockers, ...reviewerOutcome.requiredFixes]);
+    }
+  };
+
+  const handlers: {
+    implementer: (
+      ledger: TaskLedger,
+      roleOutcome: Extract<TaskLedgerOutcome, { role: 'implementer' }>
+    ) => void;
+    reviewer: (
+      ledger: TaskLedger,
+      roleOutcome: Extract<TaskLedgerOutcome, { role: 'reviewer' }>
+    ) => void;
+  } = {
+    implementer: applyImplementerOutcome,
+    reviewer: applyReviewerOutcome,
+  };
+
   if (outcome.role === 'implementer') {
-    nextLedger.summary = outcome.summary;
-    if (outcome.status === 'completed') {
-      nextLedger.blockers = [];
-    } else {
-      nextLedger.blockers = dedupeStrings([...nextLedger.blockers, ...outcome.followUpActions]);
-    }
+    handlers.implementer(nextLedger, outcome);
   } else {
-    nextLedger.reviewerAssessment = outcome.assessment;
-    nextLedger.reviewerIssues = [...outcome.issues];
-    nextLedger.requiredFixes = dedupeStrings([...outcome.requiredFixes]);
-    if (outcome.assessment === 'approved') {
-      nextLedger.blockers = [];
-      nextLedger.requiredFixes = [];
-    } else if (outcome.assessment === 'blocked') {
-      nextLedger.blockers = dedupeStrings([...nextLedger.blockers, ...outcome.requiredFixes]);
-    }
+    handlers.reviewer(nextLedger, outcome);
   }
 
   const stalledSignal = stalledSignalFromOutcome(outcome);

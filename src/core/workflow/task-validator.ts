@@ -115,10 +115,7 @@ export function validateTasksMarkdown(content: string): ValidationResult {
     }
 
     // 3. Validate metadata in following lines
-    let hasRequirements = false;
-    let hasLeverage = false;
     let hasPrompt = false;
-    let hasFiles = false;
     let promptHasClosingUnderscore = false;
     let promptSections: string[] = [];
 
@@ -130,7 +127,6 @@ export function validateTasksMarkdown(content: string): ValidationResult {
 
       // Check for _Requirements:_ format
       if (trimmedLine.includes('Requirements:')) {
-        hasRequirements = true;
         // Check for proper underscore delimiters
         if (!trimmedLine.match(/_Requirements:\s*[^_]+_/)) {
           if (trimmedLine.match(/Requirements:\s*\S/) && !trimmedLine.includes('_Requirements:')) {
@@ -148,7 +144,6 @@ export function validateTasksMarkdown(content: string): ValidationResult {
 
       // Check for _Leverage:_ format
       if (trimmedLine.includes('Leverage:')) {
-        hasLeverage = true;
         // Check for proper underscore delimiters
         if (!trimmedLine.match(/_Leverage:\s*[^_]+_/)) {
           if (trimmedLine.match(/Leverage:\s*\S/) && !trimmedLine.includes('_Leverage:')) {
@@ -162,11 +157,6 @@ export function validateTasksMarkdown(content: string): ValidationResult {
             });
           }
         }
-      }
-
-      // Check for Files: field
-      if (trimmedLine.match(/Files?:/i)) {
-        hasFiles = true;
       }
 
       // Check for _Prompt:_ format

@@ -138,6 +138,18 @@ export interface TaskParserResult {
   };
 }
 
+const CHECKBOX_STATUS_TO_TASK_STATUS: Record<'x' | '-' | ' ', ParsedTask['status']> = {
+  x: 'completed',
+  '-': 'in-progress',
+  ' ': 'pending',
+};
+
+const TASK_STATUS_TO_CHECKBOX_STATUS: Record<ParsedTask['status'], 'x' | '-' | ' '> = {
+  completed: 'x',
+  'in-progress': '-',
+  pending: ' ',
+};
+
 /**
  * Parse tasks from markdown content
  * Handles any checkbox format at any indentation level
@@ -171,14 +183,7 @@ export function parseTasksFromMarkdown(content: string): TaskParserResult {
     const taskText = checkboxMatch[4];
     
     // Determine status
-    let status: 'pending' | 'in-progress' | 'completed';
-    if (statusChar === 'x') {
-      status = 'completed';
-    } else if (statusChar === '-') {
-      status = 'in-progress';
-    } else {
-      status = 'pending';
-    }
+    const status = CHECKBOX_STATUS_TO_TASK_STATUS[statusChar as 'x' | '-' | ' '];
     
     // Extract task ID and description
     // Match patterns like "1. Description", "1.1 Description", "2.1. Description" etc
@@ -345,9 +350,7 @@ export function updateTaskStatus(
   newStatus: 'pending' | 'in-progress' | 'completed'
 ): string {
   const lines = content.split('\n');
-  const statusMarker = newStatus === 'completed' ? 'x' : 
-                       newStatus === 'in-progress' ? '-' : 
-                       ' ';
+  const statusMarker = TASK_STATUS_TO_CHECKBOX_STATUS[newStatus];
   
   // Find and update the task line
   for (let i = 0; i < lines.length; i++) {
