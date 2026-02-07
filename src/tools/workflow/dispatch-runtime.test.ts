@@ -293,6 +293,96 @@ END_DISPATCH_RESULT`,
     expect(second.data?.deltaPacket?.guide_mode).toBe('compact');
   });
 
+  it('keeps stable prefix hash constant when dynamic tail changes and keeps task prompt last', async () => {
+    const runId = 'test-run-stable-hash-dynamic-tail';
+    const taskId = '6.2';
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId,
+        specName: 'feature-prefix-stability',
+        taskId,
+      },
+      context
+    );
+
+    const firstPrompt = 'Implement parser changes';
+    const first = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: firstPrompt,
+        maxOutputTokens: 800,
+      },
+      context
+    );
+
+    const secondPrompt = 'Implement parser follow-up';
+    const second = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: secondPrompt,
+        maxOutputTokens: 800,
+      },
+      context
+    );
+
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+    expect(first.data?.stablePrefixHash).toBe(second.data?.stablePrefixHash);
+    expect(first.data?.fullPromptHash).not.toBe(second.data?.fullPromptHash);
+
+    const promptText = String(second.data?.prompt ?? '');
+    expect((promptText.match(/Task prompt:/g) ?? []).length).toBe(1);
+    expect(promptText.endsWith(`Task prompt:\n${secondPrompt}`)).toBe(true);
+  });
+
+  it('changes stable prefix hash when dispatch role changes', async () => {
+    const runId = 'test-run-stable-hash-role-switch';
+    const taskId = '6.3';
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId,
+        specName: 'feature-prefix-stability',
+        taskId,
+      },
+      context
+    );
+
+    const implementer = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: 'Implement role-sensitive behavior',
+        maxOutputTokens: 800,
+      },
+      context
+    );
+    const reviewer = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId,
+        role: 'reviewer',
+        taskId,
+        taskPrompt: 'Review role-sensitive behavior',
+        maxOutputTokens: 800,
+      },
+      context
+    );
+
+    expect(implementer.success).toBe(true);
+    expect(reviewer.success).toBe(true);
+    expect(implementer.data?.stablePrefixHash).not.toBe(reviewer.data?.stablePrefixHash);
+  });
+
   it('compacts overflowed prompts when auto compaction is enabled', async () => {
     const runId = 'test-run-compaction-auto';
     const taskId = '8.1';

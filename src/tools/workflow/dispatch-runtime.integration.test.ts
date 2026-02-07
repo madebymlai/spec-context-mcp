@@ -285,6 +285,52 @@ END_DISPATCH_RESULT`,
     }
   });
 
+  it('preserves stable prefix hash across compaction variants for same role/template', async () => {
+    const projectPath = await createTempProject();
+    try {
+      const runId = `int-prefix-${randomUUID()}`;
+      const taskId = '5.1';
+      await callDispatch(projectPath, {
+        action: 'init_run',
+        runId,
+        specName: 'feature-prefix-stability',
+        taskId,
+      });
+
+      const baseline = await callDispatch(projectPath, {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: 'Implement baseline behavior',
+        maxOutputTokens: 700,
+        compactionAuto: true,
+      });
+      expect(baseline.success).toBe(true);
+      expect(baseline.data?.compactionStage).toBe('none');
+
+      const oversizedPrompt = `Implement task ${taskId}\n${'MUST preserve branch-critical constraints and strict JSON output.\n'.repeat(1200)}`;
+      const compacted = await callDispatch(projectPath, {
+        action: 'compile_prompt',
+        runId,
+        role: 'implementer',
+        taskId,
+        taskPrompt: oversizedPrompt,
+        maxOutputTokens: 700,
+        compactionAuto: true,
+      });
+      expect(compacted.success).toBe(true);
+      expect(compacted.data?.compactionApplied).toBe(true);
+      expect(compacted.data?.compactionStage).not.toBe('none');
+
+      expect(compacted.data?.stablePrefixHash).toBe(baseline.data?.stablePrefixHash);
+      expect(compacted.data?.fullPromptHash).not.toBe(baseline.data?.fullPromptHash);
+      expect(Number(compacted.data?.promptTokensAfter)).toBeLessThanOrEqual(Number(compacted.data?.promptTokenBudget));
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
   it('applies compile-time compaction and records telemetry for oversized prompts', async () => {
     const projectPath = await createTempProject();
     try {

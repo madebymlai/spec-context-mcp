@@ -456,6 +456,44 @@ interface DispatchTelemetrySnapshot {
   overflow_terminal_count: number;
 }
 
+function buildDispatchGuideInstruction(input: {
+  role: DispatchRole;
+  guideMode: 'full' | 'compact';
+  runId: string;
+}): string {
+  const guideToolName = input.role === 'implementer' ? 'get-implementer-guide' : 'get-reviewer-guide';
+  if (input.guideMode === 'full') {
+    return `Guide policy: first dispatch for this role in run ${input.runId}. Call ${guideToolName} with {"mode":"full","runId":"${input.runId}"} exactly once before coding/reviewing.`;
+  }
+  return `Guide policy: guide already loaded in this run. Do not reload full guide. Reuse cached rules and call ${guideToolName} with {"mode":"compact","runId":"${input.runId}"} if you need a reminder.`;
+}
+
+function buildDispatchDynamicTail(input: {
+  runId: string;
+  role: DispatchRole;
+  taskPrompt: string;
+  taskId: string;
+  maxOutputTokens: number;
+  deltaPacket: Record<string, unknown>;
+  guideMode: 'full' | 'compact';
+  guideCacheKey: string;
+}): string {
+  const guideInstruction = buildDispatchGuideInstruction({
+    role: input.role,
+    guideMode: input.guideMode,
+    runId: input.runId,
+  });
+  return [
+    `Task ID: ${input.taskId}`,
+    `Max output tokens: ${input.maxOutputTokens}`,
+    `Delta context: ${JSON.stringify(input.deltaPacket)}`,
+    `Guide cache key: ${input.guideCacheKey}`,
+    guideInstruction,
+    'Task prompt:',
+    input.taskPrompt,
+  ].join('\n');
+}
+
 class DispatchPromptCompiler {
   private readonly registry = new PromptTemplateRegistry();
   private readonly prefixCompiler = new PromptPrefixCompiler();
@@ -505,17 +543,7 @@ ${DISPATCH_RESULT_END}`,
     tokenCharsPerToken?: number;
   }): CompiledDispatchPrompt {
     const templateId = input.role === 'implementer' ? 'dispatch_implementer' : 'dispatch_reviewer';
-    const guideToolName = input.role === 'implementer' ? 'get-implementer-guide' : 'get-reviewer-guide';
-    const guideInstruction = input.guideMode === 'full'
-      ? `Guide policy: first dispatch for this role in run ${input.runId}. Call ${guideToolName} with {"mode":"full","runId":"${input.runId}"} exactly once before coding/reviewing.`
-      : `Guide policy: guide already loaded in this run. Do not reload full guide. Reuse cached rules and call ${guideToolName} with {"mode":"compact","runId":"${input.runId}"} if you need a reminder.`;
-    const dynamicTail = `Task ID: ${input.taskId}
-Max output tokens: ${input.maxOutputTokens}
-Delta context: ${JSON.stringify(input.deltaPacket)}
-Guide cache key: ${input.guideCacheKey}
-${guideInstruction}
-Task prompt:
-${input.taskPrompt}`;
+    const dynamicTail = buildDispatchDynamicTail(input);
 
     const compiled = this.registry.compile(templateId, this.version, dynamicTail);
     const prefixCompile = this.prefixCompiler.compile({
