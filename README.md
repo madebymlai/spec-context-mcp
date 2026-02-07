@@ -60,7 +60,29 @@ Run `npx spec-context-mcp doctor` to verify your setup.
 
 ## Configuration
 
-Add to your Claude Code config (`.mcp.json` in project root):
+`spec-context-mcp` loads `.env` from the server package directory on startup.
+
+If you run from source or a local clone, start from `.env.example`:
+
+```bash
+cp .env.example .env
+# edit .env and set required keys (for example EMBEDDING_API_KEY)
+```
+
+Then use a minimal MCP config (`.mcp.json` in your project):
+
+```json
+{
+  "mcpServers": {
+    "spec-context": {
+      "command": "node",
+      "args": ["/absolute/path/to/spec-context-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+If you run via `npx` / global install, you can pass env directly in `.mcp.json` instead:
 
 ```json
 {
