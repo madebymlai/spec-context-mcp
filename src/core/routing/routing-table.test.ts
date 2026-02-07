@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PROVIDER_CATALOG } from '../../config/discipline.js';
 import { RoutingTable } from './routing-table.js';
 
 describe('RoutingTable', () => {
@@ -43,20 +42,16 @@ describe('RoutingTable', () => {
     );
   });
 
-  it('falls back to next tier up when selected provider is unavailable for role', () => {
-    const originalReviewer = PROVIDER_CATALOG.codex.reviewer;
-    (PROVIDER_CATALOG as Record<string, Record<string, string | undefined>>).codex.reviewer = '';
-    try {
-      const table = new RoutingTable({
-        simple: 'codex',
-        moderate: 'claude',
-        complex: 'claude',
-      });
-      const resolved = table.resolve('simple', 'reviewer');
-      expect(resolved.provider).toBe('claude');
-      expect(resolved.cli).toContain('claude -p');
-    } finally {
-      (PROVIDER_CATALOG as Record<string, Record<string, string | undefined>>).codex.reviewer = originalReviewer;
-    }
+  it('returns cli command for configured provider/role without additional resolution', () => {
+    const table = new RoutingTable({
+      simple: 'codex',
+      moderate: 'claude',
+      complex: 'claude',
+    });
+    expect(table.resolve('simple', 'reviewer')).toEqual({
+      provider: 'codex',
+      cli: 'codex exec --sandbox read-only',
+      role: 'reviewer',
+    });
   });
 });

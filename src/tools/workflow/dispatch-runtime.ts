@@ -18,6 +18,7 @@ import type {
   StateSnapshotFact,
 } from '../../core/llm/index.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
+import type { DispatchRole } from '../../config/discipline.js';
 import {
   type LedgerMode,
   DispatchLedgerError,
@@ -48,7 +49,6 @@ import {
 } from '../../core/routing/index.js';
 
 type DispatchAction = 'init_run' | 'ingest_output' | 'get_snapshot' | 'compile_prompt' | 'get_telemetry';
-type DispatchRole = 'implementer' | 'reviewer';
 
 const DISPATCH_CLASSIFICATION_FACT_KEYS = {
   level: 'classification_level',
@@ -56,6 +56,10 @@ const DISPATCH_CLASSIFICATION_FACT_KEYS = {
   features: 'classification_features',
   classifierId: 'classification_classifier_id',
 } as const;
+
+function getFactValue(snapshot: StateSnapshot, key: string): string | undefined {
+  return snapshot.facts.find(fact => fact.k === key)?.v;
+}
 
 const DISPATCH_RESULT_BEGIN = 'BEGIN_DISPATCH_RESULT';
 const DISPATCH_RESULT_END = 'END_DISPATCH_RESULT';
@@ -1411,8 +1415,6 @@ export async function dispatchRuntimeHandler(
   args: Record<string, unknown>,
   context: ToolContext
 ): Promise<ToolResponse> {
-  const getFactValue = (snapshot: StateSnapshot, key: string): string | undefined =>
-    snapshot.facts.find(fact => fact.k === key)?.v;
   const action = String(args.action || '') as DispatchAction;
 
   if (!['init_run', 'ingest_output', 'get_snapshot', 'compile_prompt', 'get_telemetry'].includes(action)) {
