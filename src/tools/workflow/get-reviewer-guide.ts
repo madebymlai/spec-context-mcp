@@ -4,7 +4,7 @@
  */
 
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { ToolContext, ToolResponse } from '../../workflow-types.js';
+import { ToolContext, ToolResponse, requireFileContentCache } from '../../workflow-types.js';
 import { getDisciplineMode } from '../../config/discipline.js';
 import {
   GUIDE_STEERING_DOCS,
@@ -14,7 +14,6 @@ import {
   hasSteeringFingerprintMismatch,
   type SteeringFingerprintMap,
 } from './steering-loader.js';
-import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
 import { setBoundedMapEntry } from '../../core/cache/bounded-map.js';
 import {
   DISPATCH_CONTRACT_SCHEMA_VERSION,
@@ -73,7 +72,7 @@ export async function getReviewerGuideHandler(
   const input = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
   const guideMode = String(input.mode ?? 'full').trim() as GuideMode;
   const runId = String(input.runId ?? '').trim();
-  const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
+  const fileContentCache = requireFileContentCache(context);
   if (guideMode !== 'full' && guideMode !== 'compact') {
     return {
       success: false,

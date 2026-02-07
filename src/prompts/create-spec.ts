@@ -1,8 +1,7 @@
 import { Prompt, PromptMessage } from '@modelcontextprotocol/sdk/types.js';
 import { PromptDefinition } from './types.js';
-import { ToolContext } from '../workflow-types.js';
+import { ToolContext, requireFileContentCache } from '../workflow-types.js';
 import { getSpecTemplates, type SpecTemplateType } from '../tools/workflow/template-loader.js';
-import { getSharedFileContentCache } from '../core/cache/shared-file-content-cache.js';
 
 const prompt: Prompt = {
   name: 'create-spec',
@@ -40,17 +39,18 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
     throw new Error(`documentType must be one of: ${validDocTypes.join(', ')}`);
   }
   const documentType = documentTypeRaw as SpecTemplateType;
-  const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
+  const fileContentCache = requireFileContentCache(context);
   const templates = await getSpecTemplates([documentType], fileContentCache);
-  const resolvedTemplate = templates?.[documentType];
-  const templateBlock = resolvedTemplate
-    ? `\n\n**Injected Template (${documentType}-template.md):**
+  const resolvedTemplate = templates[documentType];
+  if (!resolvedTemplate) {
+    throw new Error(`Missing bundled template for ${documentType}`);
+  }
+  const templateBlock = `\n\n**Injected Template (${documentType}-template.md):**
 Source: ${resolvedTemplate.source}
 Path: ${resolvedTemplate.path}
 \`\`\`markdown
 ${resolvedTemplate.content}
-\`\`\``
-    : '';
+\`\`\``;
 
   // Build context-aware messages
   const messages: PromptMessage[] = [

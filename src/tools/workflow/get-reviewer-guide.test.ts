@@ -3,12 +3,12 @@ import { getReviewerGuideHandler } from './get-reviewer-guide.js';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { FileContentCache } from '../../core/cache/file-content-cache.js';
+import { TestFileContentCache } from './test-file-content-cache.js';
 
 describe('get-reviewer-guide', () => {
   let testDir: string;
   let steeringDir: string;
-  let fileContentCache: FileContentCache;
+  let fileContentCache: TestFileContentCache;
   const originalEnv = process.env;
 
   beforeEach(() => {
@@ -18,7 +18,7 @@ describe('get-reviewer-guide', () => {
     testDir = join(tmpdir(), `reviewer-guide-test-${Date.now()}`);
     steeringDir = join(testDir, '.spec-context', 'steering');
     mkdirSync(steeringDir, { recursive: true });
-    fileContentCache = new FileContentCache();
+    fileContentCache = new TestFileContentCache();
   });
 
   afterEach(() => {

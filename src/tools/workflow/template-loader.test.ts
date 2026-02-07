@@ -5,7 +5,7 @@ import {
   getSpecTemplates,
   hasTemplateFingerprintMismatch,
 } from './template-loader.js';
-import { FileContentCache } from '../../core/cache/file-content-cache.js';
+import { TestFileContentCache } from './test-file-content-cache.js';
 
 describe('template-loader', () => {
   describe('getSpecTemplates', () => {
@@ -26,7 +26,7 @@ describe('template-loader', () => {
     });
 
     it('uses file-content cache namespace for server templates', async () => {
-      const cache = new FileContentCache();
+      const cache = new TestFileContentCache();
 
       const first = await getSpecTemplates(['requirements'], cache);
       const second = await getSpecTemplates(['requirements'], cache);
@@ -39,7 +39,7 @@ describe('template-loader', () => {
 
   describe('fingerprints', () => {
     it('collects fingerprints after templates are cached', async () => {
-      const cache = new FileContentCache();
+      const cache = new TestFileContentCache();
       await getSpecTemplates(['requirements', 'design'], cache);
 
       const fingerprints = collectTemplateFingerprints(['requirements', 'design'], cache);
@@ -49,7 +49,7 @@ describe('template-loader', () => {
     });
 
     it('returns false when fingerprints match', async () => {
-      const cache = new FileContentCache();
+      const cache = new TestFileContentCache();
       await getSpecTemplates(['requirements', 'design'], cache);
       const fingerprints = collectTemplateFingerprints(['requirements', 'design'], cache);
 
@@ -63,7 +63,7 @@ describe('template-loader', () => {
     });
 
     it('returns true when previous fingerprint set is incomplete', async () => {
-      const cache = new FileContentCache();
+      const cache = new TestFileContentCache();
       await getSpecTemplates(['requirements'], cache);
 
       const mismatch = hasTemplateFingerprintMismatch({

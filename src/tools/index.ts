@@ -19,8 +19,8 @@ import {
 } from './workflow/steering-guide.js';
 import {
     specStatusTool,
-    specStatusHandler,
 } from './workflow/spec-status.js';
+import { specStatusHandler } from './workflow/spec-status-node.js';
 import {
     approvalsTool,
     createApprovalsHandler,

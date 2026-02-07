@@ -311,23 +311,19 @@ export function ApprovalsAnnotator({ content, comments, onCommentsChange, viewMo
     let startOffset: number | undefined;
     let endOffset: number | undefined;
 
-    try {
-      // Create a range from the start of the pre element to the start of the selection
-      const preRange = document.createRange();
-      preRange.selectNodeContents(preElement);
-      preRange.setEnd(range.startContainer, range.startOffset);
+    // Create a range from the start of the pre element to the start of the selection
+    const preRange = document.createRange();
+    preRange.selectNodeContents(preElement);
+    preRange.setEnd(range.startContainer, range.startOffset);
 
-      // Get the text length from the pre element start to the selection start
-      // This gives us the offset within the displayed text
-      const displayedStartOffset = preRange.toString().length;
+    // Get the text length from the pre element start to the selection start
+    // This gives us the offset within the displayed text
+    const displayedStartOffset = preRange.toString().length;
 
-      // The displayed text matches the original content (raw text is shown in the pre)
-      // So the offsets are directly usable
-      startOffset = displayedStartOffset;
-      endOffset = displayedStartOffset + selectedText.length;
-    } catch {
-      // If offset calculation fails, continue without offsets (fallback behavior)
-    }
+    // The displayed text matches the original content (raw text is shown in the pre)
+    // So the offsets are directly usable
+    startOffset = displayedStartOffset;
+    endOffset = displayedStartOffset + selectedText.length;
 
     // Open modal for adding comment
     setModalState({
@@ -340,7 +336,7 @@ export function ApprovalsAnnotator({ content, comments, onCommentsChange, viewMo
 
     // Clear selection after a brief delay to prevent flicker
     setTimeout(() => {
-      try { selection?.removeAllRanges(); } catch {}
+      selection?.removeAllRanges();
     }, 50);
   }
 
@@ -742,5 +738,4 @@ export function ApprovalsAnnotator({ content, comments, onCommentsChange, viewMo
     </div>
   );
 }
-
 

@@ -67,11 +67,12 @@ export class FileContentCache implements IFileContentCache {
     } catch (error) {
       if (isFileNotFoundError(error)) {
         this.recordMiss(namespace);
-      } else {
-        this.recordError(namespace);
+        this.entries.delete(filePath);
+        return null;
       }
+      this.recordError(namespace);
       this.entries.delete(filePath);
-      return null;
+      throw error;
     }
 
     if (existing && existing.fingerprint.mtimeMs === mtimeMs) {
@@ -85,11 +86,12 @@ export class FileContentCache implements IFileContentCache {
     } catch (error) {
       if (isFileNotFoundError(error)) {
         this.recordMiss(namespace);
-      } else {
-        this.recordError(namespace);
+        this.entries.delete(filePath);
+        return null;
       }
+      this.recordError(namespace);
       this.entries.delete(filePath);
-      return null;
+      throw error;
     }
 
     setBoundedMapEntry(this.entries, filePath, {

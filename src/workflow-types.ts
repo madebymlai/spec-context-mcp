@@ -63,6 +63,13 @@ export interface ToolContext {
   fileContentCache?: IFileContentCache;
 }
 
+export function requireFileContentCache(context: ToolContext): IFileContentCache {
+  if (!context.fileContentCache) {
+    throw new Error('fileContentCache is required in tool context');
+  }
+  return context.fileContentCache;
+}
+
 export interface SpecData {
   name: string;
   description?: string;

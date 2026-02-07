@@ -17,6 +17,7 @@ import { initChunkHoundBridge, resetChunkHoundBridge } from './bridge/chunkhound
 import { resolveDashboardUrlForNode } from './core/workflow/node-dashboard-url.js';
 import { DEFAULT_DASHBOARD_URL } from './core/workflow/constants.js';
 import { toMCPResponse } from './workflow-types.js';
+import { getSharedFileContentCache } from './core/cache/shared-file-content-cache.js';
 
 export class SpecContextServer {
     private server: Server;
@@ -121,6 +122,7 @@ export class SpecContextServer {
             const context = {
                 projectPath: process.cwd(),
                 dashboardUrl,
+                fileContentCache: getSharedFileContentCache(),
             };
             return handlePromptGet(name, args || {}, context);
         });

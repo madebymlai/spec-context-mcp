@@ -35,17 +35,15 @@ export function buildBundledTemplatePath(template: SpecTemplateType): string {
 export async function getSpecTemplates(
   templates: readonly SpecTemplateType[],
   cache?: IFileContentCache
-): Promise<SpecTemplateResult | null> {
+): Promise<SpecTemplateResult> {
   const result: SpecTemplateResult = {};
 
   for (const template of templates) {
     const resolved = await resolveTemplate(template, cache);
-    if (resolved) {
-      result[template] = resolved;
-    }
+    result[template] = resolved;
   }
 
-  return Object.keys(result).length > 0 ? result : null;
+  return result;
 }
 
 export function collectTemplateFingerprints(
@@ -85,21 +83,21 @@ export function hasTemplateFingerprintMismatch(
 async function resolveTemplate(
   template: SpecTemplateType,
   cache?: IFileContentCache
-): Promise<SpecTemplatePayload | null> {
+): Promise<SpecTemplatePayload> {
   const path = buildBundledTemplatePath(template);
   const content = cache
     ? await cache.get(path, { namespace: 'templates.server' })
     : await readFileSafe(path);
 
-  if (content !== null) {
-    return {
-      content,
-      source: 'server',
-      path,
-    };
+  if (content === null) {
+    throw new Error(`Bundled template missing: ${path}`);
   }
 
-  return null;
+  return {
+    content,
+    source: 'server',
+    path,
+  };
 }
 
 async function readFileSafe(path: string): Promise<string | null> {

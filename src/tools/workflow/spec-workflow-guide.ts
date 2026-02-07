@@ -1,10 +1,9 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { ToolContext, ToolResponse } from '../../workflow-types.js';
+import { ToolContext, ToolResponse, requireFileContentCache } from '../../workflow-types.js';
 import { getSteeringDocs } from './steering-loader.js';
 import { getSpecTemplates, SPEC_WORKFLOW_TEMPLATES } from './template-loader.js';
 import { getDisciplineMode, getDispatchCli } from '../../config/discipline.js';
 import { isDispatchRuntimeV2Enabled } from '../../config/dispatch-runtime.js';
-import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
 
 export const specWorkflowGuideTool: Tool = {
   name: 'spec-workflow-guide',
@@ -33,7 +32,7 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
   const reviewerCli = getDispatchCli('reviewer');
 
   // Read steering docs if they exist
-  const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
+  const fileContentCache = requireFileContentCache(context);
   const steeringContent = await getSteeringDocs(
     context.projectPath,
     ['product', 'tech', 'structure', 'principles'],
@@ -50,7 +49,7 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
     data: {
       guide: getSpecWorkflowGuide(disciplineMode, implementerCli, reviewerCli),
       steering: steeringContent,
-      templates: templates ?? {},
+      templates,
       disciplineMode,
       dispatch: {
         implementerCli,

@@ -2,8 +2,8 @@ import { mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FileContentCache } from '../../core/cache/file-content-cache.js';
-import { specStatusHandler } from './spec-status.js';
+import { specStatusHandler } from './spec-status-node.js';
+import { TestFileContentCache } from './test-file-content-cache.js';
 
 describe('spec-status cache integration', () => {
   const testDirs: string[] = [];
@@ -32,7 +32,7 @@ describe('spec-status cache integration', () => {
   it('uses file-content cache namespace for repeated status checks', async () => {
     const specName = 'cache-hit-spec';
     const projectPath = await createProject(specName);
-    const fileContentCache = new FileContentCache();
+    const fileContentCache = new TestFileContentCache();
     const context = { projectPath, fileContentCache };
 
     const first = await specStatusHandler({ specName }, context);
@@ -48,7 +48,7 @@ describe('spec-status cache integration', () => {
   it('re-parses when tasks.md changes', async () => {
     const specName = 'cache-invalidation-spec';
     const projectPath = await createProject(specName);
-    const fileContentCache = new FileContentCache();
+    const fileContentCache = new TestFileContentCache();
     const context = { projectPath, fileContentCache };
     const tasksPath = join(projectPath, '.spec-context', 'specs', specName, 'tasks.md');
 
@@ -69,7 +69,7 @@ describe('spec-status cache integration', () => {
   it('re-parses when spec directory mtime changes', async () => {
     const specName = 'cache-directory-spec';
     const projectPath = await createProject(specName);
-    const fileContentCache = new FileContentCache();
+    const fileContentCache = new TestFileContentCache();
     const context = { projectPath, fileContentCache };
     const specDir = join(projectPath, '.spec-context', 'specs', specName);
 

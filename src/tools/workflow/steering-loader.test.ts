@@ -3,7 +3,7 @@ import { getSteeringDocs, getMissingSteeringDocs } from './steering-loader.js';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { FileContentCache } from '../../core/cache/file-content-cache.js';
+import { TestFileContentCache } from './test-file-content-cache.js';
 
 describe('steering-loader', () => {
   let testDir: string;
@@ -82,7 +82,7 @@ describe('steering-loader', () => {
     it('uses file-content cache when provided', async () => {
       writeFileSync(join(steeringDir, 'tech.md'), 'cached tech');
       writeFileSync(join(steeringDir, 'principles.md'), 'cached principles');
-      const cache = new FileContentCache();
+      const cache = new TestFileContentCache();
 
       const first = await getSteeringDocs(testDir, ['tech', 'principles'], cache);
       const second = await getSteeringDocs(testDir, ['tech', 'principles'], cache);

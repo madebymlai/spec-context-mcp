@@ -1,11 +1,9 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { stat } from 'fs/promises';
 import { join } from 'path';
-import { SpecData, ToolContext, ToolResponse } from '../../workflow-types.js';
+import { SpecData, ToolContext, ToolResponse, requireFileContentCache } from '../../workflow-types.js';
 import { PathUtils } from '../../core/workflow/path-utils.js';
-import { SpecParser } from '../../core/workflow/parser.js';
 import { areFileFingerprintsEqual, type FileContentFingerprint } from '../../core/cache/file-content-cache.js';
-import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
 import { setBoundedMapEntry } from '../../core/cache/bounded-map.js';
 
 export interface SpecStatusReader {
@@ -88,12 +86,6 @@ const SPEC_STATUS_RULES: readonly SpecStatusRule[] = [
 const specStatusCache = new Map<string, SpecStatusCacheEntry>();
 const MAX_SPEC_STATUS_CACHE_ENTRIES = 512;
 
-const defaultSpecStatusReaderFactory: SpecStatusReaderFactory = {
-  create(projectPath: string): SpecStatusReader {
-    return new SpecParser(projectPath);
-  },
-};
-
 export const specStatusTool: Tool = {
   name: 'spec-status',
   description: `Check spec status, list specs, show my specs, get spec progress. Use when user asks about specs, their status, wants to see all specs, or says "what specs do I have".
@@ -143,7 +135,7 @@ export function createSpecStatusHandler(
     const parsedArgs = args as SpecStatusArgs;
     const specName = parsedArgs.specName;
     const projectPath = parsedArgs.projectPath ?? context.projectPath;
-    const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
+    const fileContentCache = requireFileContentCache(context);
 
     if (!projectPath) {
       return {
@@ -238,8 +230,6 @@ export function createSpecStatusHandler(
     }
   };
 }
-
-export const specStatusHandler = createSpecStatusHandler(defaultSpecStatusReaderFactory);
 
 function resolveSpecWorkflowState(spec: SpecData): SpecWorkflowState {
   for (const rule of SPEC_STATUS_RULES) {

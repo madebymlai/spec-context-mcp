@@ -86,13 +86,11 @@ describe('file-content-cache', () => {
     });
   });
 
-  it('returns null and records error for non-readable path', async () => {
+  it('throws and records error for non-readable path', async () => {
     const dir = await createTempDir('error');
     const cache = new FileContentCache();
 
-    const value = await cache.get(dir, { namespace: 'guide' });
-
-    expect(value).toBeNull();
+    await expect(cache.get(dir, { namespace: 'guide' })).rejects.toBeDefined();
     expect(cache.getTelemetry().errors).toBe(1);
     expect(cache.getTelemetry().namespaces['guide']?.errors).toBe(1);
   });
