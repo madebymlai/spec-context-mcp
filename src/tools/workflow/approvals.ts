@@ -1,11 +1,12 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
-import { ApprovalStorage } from '../../storage/approval-storage.js';
 import { join } from 'path';
 import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.js';
 import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 import { readFile } from 'fs/promises';
 import { validateTasksMarkdown, formatValidationErrors } from '../../core/workflow/task-validator.js';
+import { nodeApprovalStoreFactory } from './approval-store-node.js';
+import type { ApprovalStoreFactory, ApprovalRecord, ApprovalStatus } from './approval-store.js';
 
 async function tryResolveDashboardProjectId(
   dashboardUrl: string | undefined,
@@ -43,6 +44,106 @@ async function tryResolveDashboardProjectId(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+type ApprovalStatusProjection = {
+  isCompleted: boolean;
+  canProceed: boolean;
+  mustWait: boolean;
+  blockNext: boolean;
+};
+
+const APPROVAL_STATUS_PROJECTIONS: Record<ApprovalStatus, ApprovalStatusProjection> = {
+  pending: {
+    isCompleted: false,
+    canProceed: false,
+    mustWait: true,
+    blockNext: true
+  },
+  approved: {
+    isCompleted: true,
+    canProceed: true,
+    mustWait: false,
+    blockNext: false
+  },
+  rejected: {
+    isCompleted: true,
+    canProceed: false,
+    mustWait: true,
+    blockNext: true
+  },
+  'needs-revision': {
+    isCompleted: false,
+    canProceed: false,
+    mustWait: true,
+    blockNext: true
+  }
+};
+
+const APPROVAL_NEXT_STEP_BUILDERS: Record<ApprovalStatus, (approval: ApprovalRecord, approvalUrl?: string) => string[]> = {
+  pending: (_approval, approvalUrl) => {
+    const nextSteps = [
+      'BLOCKED - Do not proceed',
+      'VERBAL APPROVAL NOT ACCEPTED - Use dashboard only',
+      'Approval must be done via dashboard',
+      'Continue polling with approvals action:"status"'
+    ];
+    if (approvalUrl) {
+      nextSteps.push(`Review in dashboard: ${approvalUrl}`);
+    }
+    return nextSteps;
+  },
+  approved: (approval) => {
+    const nextSteps = [
+      'APPROVED - Can proceed',
+      'Run approvals action:"delete" before continuing'
+    ];
+    if (approval.response) {
+      nextSteps.push(`Response: ${approval.response}`);
+    }
+    return nextSteps;
+  },
+  rejected: (approval) => {
+    const nextSteps = [
+      'BLOCKED - REJECTED',
+      'Do not proceed',
+      'Review feedback and revise'
+    ];
+    if (approval.response) {
+      nextSteps.push(`Reason: ${approval.response}`);
+    }
+    if (approval.annotations) {
+      nextSteps.push(`Notes: ${approval.annotations}`);
+    }
+    return nextSteps;
+  },
+  'needs-revision': (approval) => {
+    const nextSteps = [
+      'BLOCKED - Do not proceed',
+      'Update document with feedback',
+      'Create NEW approval request'
+    ];
+    if (approval.response) {
+      nextSteps.push(`Feedback: ${approval.response}`);
+    }
+    if (approval.annotations) {
+      nextSteps.push(`Notes: ${approval.annotations}`);
+    }
+    if (approval.comments && approval.comments.length > 0) {
+      nextSteps.push(`${approval.comments.length} comments for targeted fixes:`);
+      approval.comments.forEach((comment, index) => {
+        nextSteps.push(formatApprovalComment(comment, index));
+      });
+    }
+    return nextSteps;
+  }
+};
+
+function formatApprovalComment(comment: NonNullable<ApprovalRecord['comments']>[number], index: number): string {
+  if (comment.type === 'selection' && comment.selectedText) {
+    return `  Comment ${index + 1} on "${comment.selectedText.substring(0, 50)}...": ${comment.comment}`;
+  }
+  return `  Comment ${index + 1} (general): ${comment.comment}`;
 }
 
 export const approvalsTool: Tool = {
@@ -130,20 +231,7 @@ type DeleteApprovalArgs = {
 
 type ApprovalArgs = RequestApprovalArgs | StatusApprovalArgs | DeleteApprovalArgs;
 
-// Type guard functions
-function isRequestApproval(args: ApprovalArgs): args is RequestApprovalArgs {
-  return args.action === 'request';
-}
-
-function isStatusApproval(args: ApprovalArgs): args is StatusApprovalArgs {
-  return args.action === 'status';
-}
-
-function isDeleteApproval(args: ApprovalArgs): args is DeleteApprovalArgs {
-  return args.action === 'delete';
-}
-
-export async function approvalsHandler(
+type ApprovalsHandler = (
   args: {
     action: 'request' | 'status' | 'delete';
     projectPath?: string;
@@ -155,64 +243,65 @@ export async function approvalsHandler(
     categoryName?: string;
   },
   context: ToolContext
-): Promise<ToolResponse> {
-  // Cast to discriminated union type
-  const typedArgs = args as ApprovalArgs;
+) => Promise<ToolResponse>;
 
-  switch (typedArgs.action) {
-    case 'request':
-      if (isRequestApproval(typedArgs)) {
-        // Validate required fields for request
+function createApprovalsHandlerWithDependencies(approvalStoreFactory: ApprovalStoreFactory): ApprovalsHandler {
+  return async (
+    args: {
+      action: 'request' | 'status' | 'delete';
+      projectPath?: string;
+      approvalId?: string;
+      title?: string;
+      filePath?: string;
+      type?: 'document' | 'action';
+      category?: 'spec' | 'steering';
+      categoryName?: string;
+    },
+    context: ToolContext
+  ): Promise<ToolResponse> => {
+    const typedArgs = args as ApprovalArgs;
+
+    switch (typedArgs.action) {
+      case 'request':
         if (!args.title || !args.filePath || !args.type || !args.category || !args.categoryName) {
           return {
             success: false,
             message: 'Missing required fields for request action. Required: title, filePath, type, category, categoryName'
           };
         }
-        return handleRequestApproval(typedArgs, context);
-      }
-      break;
-    case 'status':
-      if (isStatusApproval(typedArgs)) {
-        // Validate required fields for status
+        return handleRequestApproval(typedArgs, context, approvalStoreFactory);
+      case 'status':
         if (!args.approvalId) {
           return {
             success: false,
             message: 'Missing required field for status action. Required: approvalId'
           };
         }
-        return handleGetApprovalStatus(typedArgs, context);
-      }
-      break;
-    case 'delete':
-      if (isDeleteApproval(typedArgs)) {
-        // Validate required fields for delete
+        return handleGetApprovalStatus(typedArgs, context, approvalStoreFactory);
+      case 'delete':
         if (!args.approvalId) {
           return {
             success: false,
             message: 'Missing required field for delete action. Required: approvalId'
           };
         }
-        return handleDeleteApproval(typedArgs, context);
-      }
-      break;
-    default:
-      return {
-        success: false,
-        message: `Unknown action: ${(args as any).action}. Use 'request', 'status', or 'delete'.`
-      };
-  }
-
-  // This should never be reached due to exhaustive type checking
-  return {
-    success: false,
-    message: 'Invalid action configuration'
+        return handleDeleteApproval(typedArgs, context, approvalStoreFactory);
+      default:
+        throw new Error('Unhandled approvals action');
+    }
   };
 }
 
+export function createApprovalsHandler(approvalStoreFactory: ApprovalStoreFactory): ApprovalsHandler {
+  return createApprovalsHandlerWithDependencies(approvalStoreFactory);
+}
+
+export const approvalsHandler = createApprovalsHandlerWithDependencies(nodeApprovalStoreFactory);
+
 async function handleRequestApproval(
   args: RequestApprovalArgs,
-  context: ToolContext
+  context: ToolContext,
+  approvalStoreFactory: ApprovalStoreFactory
 ): Promise<ToolResponse> {
   // Use context projectPath as default, allow override via args
   const projectPath = args.projectPath || context.projectPath;
@@ -227,11 +316,11 @@ async function handleRequestApproval(
   try {
     // Validate and resolve project path
     const validatedProjectPath = await validateProjectPath(projectPath);
-    // Translate path at tool entry point (ApprovalStorage expects pre-translated paths)
+    // Translate path at tool entry point (approval store expects pre-translated paths)
     const translatedPath = PathUtils.translatePath(validatedProjectPath);
     const dashboardProjectId = await tryResolveDashboardProjectId(context.dashboardUrl, validatedProjectPath, translatedPath);
 
-    const approvalStorage = new ApprovalStorage(translatedPath, validatedProjectPath);
+    const approvalStorage = approvalStoreFactory.create(translatedPath, validatedProjectPath);
     await approvalStorage.start();
 
     // Check for existing pending approval for the same file/category
@@ -368,7 +457,8 @@ async function handleRequestApproval(
 
 async function handleGetApprovalStatus(
   args: StatusApprovalArgs,
-  context: ToolContext
+  context: ToolContext,
+  approvalStoreFactory: ApprovalStoreFactory
 ): Promise<ToolResponse> {
   // approvalId is guaranteed by type
 
@@ -384,10 +474,10 @@ async function handleGetApprovalStatus(
 
     // Validate and resolve project path
     const validatedProjectPath = await validateProjectPath(projectPath);
-    // Translate path at tool entry point (ApprovalStorage expects pre-translated paths)
+    // Translate path at tool entry point (approval store expects pre-translated paths)
     const translatedPath = PathUtils.translatePath(validatedProjectPath);
 
-    const approvalStorage = new ApprovalStorage(translatedPath, validatedProjectPath);
+    const approvalStorage = approvalStoreFactory.create(translatedPath, validatedProjectPath);
     await approvalStorage.start();
 
     const approval = await approvalStorage.getApproval(args.approvalId);
@@ -402,58 +492,9 @@ async function handleGetApprovalStatus(
 
     await approvalStorage.stop();
 
-    const isCompleted = approval.status === 'approved' || approval.status === 'rejected';
-    const canProceed = approval.status === 'approved';
-    const mustWait = approval.status !== 'approved';
+    const statusProjection = APPROVAL_STATUS_PROJECTIONS[approval.status];
     const approvalUrl = context.dashboardUrl ? buildApprovalDeeplink(context.dashboardUrl, args.approvalId) : undefined;
-    const nextSteps: string[] = [];
-
-    if (approval.status === 'pending') {
-      nextSteps.push('BLOCKED - Do not proceed');
-      nextSteps.push('VERBAL APPROVAL NOT ACCEPTED - Use dashboard only');
-      nextSteps.push('Approval must be done via dashboard');
-      nextSteps.push('Continue polling with approvals action:"status"');
-      if (approvalUrl) {
-        nextSteps.push(`Review in dashboard: ${approvalUrl}`);
-      }
-    } else if (approval.status === 'approved') {
-      nextSteps.push('APPROVED - Can proceed');
-      nextSteps.push('Run approvals action:"delete" before continuing');
-      if (approval.response) {
-        nextSteps.push(`Response: ${approval.response}`);
-      }
-    } else if (approval.status === 'rejected') {
-      nextSteps.push('BLOCKED - REJECTED');
-      nextSteps.push('Do not proceed');
-      nextSteps.push('Review feedback and revise');
-      if (approval.response) {
-        nextSteps.push(`Reason: ${approval.response}`);
-      }
-      if (approval.annotations) {
-        nextSteps.push(`Notes: ${approval.annotations}`);
-      }
-    } else if (approval.status === 'needs-revision') {
-      nextSteps.push('BLOCKED - Do not proceed');
-      nextSteps.push('Update document with feedback');
-      nextSteps.push('Create NEW approval request');
-      if (approval.response) {
-        nextSteps.push(`Feedback: ${approval.response}`);
-      }
-      if (approval.annotations) {
-        nextSteps.push(`Notes: ${approval.annotations}`);
-      }
-      if (approval.comments && approval.comments.length > 0) {
-        nextSteps.push(`${approval.comments.length} comments for targeted fixes:`);
-        // Add each comment to nextSteps for visibility
-        approval.comments.forEach((comment, index) => {
-          if (comment.type === 'selection' && comment.selectedText) {
-            nextSteps.push(`  Comment ${index + 1} on "${comment.selectedText.substring(0, 50)}...": ${comment.comment}`);
-          } else {
-            nextSteps.push(`  Comment ${index + 1} (general): ${comment.comment}`);
-          }
-        });
-      }
-    }
+    const nextSteps = APPROVAL_NEXT_STEP_BUILDERS[approval.status](approval, approvalUrl);
 
     return {
       success: true,
@@ -470,10 +511,10 @@ async function handleGetApprovalStatus(
         response: approval.response,
         annotations: approval.annotations,
         comments: approval.comments,
-        isCompleted,
-        canProceed,
-        mustWait,
-        blockNext: !canProceed,
+        isCompleted: statusProjection.isCompleted,
+        canProceed: statusProjection.canProceed,
+        mustWait: statusProjection.mustWait,
+        blockNext: statusProjection.blockNext,
         dashboardUrl: context.dashboardUrl,
         approvalUrl
       },
@@ -496,7 +537,8 @@ async function handleGetApprovalStatus(
 
 async function handleDeleteApproval(
   args: DeleteApprovalArgs,
-  context: ToolContext
+  context: ToolContext,
+  approvalStoreFactory: ApprovalStoreFactory
 ): Promise<ToolResponse> {
   // approvalId is guaranteed by type
 
@@ -512,10 +554,10 @@ async function handleDeleteApproval(
 
     // Validate and resolve project path
     const validatedProjectPath = await validateProjectPath(projectPath);
-    // Translate path at tool entry point (ApprovalStorage expects pre-translated paths)
+    // Translate path at tool entry point (approval store expects pre-translated paths)
     const translatedPath = PathUtils.translatePath(validatedProjectPath);
 
-    const approvalStorage = new ApprovalStorage(translatedPath, validatedProjectPath);
+    const approvalStorage = approvalStoreFactory.create(translatedPath, validatedProjectPath);
     await approvalStorage.start();
 
     // Check if approval exists and its status

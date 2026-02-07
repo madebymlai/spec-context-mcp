@@ -58,8 +58,37 @@
    - If you write the same logic twice, extract it.
    - Ask: "Have I written this pattern elsewhere in the codebase?"
    - Ask: "Would changing this require updating multiple places?"
+   
+3. **No Defensive Garbage** — Let bugs surface, don't hide them
+   - No fallbacks for impossible cases. No `else` branches "just in case."
+   - Trust your contracts - if something shouldn't happen, let it fail loud.
+   - Ask: "Am I adding a fallback that hides bugs instead of surfacing them?"
+   - Ask: "Is this try/catch swallowing errors silently?"
+   - Ask: "Am I writing `if x is not None` everywhere instead of fixing the source?"
+   - Ask: "Does this 'safe' default make debugging impossible?"
+   - Ask: "Is this a dead branch that never executes but adds cognitive load?"
 
-3. **[Add project-specific standards]**
+4. **Composition over Inheritance** — Combine behaviors, don't extend them
+   - Use decorators, aggregators, and delegation instead of class hierarchies.
+   - Ask: "Am I inheriting just to reuse code?" (Use composition instead)
+   - Ask: "Is this class hierarchy deeper than 2 levels?"
+
+5. **Make Invalid States Unrepresentable** — Model states directly in types
+   - Prefer enums/unions and explicit state models over flag combinations.
+   - Ask: "Can this be represented as one discriminated union instead of multiple booleans?"
+   - Ask: "Would adding a new state require changing conditionals in many places?"
+
+6. **Tell, Don't Ask** — Put behavior where the data lives
+   - Prefer `object.do()` over branching on object internals in callers.
+   - Ask: "Am I inspecting data to decide behavior instead of delegating it?"
+   - Ask: "Can this decision be moved into the owning type?"
+
+7. **DIP at Composition Root** — Wire concrete implementations in one place
+   - Application code depends on abstractions; concrete types are selected at the composition boundary.
+   - Ask: "Is this file depending on an interface rather than a concrete implementation?"
+   - Ask: "Can this dependency be swapped without changing business logic?"
+
+8. **[Add project-specific standards]**
    - [Explanation]
    - Ask: "[Verification question]"
 

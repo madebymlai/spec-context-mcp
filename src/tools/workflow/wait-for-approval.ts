@@ -3,17 +3,132 @@ import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.js';
 import { resolveDashboardUrl, buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 
-/**
- * Safely translate a path, with defensive checks
- */
-function safeTranslatePath(path: string): string {
-  if (typeof PathUtils?.translatePath !== 'function') {
-    throw new Error(
-      `PathUtils.translatePath is not available (got ${typeof PathUtils?.translatePath}). ` +
-      'This may indicate a module loading issue. Please reinstall the package.'
-    );
+type ApprovalResolutionStatus = 'approved' | 'rejected' | 'needs-revision';
+type AutoDeleteMode = 'enabled' | 'disabled';
+
+type WaitApiComment = {
+  type: string;
+  selectedText?: string;
+  comment: string;
+};
+
+type WaitApiPayload = {
+  status?: string;
+  response?: string;
+  annotations?: string;
+  comments?: WaitApiComment[];
+  respondedAt?: string;
+  autoDeleted?: boolean;
+  timeout?: boolean;
+  message?: string;
+};
+
+type WaitTimeoutResult = {
+  kind: 'timeout';
+  message?: string;
+};
+
+type WaitResolvedResult = {
+  kind: 'resolved';
+  status: ApprovalResolutionStatus;
+  response?: string;
+  annotations?: string;
+  comments?: WaitApiComment[];
+  respondedAt?: string;
+  autoDeleted?: boolean;
+};
+
+type WaitResult = WaitTimeoutResult | WaitResolvedResult;
+
+const RESOLVED_APPROVAL_STATUSES: readonly ApprovalResolutionStatus[] = [
+  'approved',
+  'rejected',
+  'needs-revision'
+];
+
+const STATUS_NEXT_STEP_BUILDERS: Record<ApprovalResolutionStatus, (result: WaitResolvedResult) => string[]> = {
+  approved: (result) => {
+    const nextSteps = ['APPROVED - Proceed to next phase'];
+    if (result.response) {
+      nextSteps.push(`Response: ${result.response}`);
+    }
+    return nextSteps;
+  },
+  rejected: (result) => {
+    const nextSteps = [
+      'REJECTED - Do not proceed',
+      'Ask user for guidance on how to proceed'
+    ];
+    if (result.response) {
+      nextSteps.push(`Reason: ${result.response}`);
+    }
+    return nextSteps;
+  },
+  'needs-revision': (result) => {
+    const nextSteps = [
+      'NEEDS REVISION - Update document with feedback',
+      'After updating, create NEW approval request',
+      'Then call wait-for-approval again'
+    ];
+    if (result.response) {
+      nextSteps.push(`Feedback: ${result.response}`);
+    }
+    if (result.annotations) {
+      nextSteps.push(`Notes: ${result.annotations}`);
+    }
+    if (result.comments && result.comments.length > 0) {
+      nextSteps.push(`${result.comments.length} inline comments:`);
+      result.comments.forEach((comment, index) => {
+        nextSteps.push(formatInlineComment(comment, index));
+      });
+    }
+    return nextSteps;
   }
-  return PathUtils.translatePath(path);
+};
+
+function formatInlineComment(comment: WaitApiComment, index: number): string {
+  if (comment.type === 'selection' && comment.selectedText) {
+    const preview = comment.selectedText.length > 50
+      ? `${comment.selectedText.substring(0, 50)}...`
+      : comment.selectedText;
+    return `  ${index + 1}. On "${preview}": ${comment.comment}`;
+  }
+  return `  ${index + 1}. (general): ${comment.comment}`;
+}
+
+function resolveAutoDeleteMode(autoDelete: boolean | undefined): AutoDeleteMode {
+  return autoDelete === false ? 'disabled' : 'enabled';
+}
+
+function isAutoDeleteEnabled(mode: AutoDeleteMode): boolean {
+  return mode === 'enabled';
+}
+
+function isApprovalResolutionStatus(value: string | undefined): value is ApprovalResolutionStatus {
+  if (!value) {
+    return false;
+  }
+  return RESOLVED_APPROVAL_STATUSES.includes(value as ApprovalResolutionStatus);
+}
+
+function normalizeWaitResult(payload: WaitApiPayload): WaitResult {
+  if (payload.timeout === true) {
+    return { kind: 'timeout', message: payload.message };
+  }
+
+  if (!isApprovalResolutionStatus(payload.status)) {
+    throw new Error(`Invalid approval wait status: ${String(payload.status)}`);
+  }
+
+  return {
+    kind: 'resolved',
+    status: payload.status,
+    response: payload.response,
+    annotations: payload.annotations,
+    comments: payload.comments,
+    respondedAt: payload.respondedAt,
+    autoDeleted: payload.autoDeleted
+  };
 }
 
 export const waitForApprovalTool: Tool = {
@@ -88,7 +203,7 @@ export async function waitForApprovalHandler(
   try {
     // Validate and resolve project path
     const validatedProjectPath = await validateProjectPath(projectPath);
-    const translatedPath = safeTranslatePath(validatedProjectPath);
+    const translatedPath = PathUtils.translatePath(validatedProjectPath);
 
     // Get dashboard URL from context
     const dashboardUrl = context.dashboardUrl || await resolveDashboardUrl();
@@ -126,8 +241,8 @@ export async function waitForApprovalHandler(
 
     // Build wait endpoint URL
     const timeoutMs = Math.min(args.timeoutMs || 600000, 1800000);
-    const autoDelete = args.autoDelete !== false;
-    const waitUrl = `${dashboardUrl}/api/projects/${project.projectId}/approvals/${args.approvalId}/wait?timeout=${timeoutMs}&autoDelete=${autoDelete}`;
+    const autoDeleteMode = resolveAutoDeleteMode(args.autoDelete);
+    const waitUrl = `${dashboardUrl}/api/projects/${project.projectId}/approvals/${args.approvalId}/wait?timeout=${timeoutMs}&autoDelete=${isAutoDeleteEnabled(autoDeleteMode)}`;
     const approvalUrl = buildApprovalDeeplink(dashboardUrl, args.approvalId, project.projectId);
 
     // Call the wait endpoint (this will block)
@@ -146,27 +261,13 @@ export async function waitForApprovalHandler(
         };
       }
 
-      const result = await response.json() as {
-        resolved: boolean;
-        status: string;
-        response?: string;
-        annotations?: string;
-        comments?: Array<{
-          type: string;
-          selectedText?: string;
-          comment: string;
-        }>;
-        respondedAt?: string;
-        autoDeleted?: boolean;
-        timeout?: boolean;
-        message?: string;
-      };
+      const rawResult = await response.json() as WaitApiPayload;
+      const waitResult = normalizeWaitResult(rawResult);
 
-      // Handle timeout
-      if (result.timeout) {
+      if (waitResult.kind === 'timeout') {
         return {
           success: false,
-          message: 'Timeout waiting for approval. User has not responded yet.',
+          message: waitResult.message || 'Timeout waiting for approval. User has not responded yet.',
           data: {
             approvalId: args.approvalId,
             status: 'pending',
@@ -181,57 +282,20 @@ export async function waitForApprovalHandler(
         };
       }
 
-      // Handle resolved approval
-      const canProceed = result.status === 'approved';
-      const nextSteps: string[] = [];
-
-      if (result.status === 'approved') {
-        nextSteps.push('APPROVED - Proceed to next phase');
-        if (result.response) {
-          nextSteps.push(`Response: ${result.response}`);
-        }
-      } else if (result.status === 'rejected') {
-        nextSteps.push('REJECTED - Do not proceed');
-        nextSteps.push('Ask user for guidance on how to proceed');
-        if (result.response) {
-          nextSteps.push(`Reason: ${result.response}`);
-        }
-      } else if (result.status === 'needs-revision') {
-        nextSteps.push('NEEDS REVISION - Update document with feedback');
-        nextSteps.push('After updating, create NEW approval request');
-        nextSteps.push('Then call wait-for-approval again');
-        if (result.response) {
-          nextSteps.push(`Feedback: ${result.response}`);
-        }
-        if (result.annotations) {
-          nextSteps.push(`Notes: ${result.annotations}`);
-        }
-        if (result.comments && result.comments.length > 0) {
-          nextSteps.push(`${result.comments.length} inline comments:`);
-          result.comments.forEach((comment, index) => {
-            if (comment.type === 'selection' && comment.selectedText) {
-              const preview = comment.selectedText.length > 50
-                ? comment.selectedText.substring(0, 50) + '...'
-                : comment.selectedText;
-              nextSteps.push(`  ${index + 1}. On "${preview}": ${comment.comment}`);
-            } else {
-              nextSteps.push(`  ${index + 1}. (general): ${comment.comment}`);
-            }
-          });
-        }
-      }
+      const canProceed = waitResult.status === 'approved';
+      const nextSteps = STATUS_NEXT_STEP_BUILDERS[waitResult.status](waitResult);
 
       return {
         success: true,
-        message: `Approval resolved: ${result.status}${result.autoDeleted ? ' (auto-cleaned)' : ''}`,
+        message: `Approval resolved: ${waitResult.status}${waitResult.autoDeleted ? ' (auto-cleaned)' : ''}`,
         data: {
           approvalId: args.approvalId,
-          status: result.status,
-          response: result.response,
-          annotations: result.annotations,
-          comments: result.comments,
-          respondedAt: result.respondedAt,
-          autoDeleted: result.autoDeleted,
+          status: waitResult.status,
+          response: waitResult.response,
+          annotations: waitResult.annotations,
+          comments: waitResult.comments,
+          respondedAt: waitResult.respondedAt,
+          autoDeleted: waitResult.autoDeleted,
           canProceed,
           approvalUrl,
         },
