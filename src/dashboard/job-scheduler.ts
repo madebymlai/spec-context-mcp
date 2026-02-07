@@ -1,10 +1,6 @@
 import * as cron from 'node-cron';
-import { SettingsManager } from './settings-manager.js';
-import { ExecutionHistoryManager } from './execution-history-manager.js';
-import { ProjectManager } from './project-manager.js';
-import { AutomationJob } from '../workflow-types.js';
-import { promises as fs } from 'fs';
 import { join } from 'path';
+import { AutomationJob, GlobalSettings, JobExecutionHistory } from '../workflow-types.js';
 
 export interface JobExecutionResult {
   jobId: string;
@@ -12,41 +8,109 @@ export interface JobExecutionResult {
   success: boolean;
   startTime: string;
   endTime: string;
-  duration: number; // in milliseconds
+  duration: number;
   itemsProcessed: number;
   itemsDeleted: number;
   error?: string;
 }
 
-export class JobScheduler {
-  private settingsManager: SettingsManager;
-  private historyManager: ExecutionHistoryManager;
-  private projectManager: ProjectManager;
-  private scheduledJobs: Map<string, cron.ScheduledTask> = new Map();
+interface ApprovalCleanupRecord {
+  id: string;
+  createdAt: string;
+}
 
-  constructor(projectManager: ProjectManager) {
-    this.settingsManager = new SettingsManager();
-    this.historyManager = new ExecutionHistoryManager();
-    this.projectManager = projectManager;
+interface SpecCleanupRecord {
+  name: string;
+  createdAt: string;
+}
+
+export interface ApprovalCleanupStore {
+  getAllApprovals(): Promise<ApprovalCleanupRecord[]>;
+  deleteApproval(approvalId: string): Promise<boolean>;
+}
+
+export interface SpecCleanupStore {
+  getAllSpecs(): Promise<SpecCleanupRecord[]>;
+  getAllArchivedSpecs(): Promise<SpecCleanupRecord[]>;
+}
+
+export interface JobSchedulerProjectContext {
+  projectPath: string;
+  approvalStorage: ApprovalCleanupStore;
+  parser: SpecCleanupStore;
+}
+
+export interface JobSchedulerProjectCatalog {
+  getProjectsList(): Array<{ projectId: string }>;
+  getProject(projectId: string): JobSchedulerProjectContext | undefined;
+}
+
+export interface JobSettingsStore {
+  loadSettings(): Promise<GlobalSettings>;
+  getJob(jobId: string): Promise<AutomationJob | null>;
+  updateJob(jobId: string, updates: Partial<AutomationJob>): Promise<void>;
+  deleteJob(jobId: string): Promise<void>;
+  addJob(job: AutomationJob): Promise<void>;
+  getAllJobs(): Promise<AutomationJob[]>;
+}
+
+export interface JobHistoryStore {
+  recordExecution(execution: JobExecutionHistory): Promise<void>;
+  getJobHistory(jobId: string, limit?: number): Promise<JobExecutionHistory[]>;
+  getJobStats(jobId: string): Promise<unknown>;
+}
+
+export interface ArtifactRemover {
+  remove(path: string): Promise<void>;
+}
+
+export interface JobSchedulerDependencies {
+  settingsStore: JobSettingsStore;
+  historyStore: JobHistoryStore;
+  projectCatalog: JobSchedulerProjectCatalog;
+  artifactRemover: ArtifactRemover;
+}
+
+interface CleanupResult {
+  processed: number;
+  deleted: number;
+}
+
+type JobCleanupHandler = (project: JobSchedulerProjectContext, daysOld: number) => Promise<CleanupResult>;
+
+type JobType = AutomationJob['type'];
+
+export class JobScheduler {
+  private readonly settingsStore: JobSettingsStore;
+  private readonly historyStore: JobHistoryStore;
+  private readonly projectCatalog: JobSchedulerProjectCatalog;
+  private readonly artifactRemover: ArtifactRemover;
+  private readonly scheduledJobs: Map<string, cron.ScheduledTask> = new Map();
+  private readonly cleanupHandlers: Record<JobType, JobCleanupHandler>;
+
+  constructor(dependencies: JobSchedulerDependencies) {
+    this.settingsStore = dependencies.settingsStore;
+    this.historyStore = dependencies.historyStore;
+    this.projectCatalog = dependencies.projectCatalog;
+    this.artifactRemover = dependencies.artifactRemover;
+
+    this.cleanupHandlers = {
+      'cleanup-approvals': async (project, daysOld) => this.cleanupApprovals(project.approvalStorage, daysOld),
+      'cleanup-specs': async (project, daysOld) => this.cleanupSpecs(project.projectPath, project.parser, daysOld),
+      'cleanup-archived-specs': async (project, daysOld) => this.cleanupArchivedSpecs(project.projectPath, project.parser, daysOld),
+    };
   }
 
-  /**
-   * Initialize the scheduler
-   * 1. Run catch-up for any missed jobs
-   * 2. Schedule recurring jobs
-   */
   async initialize(): Promise<void> {
     try {
-      const settings = await this.settingsManager.loadSettings();
+      const settings = await this.settingsStore.loadSettings();
 
-      // Run catch-up for all enabled jobs
       for (const job of settings.automationJobs) {
         if (job.enabled) {
           await this.runJobCatchUp(job);
         }
       }
 
-      // Schedule recurring jobs
       for (const job of settings.automationJobs) {
         if (job.enabled) {
           this.scheduleJob(job);
@@ -59,9 +123,6 @@ export class JobScheduler {
     }
   }
 
-  /**
-   * Run catch-up for a job - delete any records that should have been deleted
-   */
   private async runJobCatchUp(job: AutomationJob): Promise<void> {
     const startTime = new Date();
 
@@ -74,43 +135,19 @@ export class JobScheduler {
         );
       }
 
-      // Record execution history
-      await this.historyManager.recordExecution({
-        jobId: job.id,
-        jobName: job.name,
-        jobType: job.type,
-        executedAt: result.startTime,
-        success: result.success,
-        duration: result.duration,
-        itemsProcessed: result.itemsProcessed,
-        itemsDeleted: result.itemsDeleted,
-        error: result.error
-      });
-
-      // Update lastRun timestamp
-      await this.settingsManager.updateJob(job.id, {
-        lastRun: startTime.toISOString()
+      await this.recordExecution(job, result);
+      await this.settingsStore.updateJob(job.id, {
+        lastRun: startTime.toISOString(),
       });
     } catch (error) {
       console.error(`[JobScheduler] Catch-up failed for "${job.name}":`, error);
     }
   }
 
-  /**
-   * Schedule a recurring job with cron
-   */
   private scheduleJob(job: AutomationJob): void {
     try {
-      // Unschedule if already scheduled
-      if (this.scheduledJobs.has(job.id)) {
-        const scheduled = this.scheduledJobs.get(job.id);
-        if (scheduled) {
-          scheduled.stop();
-        }
-        this.scheduledJobs.delete(job.id);
-      }
+      this.unscheduleJob(job.id);
 
-      // Schedule new cron job
       const task = cron.schedule(job.schedule, async () => {
         try {
           const startTime = new Date();
@@ -120,22 +157,9 @@ export class JobScheduler {
             `[JobScheduler] Executed "${job.name}": ${result.itemsDeleted} items deleted in ${result.duration}ms`
           );
 
-          // Record execution history
-          await this.historyManager.recordExecution({
-            jobId: job.id,
-            jobName: job.name,
-            jobType: job.type,
-            executedAt: result.startTime,
-            success: result.success,
-            duration: result.duration,
-            itemsProcessed: result.itemsProcessed,
-            itemsDeleted: result.itemsDeleted,
-            error: result.error
-          });
-
-          // Update lastRun timestamp
-          await this.settingsManager.updateJob(job.id, {
-            lastRun: startTime.toISOString()
+          await this.recordExecution(job, result);
+          await this.settingsStore.updateJob(job.id, {
+            lastRun: startTime.toISOString(),
           });
         } catch (error) {
           console.error(`[JobScheduler] Execution failed for "${job.name}":`, error);
@@ -149,9 +173,6 @@ export class JobScheduler {
     }
   }
 
-  /**
-   * Execute a job against all projects
-   */
   private async executeJob(job: AutomationJob): Promise<JobExecutionResult> {
     const startTime = new Date();
     let itemsProcessed = 0;
@@ -159,39 +180,21 @@ export class JobScheduler {
     let error: string | undefined;
 
     try {
-      const projects = this.projectManager.getProjectsList();
+      const cleanupHandler = this.cleanupHandlers[job.type];
+      const projects = this.projectCatalog.getProjectsList();
 
       for (const project of projects) {
-        const projectContext = this.projectManager.getProject(project.projectId);
-        if (!projectContext) continue;
-
-        if (job.type === 'cleanup-approvals') {
-          const { processed, deleted } = await this.cleanupApprovals(
-            projectContext.approvalStorage,
-            job.config.daysOld
-          );
-          itemsProcessed += processed;
-          itemsDeleted += deleted;
-        } else if (job.type === 'cleanup-specs') {
-          const { processed, deleted } = await this.cleanupSpecs(
-            projectContext.parser,
-            projectContext.projectPath,
-            job.config.daysOld
-          );
-          itemsProcessed += processed;
-          itemsDeleted += deleted;
-        } else if (job.type === 'cleanup-archived-specs') {
-          const { processed, deleted } = await this.cleanupArchivedSpecs(
-            projectContext.parser,
-            projectContext.projectPath,
-            job.config.daysOld
-          );
-          itemsProcessed += processed;
-          itemsDeleted += deleted;
+        const projectContext = this.projectCatalog.getProject(project.projectId);
+        if (!projectContext) {
+          throw new Error(`Project context not found for project ${project.projectId}`);
         }
+
+        const result = await cleanupHandler(projectContext, job.config.daysOld);
+        itemsProcessed += result.processed;
+        itemsDeleted += result.deleted;
       }
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+    } catch (executionError) {
+      error = executionError instanceof Error ? executionError.message : String(executionError);
     }
 
     const endTime = new Date();
@@ -205,191 +208,171 @@ export class JobScheduler {
       duration: endTime.getTime() - startTime.getTime(),
       itemsProcessed,
       itemsDeleted,
-      error
+      error,
     };
   }
 
-  /**
-   * Clean up old approval records
-   */
   private async cleanupApprovals(
-    approvalStorage: any,
+    approvalStorage: ApprovalCleanupStore,
     daysOld: number
-  ): Promise<{ processed: number; deleted: number }> {
+  ): Promise<CleanupResult> {
     const approvals = await approvalStorage.getAllApprovals();
-    const now = new Date();
-    const cutoffTime = now.getTime() - daysOld * 24 * 60 * 60 * 1000;
+    const cutoffTime = Date.now() - daysOld * 24 * 60 * 60 * 1000;
 
     let deleted = 0;
 
     for (const approval of approvals) {
       const createdTime = new Date(approval.createdAt).getTime();
-      if (createdTime < cutoffTime) {
-        try {
-          await approvalStorage.deleteApproval(approval.id);
-          deleted++;
-        } catch (e) {
-          console.error(`Failed to delete approval ${approval.id}:`, e);
-        }
+      if (createdTime >= cutoffTime) {
+        continue;
+      }
+
+      try {
+        await approvalStorage.deleteApproval(approval.id);
+        deleted += 1;
+      } catch (error) {
+        console.error(`Failed to delete approval ${approval.id}:`, error);
       }
     }
 
     return { processed: approvals.length, deleted };
   }
 
-  /**
-   * Clean up old active specs
-   */
   private async cleanupSpecs(
-    parser: any,
     projectPath: string,
+    parser: SpecCleanupStore,
     daysOld: number
-  ): Promise<{ processed: number; deleted: number }> {
+  ): Promise<CleanupResult> {
     const specs = await parser.getAllSpecs();
-    const now = new Date();
-    const cutoffTime = now.getTime() - daysOld * 24 * 60 * 60 * 1000;
-
-    let deleted = 0;
-
-    for (const spec of specs) {
-      const createdTime = new Date(spec.createdAt).getTime();
-      if (createdTime < cutoffTime) {
-        try {
-          // Delete spec directory
-          const specPath = join(projectPath, '.spec-context', 'specs', spec.name);
-          await fs.rm(specPath, { recursive: true, force: true });
-          deleted++;
-        } catch (e) {
-          console.error(`Failed to delete spec ${spec.name}:`, e);
-        }
-      }
-    }
-
-    return { processed: specs.length, deleted };
+    return this.cleanupSpecCollection({
+      specs,
+      daysOld,
+      toPath: spec => join(projectPath, '.spec-context', 'specs', spec.name),
+      onDeleteError: specName => `Failed to delete spec ${specName}`,
+    });
   }
 
-  /**
-   * Clean up old archived specs
-   */
   private async cleanupArchivedSpecs(
-    parser: any,
     projectPath: string,
+    parser: SpecCleanupStore,
     daysOld: number
-  ): Promise<{ processed: number; deleted: number }> {
+  ): Promise<CleanupResult> {
     const archivedSpecs = await parser.getAllArchivedSpecs();
-    const now = new Date();
-    const cutoffTime = now.getTime() - daysOld * 24 * 60 * 60 * 1000;
+    return this.cleanupSpecCollection({
+      specs: archivedSpecs,
+      daysOld,
+      toPath: spec => join(projectPath, '.spec-context', 'archive', 'specs', spec.name),
+      onDeleteError: specName => `Failed to delete archived spec ${specName}`,
+    });
+  }
 
+  private async cleanupSpecCollection(args: {
+    specs: SpecCleanupRecord[];
+    daysOld: number;
+    toPath(spec: SpecCleanupRecord): string;
+    onDeleteError(specName: string): string;
+  }): Promise<CleanupResult> {
+    const cutoffTime = Date.now() - args.daysOld * 24 * 60 * 60 * 1000;
     let deleted = 0;
 
-    for (const spec of archivedSpecs) {
+    for (const spec of args.specs) {
       const createdTime = new Date(spec.createdAt).getTime();
-      if (createdTime < cutoffTime) {
-        try {
-          // Delete archived spec directory
-          const archivedPath = join(projectPath, '.spec-context', 'archive', 'specs', spec.name);
-          await fs.rm(archivedPath, { recursive: true, force: true });
-          deleted++;
-        } catch (e) {
-          console.error(`Failed to delete archived spec ${spec.name}:`, e);
-        }
+      if (createdTime >= cutoffTime) {
+        continue;
+      }
+
+      try {
+        await this.artifactRemover.remove(args.toPath(spec));
+        deleted += 1;
+      } catch (error) {
+        console.error(`${args.onDeleteError(spec.name)}:`, error);
       }
     }
 
-    return { processed: archivedSpecs.length, deleted };
+    return {
+      processed: args.specs.length,
+      deleted,
+    };
   }
 
-  /**
-   * Manually trigger a job execution
-   */
   async runJobManually(jobId: string): Promise<JobExecutionResult> {
-    const job = await this.settingsManager.getJob(jobId);
+    const job = await this.settingsStore.getJob(jobId);
     if (!job) {
       throw new Error(`Job with ID ${jobId} not found`);
     }
 
-    return await this.executeJob(job);
+    return this.executeJob(job);
   }
 
-  /**
-   * Update a job configuration and reschedule if needed
-   */
-  async updateJob(jobId: string, updates: any): Promise<void> {
-    // Update in settings
-    await this.settingsManager.updateJob(jobId, updates);
+  async updateJob(jobId: string, updates: Partial<AutomationJob>): Promise<void> {
+    await this.settingsStore.updateJob(jobId, updates);
 
-    // Reschedule if enabled status or schedule changed
-    const job = await this.settingsManager.getJob(jobId);
-    if (job) {
-      if (job.enabled) {
-        this.scheduleJob(job);
-      } else {
-        // Stop scheduled job
-        const scheduled = this.scheduledJobs.get(job.id);
-        if (scheduled) {
-          scheduled.stop();
-          this.scheduledJobs.delete(job.id);
-        }
-      }
+    const job = await this.settingsStore.getJob(jobId);
+    if (!job) {
+      return;
     }
+
+    if (job.enabled) {
+      this.scheduleJob(job);
+      return;
+    }
+
+    this.unscheduleJob(job.id);
   }
 
-  /**
-   * Delete a job
-   */
   async deleteJob(jobId: string): Promise<void> {
-    // Stop scheduled job
-    const scheduled = this.scheduledJobs.get(jobId);
-    if (scheduled) {
-      scheduled.stop();
-      this.scheduledJobs.delete(jobId);
-    }
-
-    // Delete from settings
-    await this.settingsManager.deleteJob(jobId);
+    this.unscheduleJob(jobId);
+    await this.settingsStore.deleteJob(jobId);
   }
 
-  /**
-   * Add a new job
-   */
   async addJob(job: AutomationJob): Promise<void> {
-    await this.settingsManager.addJob(job);
-
-    // Schedule if enabled
+    await this.settingsStore.addJob(job);
     if (job.enabled) {
       this.scheduleJob(job);
     }
   }
 
-  /**
-   * Get all jobs
-   */
   async getAllJobs(): Promise<AutomationJob[]> {
-    return await this.settingsManager.getAllJobs();
+    return this.settingsStore.getAllJobs();
   }
 
-  /**
-   * Get execution history for a job
-   */
   async getJobExecutionHistory(jobId: string, limit: number = 50) {
-    return await this.historyManager.getJobHistory(jobId, limit);
+    return this.historyStore.getJobHistory(jobId, limit);
   }
 
-  /**
-   * Get execution statistics for a job
-   */
   async getJobStats(jobId: string) {
-    return await this.historyManager.getJobStats(jobId);
+    return this.historyStore.getJobStats(jobId);
   }
 
-  /**
-   * Shutdown the scheduler
-   */
   async shutdown(): Promise<void> {
     for (const task of this.scheduledJobs.values()) {
       task.stop();
     }
     this.scheduledJobs.clear();
     console.error('[JobScheduler] Shutdown complete');
+  }
+
+  private async recordExecution(job: AutomationJob, result: JobExecutionResult): Promise<void> {
+    await this.historyStore.recordExecution({
+      jobId: job.id,
+      jobName: job.name,
+      jobType: job.type,
+      executedAt: result.startTime,
+      success: result.success,
+      duration: result.duration,
+      itemsProcessed: result.itemsProcessed,
+      itemsDeleted: result.itemsDeleted,
+      error: result.error,
+    });
+  }
+
+  private unscheduleJob(jobId: string): void {
+    const scheduled = this.scheduledJobs.get(jobId);
+    if (!scheduled) {
+      return;
+    }
+
+    scheduled.stop();
+    this.scheduledJobs.delete(jobId);
   }
 }

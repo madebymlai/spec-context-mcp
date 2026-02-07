@@ -1,21 +1,98 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { stat } from 'fs/promises';
 import { join } from 'path';
-import { ToolContext, ToolResponse } from '../../workflow-types.js';
+import { SpecData, ToolContext, ToolResponse } from '../../workflow-types.js';
 import { PathUtils } from '../../core/workflow/path-utils.js';
 import { SpecParser } from '../../core/workflow/parser.js';
 import { areFileFingerprintsEqual, type FileContentFingerprint } from '../../core/cache/file-content-cache.js';
 import { getSharedFileContentCache } from '../../core/cache/shared-file-content-cache.js';
 import { setBoundedMapEntry } from '../../core/cache/bounded-map.js';
 
+export interface SpecStatusReader {
+  getSpec(name: string): Promise<SpecData | null>;
+}
+
+export interface SpecStatusReaderFactory {
+  create(projectPath: string): SpecStatusReader;
+}
+
+interface SpecStatusArgs {
+  projectPath?: string;
+  specName: string;
+}
+
+type SpecWorkflowPhase =
+  | 'requirements'
+  | 'design'
+  | 'tasks'
+  | 'implementation'
+  | 'completed';
+
+type SpecOverallStatus =
+  | 'requirements-needed'
+  | 'design-needed'
+  | 'tasks-needed'
+  | 'implementing'
+  | 'ready-for-implementation'
+  | 'completed';
+
+interface SpecWorkflowState {
+  currentPhase: SpecWorkflowPhase;
+  overallStatus: SpecOverallStatus;
+}
+
 interface SpecStatusCacheEntry {
-  spec: Awaited<ReturnType<SpecParser['getSpec']>>;
+  spec: SpecData;
   tasksFingerprint: FileContentFingerprint | null;
   specDirMtimeMs: number | null;
 }
 
+interface SpecStatusRule {
+  matches(spec: SpecData): boolean;
+  state: SpecWorkflowState;
+}
+
+const DOCUMENT_PHASES = [
+  { key: 'requirements', name: 'Requirements' },
+  { key: 'design', name: 'Design' },
+  { key: 'tasks', name: 'Tasks' },
+] as const;
+
+const SPEC_STATUS_RULES: readonly SpecStatusRule[] = [
+  {
+    matches: (spec) => !spec.phases.requirements.exists,
+    state: { currentPhase: 'requirements', overallStatus: 'requirements-needed' },
+  },
+  {
+    matches: (spec) => !spec.phases.design.exists,
+    state: { currentPhase: 'design', overallStatus: 'design-needed' },
+  },
+  {
+    matches: (spec) => !spec.phases.tasks.exists,
+    state: { currentPhase: 'tasks', overallStatus: 'tasks-needed' },
+  },
+  {
+    matches: (spec) => hasPendingTasks(spec),
+    state: { currentPhase: 'implementation', overallStatus: 'implementing' },
+  },
+  {
+    matches: (spec) => areAllTasksCompleted(spec),
+    state: { currentPhase: 'completed', overallStatus: 'completed' },
+  },
+  {
+    matches: () => true,
+    state: { currentPhase: 'implementation', overallStatus: 'ready-for-implementation' },
+  },
+];
+
 const specStatusCache = new Map<string, SpecStatusCacheEntry>();
 const MAX_SPEC_STATUS_CACHE_ENTRIES = 512;
+
+const defaultSpecStatusReaderFactory: SpecStatusReaderFactory = {
+  create(projectPath: string): SpecStatusReader {
+    return new SpecParser(projectPath);
+  },
+};
 
 export const specStatusTool: Tool = {
   name: 'spec-status',
@@ -26,11 +103,11 @@ Call when resuming work on a spec or checking overall completion status. Shows w
   inputSchema: {
     type: 'object',
     properties: {
-      projectPath: { 
+      projectPath: {
         type: 'string',
         description: 'Absolute path to the project root (optional - uses server context path if not provided)'
       },
-      specName: { 
+      specName: {
         type: 'string',
         description: 'Name of the specification'
       }
@@ -59,184 +136,204 @@ Call when resuming work on a spec or checking overall completion status. Shows w
   },
 };
 
-export async function specStatusHandler(args: any, context: ToolContext): Promise<ToolResponse> {
-  const { specName } = args;
-  const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
-  
-  // Use context projectPath as default, allow override via args
-  const projectPath = args.projectPath || context.projectPath;
-  
-  if (!projectPath) {
-    return {
-      success: false,
-      message: 'Project path is required but not provided in context or arguments'
-    };
-  }
+export function createSpecStatusHandler(
+  specStatusReaderFactory: SpecStatusReaderFactory
+): (args: unknown, context: ToolContext) => Promise<ToolResponse> {
+  return async function specStatusHandler(args: unknown, context: ToolContext): Promise<ToolResponse> {
+    const parsedArgs = args as SpecStatusArgs;
+    const specName = parsedArgs.specName;
+    const projectPath = parsedArgs.projectPath ?? context.projectPath;
+    const fileContentCache = context.fileContentCache ?? getSharedFileContentCache();
 
-  try {
-    // Translate path at tool entry point (components expect pre-translated paths)
-    const translatedPath = PathUtils.translatePath(projectPath);
-    const cacheKey = buildSpecStatusCacheKey(translatedPath, specName);
-    const specDirPath = PathUtils.getSpecPath(translatedPath, specName);
-    const tasksPath = join(specDirPath, 'tasks.md');
-    await fileContentCache.get(tasksPath, { namespace: 'spec-status' });
-    const tasksFingerprint = fileContentCache.getFingerprint(tasksPath);
-    const specDirMtimeMs = await getDirectoryMtimeMs(specDirPath);
-
-    const cached = specStatusCache.get(cacheKey);
-    const useCachedSpec =
-      cached !== undefined
-      && areFileFingerprintsEqual(cached.tasksFingerprint, tasksFingerprint)
-      && cached.specDirMtimeMs === specDirMtimeMs;
-
-    let spec = useCachedSpec ? cached.spec : null;
-    if (!useCachedSpec) {
-      const parser = new SpecParser(translatedPath);
-      spec = await parser.getSpec(specName);
-      if (spec) {
-        setBoundedMapEntry(specStatusCache, cacheKey, {
-          spec,
-          tasksFingerprint,
-          specDirMtimeMs,
-        }, MAX_SPEC_STATUS_CACHE_ENTRIES);
-      } else {
-        specStatusCache.delete(cacheKey);
-      }
-    }
-    
-    if (!spec) {
+    if (!projectPath) {
       return {
         success: false,
-        message: `Specification '${specName}' not found`,
-        nextSteps: [
-          'Check spec name',
-          'Use spec-list for available specs',
-          'Create spec with create-spec-doc'
-        ]
+        message: 'Project path is required but not provided in context or arguments'
       };
     }
 
-    // Determine current phase and overall status
-    let currentPhase = 'not-started';
-    let overallStatus = 'not-started';
-    
-    if (!spec.phases.requirements.exists) {
-      currentPhase = 'requirements';
-      overallStatus = 'requirements-needed';
-    } else if (!spec.phases.design.exists) {
-      currentPhase = 'design';
-      overallStatus = 'design-needed';
-    } else if (!spec.phases.tasks.exists) {
-      currentPhase = 'tasks';
-      overallStatus = 'tasks-needed';
-    } else if (spec.taskProgress && spec.taskProgress.pending > 0) {
-      currentPhase = 'implementation';
-      overallStatus = 'implementing';
-    } else if (spec.taskProgress && spec.taskProgress.total > 0 && spec.taskProgress.completed === spec.taskProgress.total) {
-      currentPhase = 'completed';
-      overallStatus = 'completed';
-    } else {
-      currentPhase = 'implementation';
-      overallStatus = 'ready-for-implementation';
-    }
+    try {
+      const translatedPath = PathUtils.translatePath(projectPath);
+      const cacheKey = buildSpecStatusCacheKey(translatedPath, specName);
+      const specDirPath = PathUtils.getSpecPath(translatedPath, specName);
+      const tasksPath = join(specDirPath, 'tasks.md');
+      await fileContentCache.get(tasksPath, { namespace: 'spec-status' });
+      const tasksFingerprint = fileContentCache.getFingerprint(tasksPath);
+      const specDirMtimeMs = await getDirectoryMtimeMs(specDirPath);
 
-    // Phase details
-    const phaseDetails = [
-      {
-        name: 'Requirements',
-        status: spec.phases.requirements.exists ? (spec.phases.requirements.approved ? 'approved' : 'created') : 'missing',
-        lastModified: spec.phases.requirements.lastModified
-      },
-      {
-        name: 'Design',
-        status: spec.phases.design.exists ? (spec.phases.design.approved ? 'approved' : 'created') : 'missing',
-        lastModified: spec.phases.design.lastModified
-      },
-      {
-        name: 'Tasks',
-        status: spec.phases.tasks.exists ? (spec.phases.tasks.approved ? 'approved' : 'created') : 'missing',
-        lastModified: spec.phases.tasks.lastModified
-      },
-      {
-        name: 'Implementation',
-        status: spec.phases.implementation.exists ? 'in-progress' : 'not-started',
-        progress: spec.taskProgress
-      }
-    ];
+      const cached = specStatusCache.get(cacheKey);
+      const useCachedSpec =
+        cached !== undefined
+        && areFileFingerprintsEqual(cached.tasksFingerprint, tasksFingerprint)
+        && cached.specDirMtimeMs === specDirMtimeMs;
 
-    // Next steps based on current phase
-    const nextSteps = [];
-    switch (currentPhase) {
-      case 'requirements':
-        nextSteps.push('Read template: .spec-context/templates/requirements-template-v*.md');
-        nextSteps.push('Create: .spec-context/specs/{name}/requirements.md');
-        nextSteps.push('Request approval');
-        break;
-      case 'design':
-        nextSteps.push('Read template: .spec-context/templates/design-template-v*.md');
-        nextSteps.push('Create: .spec-context/specs/{name}/design.md');
-        nextSteps.push('Request approval');
-        break;
-      case 'tasks':
-        nextSteps.push('Read template: .spec-context/templates/tasks-template-v*.md');
-        nextSteps.push('Create: .spec-context/specs/{name}/tasks.md');
-        nextSteps.push('Request approval');
-        break;
-      case 'implementation':
-        if (spec.taskProgress && spec.taskProgress.pending > 0) {
-          nextSteps.push(`Read tasks: .spec-context/specs/${specName}/tasks.md`);
-          nextSteps.push('Edit tasks.md: Change [ ] to [-] for task you start');
-          nextSteps.push('Implement the task code');
-          nextSteps.push('Edit tasks.md: Change [-] to [x] when completed');
+      let spec = useCachedSpec ? cached.spec : null;
+      if (!useCachedSpec) {
+        const reader = specStatusReaderFactory.create(translatedPath);
+        spec = await reader.getSpec(specName);
+        if (spec) {
+          setBoundedMapEntry(specStatusCache, cacheKey, {
+            spec,
+            tasksFingerprint,
+            specDirMtimeMs,
+          }, MAX_SPEC_STATUS_CACHE_ENTRIES);
         } else {
-          nextSteps.push(`Read tasks: .spec-context/specs/${specName}/tasks.md`);
-          nextSteps.push('Begin implementation by marking first task [-]');
+          specStatusCache.delete(cacheKey);
         }
-        break;
-      case 'completed':
-        nextSteps.push('All tasks completed (marked [x])');
-        nextSteps.push('Run tests');
-        break;
-    }
-
-    return {
-      success: true,
-      message: `Specification '${specName}' status: ${overallStatus}`,
-      data: {
-        name: specName,
-        description: spec.description,
-        currentPhase,
-        overallStatus,
-        createdAt: spec.createdAt,
-        lastModified: spec.lastModified,
-        phases: phaseDetails,
-        taskProgress: spec.taskProgress || {
-          total: 0,
-          completed: 0,
-          pending: 0
-        }
-      },
-      nextSteps,
-      projectContext: {
-        projectPath,
-        workflowRoot: PathUtils.getWorkflowRoot(projectPath),
-        currentPhase,
-        dashboardUrl: context.dashboardUrl
       }
-    };
-    
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return {
-      success: false,
-      message: `Failed to get specification status: ${errorMessage}`,
-      nextSteps: [
-        'Check if the specification exists',
-        'Verify the project path',
-        'List directory .spec-context/specs/ to see available specifications'
-      ]
-    };
+
+      if (!spec) {
+        return {
+          success: false,
+          message: `Specification '${specName}' not found`,
+          nextSteps: [
+            'Check spec name',
+            'Use spec-list for available specs',
+            'Create spec with create-spec-doc'
+          ]
+        };
+      }
+
+      const workflowState = resolveSpecWorkflowState(spec);
+      const phaseDetails = buildPhaseDetails(spec);
+      const nextSteps = buildNextSteps(workflowState.currentPhase, spec, specName);
+
+      return {
+        success: true,
+        message: `Specification '${specName}' status: ${workflowState.overallStatus}`,
+        data: {
+          name: specName,
+          description: spec.description,
+          currentPhase: workflowState.currentPhase,
+          overallStatus: workflowState.overallStatus,
+          createdAt: spec.createdAt,
+          lastModified: spec.lastModified,
+          phases: phaseDetails,
+          taskProgress: spec.taskProgress ?? {
+            total: 0,
+            completed: 0,
+            pending: 0,
+          },
+        },
+        nextSteps,
+        projectContext: {
+          projectPath,
+          workflowRoot: PathUtils.getWorkflowRoot(projectPath),
+          currentPhase: workflowState.currentPhase,
+          dashboardUrl: context.dashboardUrl,
+        }
+      };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        message: `Failed to get specification status: ${errorMessage}`,
+        nextSteps: [
+          'Check if the specification exists',
+          'Verify the project path',
+          'List directory .spec-context/specs/ to see available specifications'
+        ]
+      };
+    }
+  };
+}
+
+export const specStatusHandler = createSpecStatusHandler(defaultSpecStatusReaderFactory);
+
+function resolveSpecWorkflowState(spec: SpecData): SpecWorkflowState {
+  for (const rule of SPEC_STATUS_RULES) {
+    if (rule.matches(spec)) {
+      return rule.state;
+    }
   }
+  throw new Error('No workflow status rule matched specification state');
+}
+
+function buildPhaseDetails(spec: SpecData): Array<{
+  name: string;
+  status: string;
+  lastModified?: string;
+  progress?: SpecData['taskProgress'];
+}> {
+  const phases: Array<{
+    name: string;
+    status: string;
+    lastModified?: string;
+    progress?: SpecData['taskProgress'];
+  }> = DOCUMENT_PHASES.map(({ key, name }) => {
+    const phase = spec.phases[key];
+    return {
+      name,
+      status: phase.exists ? (phase.approved ? 'approved' : 'created') : 'missing',
+      lastModified: phase.lastModified,
+    };
+  });
+
+  phases.push({
+    name: 'Implementation',
+    status: spec.phases.implementation.exists ? 'in-progress' : 'not-started',
+    progress: spec.taskProgress,
+  });
+
+  return phases;
+}
+
+function buildNextSteps(
+  currentPhase: SpecWorkflowPhase,
+  spec: SpecData,
+  specName: string
+): string[] {
+  const nextStepBuilders: Record<SpecWorkflowPhase, () => string[]> = {
+    requirements: () => [
+      'Read template: .spec-context/templates/requirements-template-v*.md',
+      'Create: .spec-context/specs/{name}/requirements.md',
+      'Request approval',
+    ],
+    design: () => [
+      'Read template: .spec-context/templates/design-template-v*.md',
+      'Create: .spec-context/specs/{name}/design.md',
+      'Request approval',
+    ],
+    tasks: () => [
+      'Read template: .spec-context/templates/tasks-template-v*.md',
+      'Create: .spec-context/specs/{name}/tasks.md',
+      'Request approval',
+    ],
+    implementation: () => buildImplementationNextSteps(spec, specName),
+    completed: () => [
+      'All tasks completed (marked [x])',
+      'Run tests',
+    ],
+  };
+
+  return nextStepBuilders[currentPhase]();
+}
+
+function buildImplementationNextSteps(spec: SpecData, specName: string): string[] {
+  if (hasPendingTasks(spec)) {
+    return [
+      `Read tasks: .spec-context/specs/${specName}/tasks.md`,
+      'Edit tasks.md: Change [ ] to [-] for task you start',
+      'Implement the task code',
+      'Edit tasks.md: Change [-] to [x] when completed',
+    ];
+  }
+
+  return [
+    `Read tasks: .spec-context/specs/${specName}/tasks.md`,
+    'Begin implementation by marking first task [-]',
+  ];
+}
+
+function hasPendingTasks(spec: SpecData): boolean {
+  return spec.taskProgress !== undefined && spec.taskProgress.pending > 0;
+}
+
+function areAllTasksCompleted(spec: SpecData): boolean {
+  return spec.taskProgress !== undefined
+    && spec.taskProgress.total > 0
+    && spec.taskProgress.completed === spec.taskProgress.total;
 }
 
 function buildSpecStatusCacheKey(projectPath: string, specName: string): string {

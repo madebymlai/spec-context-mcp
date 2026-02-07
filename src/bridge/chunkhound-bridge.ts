@@ -284,6 +284,19 @@ interface JsonRpcResponse {
     };
 }
 
+type ScanState = 'unknown' | 'indexing' | 'complete' | 'failed';
+
+interface ChunkHoundScanProgress {
+    is_scanning?: boolean;
+    scan_completed_at?: string | null;
+    scan_error?: string | null;
+}
+
+interface ChunkHoundHealthResponse {
+    initialized?: boolean;
+    scan_progress?: ChunkHoundScanProgress;
+}
+
 /**
  * Calculate deterministic port for a project path
  */
@@ -526,7 +539,8 @@ export class ChunkHoundBridge extends EventEmitter {
     private buffer = '';
     private initialized = false;
     private initPromise: Promise<void> | null = null;
-    private scanComplete = false;
+    private scanState: ScanState = 'unknown';
+    private scanError: string | null = null;
     private lastScanStatusCheck = 0;
     private readonly scanStatusCheckIntervalMs = 5000;
     private httpStartPromise: Promise<void> | null = null;
@@ -672,26 +686,13 @@ Run: npx spec-context-mcp doctor`);
                 PYTHONPATH: specContextRoot,
             },
             detached: true,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: ['ignore', 'ignore', 'ignore'],
         });
 
         // Capture stderr for early failure detection
         let stderrBuffer = '';
         let earlyExitCode: number | null = null;
         let earlyExitHandled = false;
-
-        // Log output but don't wait for it
-        serverProcess.stdout?.on('data', (data) => {
-            console.error('[ChunkHound SSE]', data.toString().trim());
-        });
-        serverProcess.stderr?.on('data', (data) => {
-            const msg = data.toString().trim();
-            stderrBuffer += data.toString();
-            console.error('[ChunkHound SSE]', msg);
-            if (msg.includes('Background scan completed') || msg.includes('scan_completed_at')) {
-                this.scanComplete = true;
-            }
-        });
 
         // Check for early exit (immediate failure)
         serverProcess.on('exit', (code) => {
@@ -781,9 +782,10 @@ Run: npx spec-context-mcp doctor`));
                 signal: AbortSignal.timeout(HEALTH_ENDPOINT_TIMEOUT_MS),
             });
             if (response.ok) {
-                const health = await response.json() as { scan_progress?: { scan_completed_at?: string } };
-                if (health.scan_progress?.scan_completed_at) {
-                    this.scanComplete = true;
+                const wasComplete = this.scanState === 'complete';
+                const health = await response.json() as ChunkHoundHealthResponse;
+                this.applyScanProgress(health.scan_progress);
+                if (!wasComplete && this.scanState === 'complete') {
                     console.error('[ChunkHound Bridge] Scan already complete');
                 }
             }
@@ -818,7 +820,8 @@ Run: npx spec-context-mcp doctor`));
             const msg = data.toString().trim();
             console.error('[ChunkHound]', msg);
             if (msg.includes('Background scan completed') || msg.includes('scan_completed_at')) {
-                this.scanComplete = true;
+                this.scanState = 'complete';
+                this.scanError = null;
             }
         });
 
@@ -1055,11 +1058,9 @@ Run: npx spec-context-mcp doctor`));
                     signal: AbortSignal.timeout(requestTimeoutMs),
                 });
                 if (response.ok) {
-                    const health = await response.json() as { initialized?: boolean; scan_progress?: { scan_completed_at?: string } };
+                    const health = await response.json() as ChunkHoundHealthResponse;
+                    this.applyScanProgress(health.scan_progress);
                     if (health.initialized) {
-                        if (health.scan_progress?.scan_completed_at) {
-                            this.scanComplete = true;
-                        }
                         return;
                     }
                 }
@@ -1077,7 +1078,7 @@ Run: npx spec-context-mcp doctor`));
      * Refresh scan status from health endpoint.
      */
     private async refreshScanStatus(): Promise<void> {
-        if (this.scanComplete) {
+        if (this.scanState === 'complete') {
             return;
         }
 
@@ -1092,16 +1093,37 @@ Run: npx spec-context-mcp doctor`));
                 signal: AbortSignal.timeout(HEALTH_ENDPOINT_TIMEOUT_MS),
             });
             if (response.ok) {
-                const health = await response.json() as { scan_progress?: { scan_completed_at?: string } };
-                if (health.scan_progress?.scan_completed_at) {
-                    this.scanComplete = true;
-                }
+                const health = await response.json() as ChunkHoundHealthResponse;
+                this.applyScanProgress(health.scan_progress);
             }
         } catch (error) {
             if (!(error instanceof TypeError) && !isTimeoutError(error)) {
                 throw error;
             }
         }
+    }
+
+    private applyScanProgress(scanProgress: ChunkHoundScanProgress | undefined): void {
+        if (scanProgress?.scan_completed_at) {
+            this.scanState = 'complete';
+            this.scanError = null;
+            return;
+        }
+
+        if (scanProgress?.scan_error) {
+            this.scanState = 'failed';
+            this.scanError = scanProgress.scan_error;
+            return;
+        }
+
+        if (scanProgress?.is_scanning) {
+            this.scanState = 'indexing';
+            this.scanError = null;
+            return;
+        }
+
+        this.scanState = 'unknown';
+        this.scanError = null;
     }
 
     /**
@@ -1113,9 +1135,12 @@ Run: npx spec-context-mcp doctor`));
 
         await this.refreshScanStatus();
 
-        if (!this.scanComplete) {
-            const warning = '⚠ INDEXING IN PROGRESS: ChunkHound is indexing files in the background. ' +
-                'Results may be incomplete until indexing finishes.';
+        if (this.scanState !== 'complete') {
+            const warning = this.scanState === 'failed'
+                ? `⚠ INDEXING FAILED: ${this.scanError || 'ChunkHound reported a scan failure'}. Results may be incomplete until indexing succeeds.`
+                : this.scanState === 'indexing'
+                    ? '⚠ INDEXING IN PROGRESS: ChunkHound is indexing files in the background. Results may be incomplete until indexing finishes.'
+                    : '⚠ INDEX STATUS UNKNOWN: ChunkHound has not reported scan completion yet. Results may be incomplete.';
 
             if (result && typeof result === 'object') {
                 return { ...result as object, warning };
