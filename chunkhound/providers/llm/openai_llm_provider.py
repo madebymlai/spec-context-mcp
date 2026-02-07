@@ -78,7 +78,7 @@ class OpenAILLMProvider(LLMProvider):
         """Initialize OpenAI LLM provider.
 
         Args:
-            api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
+            api_key: OpenAI API key
             model: Model name to use
             base_url: Base URL for OpenAI API (optional for custom endpoints)
             timeout: Request timeout in seconds

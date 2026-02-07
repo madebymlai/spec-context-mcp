@@ -207,8 +207,8 @@ class OpenAIEmbeddingProvider:
         """Initialize OpenAI embedding provider.
 
         Args:
-            api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
-            base_url: Base URL for OpenAI API (defaults to OPENAI_BASE_URL env var)
+            api_key: OpenAI API key
+            base_url: Base URL for OpenAI API
             model: Model name to use for embeddings
             rerank_model: Model name to use for reranking (optional for TEI format)
             rerank_url: Rerank endpoint URL (defaults to /rerank)

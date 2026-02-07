@@ -54,16 +54,29 @@ def _detect_voyageai() -> dict[str, Any] | None:
 
 def _detect_openai() -> dict[str, Any] | None:
     """Detect OpenAI configuration from environment."""
-    api_key = os.getenv("OPENAI_API_KEY")
+    provider = os.getenv("EMBEDDING_PROVIDER") or os.getenv("CHUNKHOUND_EMBEDDING__PROVIDER")
+    if provider and provider.lower() != "openai":
+        return None
+
+    api_key = os.getenv("CHUNKHOUND_EMBEDDING__API_KEY") or os.getenv("EMBEDDING_API_KEY")
     if api_key:
         config = {
             "provider": "openai",
             "api_key": api_key,
-            "model": os.getenv("OPENAI_MODEL", "text-embedding-3-small"),
+            "model": (
+                os.getenv("CHUNKHOUND_EMBEDDING__MODEL")
+                or os.getenv("EMBEDDING_MODEL")
+                or "text-embedding-3-small"
+            ),
         }
 
         # Add base URL if specified
-        base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+        base_url = (
+            os.getenv("CHUNKHOUND_EMBEDDING__BASE_URL")
+            or os.getenv("EMBEDDING_BASE_URL")
+            or os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+        )
         if base_url:
             config["base_url"] = base_url
 
@@ -193,7 +206,7 @@ def format_detected_config_summary(configs: dict[str, dict[str, Any] | None]) ->
             lines.append("  - VoyageAI API key found (VOYAGE_API_KEY)")
 
         elif provider == "openai":
-            lines.append("  - OpenAI API key found (OPENAI_API_KEY)")
+            lines.append("  - OpenAI config found (EMBEDDING_API_KEY)")
             if config.get("base_url"):
                 if _is_local_url(config["base_url"]):
                     lines.append(f"    Local endpoint: {config['base_url']}")

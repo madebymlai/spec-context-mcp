@@ -212,8 +212,7 @@ async def code_mapper_command(args: argparse.Namespace, config: Config) -> None:
         formatter.error(f"LLM provider setup failed: {e}")
         formatter.info(
             "Configure an LLM provider via:\n"
-            "1. Set OPENROUTER_API_KEY environment variable, OR\n"
-            "2. Set OPENAI_API_KEY environment variable"
+            "1. Set OPENROUTER_API_KEY environment variable"
         )
         sys.exit(1)
     except (OSError, RuntimeError, TypeError) as e:

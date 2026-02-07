@@ -38,8 +38,7 @@ async def run_deep_research(
     if not llm_manager or not llm_manager.is_configured():
         raise Exception(
             "LLM not configured. Configure an LLM provider via:\n"
-            "1. Set OPENROUTER_API_KEY environment variable, OR\n"
-            "2. Set OPENAI_API_KEY environment variable"
+            "1. Set OPENROUTER_API_KEY environment variable"
         )
 
     if not embedding_manager or not embedding_manager.list_providers():

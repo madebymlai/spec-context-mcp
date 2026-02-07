@@ -305,7 +305,7 @@ class CodexCLIProvider(BaseCLIProvider):
 
         auth_keys = [s.strip() for s in os.getenv(
             "CHUNKHOUND_CODEX_AUTH_ENV",
-            "OPENAI_API_KEY,CODEX_API_KEY,ANTHROPIC_API_KEY,BEARER_TOKEN",
+            "CODEX_API_KEY,ANTHROPIC_API_KEY,BEARER_TOKEN,OPENROUTER_API_KEY",
         ).split(",") if s.strip()]
         passthrough_keys = [s.strip() for s in os.getenv(
             "CHUNKHOUND_CODEX_PASSTHROUGH_ENV",

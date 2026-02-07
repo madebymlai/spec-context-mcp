@@ -475,7 +475,7 @@ class LLMConfig(BaseSettings):
             self.provider not in ("ollama", "claude-code-cli", "codex-cli")
             and not self.api_key
         ):
-            missing.append("api_key (set OPENROUTER_API_KEY or OPENAI_API_KEY)")
+            missing.append("api_key (set OPENROUTER_API_KEY)")
 
         return missing
 
@@ -612,13 +612,11 @@ class LLMConfig(BaseSettings):
     def load_from_env(cls) -> dict[str, Any]:
         """Load LLM config from environment variables.
 
-        Checks OPENROUTER_API_KEY first, then falls back to OPENAI_API_KEY.
+        Reads OPENROUTER_API_KEY for LLM authentication.
         """
         config = {}
 
-        if api_key := (
-            os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        ):
+        if api_key := os.getenv("OPENROUTER_API_KEY"):
             config["api_key"] = api_key
         if base_url := os.getenv("CHUNKHOUND_LLM_BASE_URL"):
             config["base_url"] = base_url

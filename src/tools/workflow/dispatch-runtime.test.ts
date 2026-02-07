@@ -17,8 +17,7 @@ const ORIGINAL_IMPLEMENTER_MODEL_SIMPLE = process.env.SPEC_CONTEXT_IMPLEMENTER_M
 const ORIGINAL_IMPLEMENTER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX;
 const ORIGINAL_REVIEWER_MODEL_SIMPLE = process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
 const ORIGINAL_REVIEWER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
-const ORIGINAL_REVIEWER_REASONING_EFFORT_SIMPLE = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE;
-const ORIGINAL_REVIEWER_REASONING_EFFORT_COMPLEX = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX;
+const ORIGINAL_REVIEWER_REASONING_EFFORT = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT;
 let dispatchRuntimeHandler: (args: Record<string, unknown>, context: any) => Promise<any>;
 let DispatchRuntimeManagerClass: typeof import('./dispatch-runtime.js').DispatchRuntimeManager;
 
@@ -89,8 +88,7 @@ describe('dispatch-runtime tool', () => {
     delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX;
     delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
     delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
-    delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE;
-    delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX;
+    delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT;
   });
 
   afterEach(() => {
@@ -100,8 +98,7 @@ describe('dispatch-runtime tool', () => {
     restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX', ORIGINAL_IMPLEMENTER_MODEL_COMPLEX);
     restoreEnvVar('SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE', ORIGINAL_REVIEWER_MODEL_SIMPLE);
     restoreEnvVar('SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX', ORIGINAL_REVIEWER_MODEL_COMPLEX);
-    restoreEnvVar('SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE', ORIGINAL_REVIEWER_REASONING_EFFORT_SIMPLE);
-    restoreEnvVar('SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX', ORIGINAL_REVIEWER_REASONING_EFFORT_COMPLEX);
+    restoreEnvVar('SPEC_CONTEXT_REVIEWER_REASONING_EFFORT', ORIGINAL_REVIEWER_REASONING_EFFORT);
   });
 
   it('returns typed error when init_run cannot find tasks.md', async () => {
@@ -557,7 +554,7 @@ END_DISPATCH_RESULT`,
 
   it('returns role-specific dispatch_cli with complexity model flags', async () => {
     process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE = 'codex-5.3';
-    process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE = 'medium';
+    process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT = 'medium';
 
     await dispatchRuntimeHandler(
       {

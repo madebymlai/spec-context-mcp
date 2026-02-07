@@ -25,8 +25,8 @@ function modelEnvVarFor(role: DispatchRole, complexity: ComplexityLevel): string
   return `${ROLE_ENV_VAR[role]}_MODEL_${complexity.toUpperCase()}`;
 }
 
-function reasoningEnvVarFor(role: DispatchRole, complexity: ComplexityLevel): string {
-  return `${ROLE_ENV_VAR[role]}_REASONING_EFFORT_${complexity.toUpperCase()}`;
+function reasoningGlobalEnvVarFor(role: DispatchRole): string {
+  return `${ROLE_ENV_VAR[role]}_REASONING_EFFORT`;
 }
 
 function readOptionalEnvVar(name: string): string | null {
@@ -77,7 +77,7 @@ export function getDispatchCliForComplexity(role: DispatchRole, complexity: Comp
   }
 
   const model = readOptionalEnvVar(modelEnvVarFor(role, complexity));
-  const reasoningRaw = readOptionalEnvVar(reasoningEnvVarFor(role, complexity))?.toLowerCase() ?? null;
+  const reasoningRaw = readOptionalEnvVar(reasoningGlobalEnvVarFor(role))?.toLowerCase() ?? null;
   const codexReasoningEffort = reasoningRaw && CODEX_REASONING_EFFORT_VALUES.has(reasoningRaw as CodexReasoningEffort)
     ? (reasoningRaw as CodexReasoningEffort)
     : null;

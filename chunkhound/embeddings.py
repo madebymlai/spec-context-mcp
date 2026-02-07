@@ -190,7 +190,7 @@ def create_openai_provider(
     """Create an OpenAI embedding provider with default settings.
 
     Args:
-        api_key: OpenAI API key (uses OPENAI_API_KEY env var if None)
+        api_key: OpenAI API key (pass from embedding config)
         base_url: Base URL for API (uses OPENAI_BASE_URL env var if None)
         model: Model name to use
         rerank_model: Model name to use for reranking (enables multi-hop search)

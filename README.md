@@ -93,7 +93,6 @@ Add to your Claude Code config (`.mcp.json` in project root):
 | `EMBEDDING_RERANK_BATCH_SIZE` | No | Max docs per rerank batch                                            |
 | `EMBEDDING_DIMENSION` | No       | Optional; currently ignored (model defines dimensions)                 |
 | `VOYAGEAI_API_KEY`    | No       | Alias for `EMBEDDING_API_KEY` when provider is `voyageai`              |
-| `OPENAI_API_KEY`      | No       | Alias for `EMBEDDING_API_KEY` when provider is `openai`                |
 | `CHUNKHOUND_PYTHON`   | No       | Python executable for ChunkHound (default: auto-detect `.venv/bin/python`, else `python3`) |
 | `DASHBOARD_URL`       | No       | Dashboard URL shown in prompts (default: `http://localhost:3000`) |
 | `OPENROUTER_API_KEY`  | No       | Required only for dashboard AI review                     |
@@ -199,7 +198,7 @@ Each phase requires approval before proceeding. Documents are stored in:
 
 ChunkHound runs locally and stores its index in your project. No external vector
 database is required. To enable semantic search, set `EMBEDDING_PROVIDER` and
-`EMBEDDING_API_KEY` (or `VOYAGEAI_API_KEY` / `OPENAI_API_KEY`). If no embedding
+`EMBEDDING_API_KEY` (or `VOYAGEAI_API_KEY`). If no embedding
 API key is set, regex search and workflow tools still work.
 
 You may also need Python 3.10+ available as `python3` (or set `CHUNKHOUND_PYTHON`).

@@ -334,7 +334,7 @@ class EmbeddingConfig(BaseSettings):
             config["base_url"] = base_url
 
         # API key: prefixed, then generic, then VoyageAI alias.
-        # OPENAI_API_KEY is intentionally NOT checked here — it's for LLM.
+        # LLM-specific auth variables are intentionally not checked here.
         if api_key := _env(
             "CHUNKHOUND_EMBEDDING__API_KEY",
             "EMBEDDING_API_KEY",

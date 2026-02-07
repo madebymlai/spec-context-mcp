@@ -12,10 +12,8 @@ describe('dispatch-cli-resolver', () => {
     delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX;
     delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
     delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
-    delete process.env.SPEC_CONTEXT_IMPLEMENTER_REASONING_EFFORT_SIMPLE;
-    delete process.env.SPEC_CONTEXT_IMPLEMENTER_REASONING_EFFORT_COMPLEX;
-    delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE;
-    delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_COMPLEX;
+    delete process.env.SPEC_CONTEXT_IMPLEMENTER_REASONING_EFFORT;
+    delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT;
   });
 
   afterEach(() => {
@@ -34,11 +32,21 @@ describe('dispatch-cli-resolver', () => {
   it('appends model and reasoning effort for codex tiers', () => {
     process.env.SPEC_CONTEXT_REVIEWER = 'codex';
     process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE = 'codex-5.3';
-    process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT_SIMPLE = 'medium';
+    process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT = 'medium';
 
     const command = getDispatchCliForComplexity('reviewer', 'simple');
     expect(command).toContain('--model codex-5.3');
     expect(command).toContain('model_reasoning_effort=medium');
+  });
+
+  it('uses non-tiered reasoning effort when set', () => {
+    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+    process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX = 'codex-5.3';
+    process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT = 'xhigh';
+
+    const command = getDispatchCliForComplexity('reviewer', 'complex');
+    expect(command).toContain('--model codex-5.3');
+    expect(command).toContain('model_reasoning_effort=xhigh');
   });
 
   it('keeps custom commands unchanged', () => {

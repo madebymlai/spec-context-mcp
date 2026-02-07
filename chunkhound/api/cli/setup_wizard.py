@@ -668,7 +668,7 @@ def _display_detected_configs(
             table.add_row("• VoyageAI API key found (VOYAGE_API_KEY)")
 
         elif provider == "openai":
-            table.add_row("• OpenAI API key found (OPENAI_API_KEY)")
+            table.add_row("• OpenAI config found (EMBEDDING_API_KEY)")
             if config.get("base_url"):
                 url = config["base_url"]
                 if any(host in url.lower() for host in ["localhost", "127.0.0.1"]):
@@ -698,7 +698,7 @@ def _display_detected_configs(
                 if provider == "voyageai":
                     print("• VoyageAI API key found (VOYAGE_API_KEY)")
                 elif provider == "openai":
-                    print("• OpenAI API key found (OPENAI_API_KEY)")
+                    print("• OpenAI config found (EMBEDDING_API_KEY)")
                 elif provider == "local":
                     provider_name = config.get("provider_name", "Unknown")
                     print(
