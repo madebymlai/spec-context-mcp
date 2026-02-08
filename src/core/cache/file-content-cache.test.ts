@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FileContentCache } from './file-content-cache.js';
+import { createNodeFileContentCache } from './file-content-cache-node.js';
 
 describe('file-content-cache', () => {
   const testDirs: string[] = [];
@@ -22,7 +22,7 @@ describe('file-content-cache', () => {
     const dir = await createTempDir('hit');
     const filePath = join(dir, 'a.txt');
     await writeFile(filePath, 'alpha', 'utf8');
-    const cache = new FileContentCache();
+    const cache = createNodeFileContentCache();
 
     const first = await cache.get(filePath, { namespace: 'steering' });
     const second = await cache.get(filePath, { namespace: 'steering' });
@@ -47,7 +47,7 @@ describe('file-content-cache', () => {
     const dir = await createTempDir('mtime');
     const filePath = join(dir, 'a.txt');
     await writeFile(filePath, 'v1', 'utf8');
-    const cache = new FileContentCache();
+    const cache = createNodeFileContentCache();
 
     const first = await cache.get(filePath, { namespace: 'spec-status' });
     const fp1 = cache.getFingerprint(filePath);
@@ -67,7 +67,7 @@ describe('file-content-cache', () => {
   it('returns null and records miss for file-not-found', async () => {
     const dir = await createTempDir('enoent');
     const filePath = join(dir, 'missing.txt');
-    const cache = new FileContentCache();
+    const cache = createNodeFileContentCache();
 
     const value = await cache.get(filePath, { namespace: 'guide' });
 
@@ -88,7 +88,7 @@ describe('file-content-cache', () => {
 
   it('throws and records error for non-readable path', async () => {
     const dir = await createTempDir('error');
-    const cache = new FileContentCache();
+    const cache = createNodeFileContentCache();
 
     await expect(cache.get(dir, { namespace: 'guide' })).rejects.toBeDefined();
     expect(cache.getTelemetry().errors).toBe(1);
@@ -99,7 +99,7 @@ describe('file-content-cache', () => {
     const dir = await createTempDir('invalidate');
     const filePath = join(dir, 'a.txt');
     await writeFile(filePath, 'hello', 'utf8');
-    const cache = new FileContentCache();
+    const cache = createNodeFileContentCache();
 
     await cache.get(filePath);
     expect(cache.getFingerprint(filePath)).not.toBeNull();
@@ -122,7 +122,7 @@ describe('file-content-cache', () => {
     await writeFile(fileA, 'a', 'utf8');
     await writeFile(fileB, 'b', 'utf8');
     await writeFile(fileC, 'c', 'utf8');
-    const cache = new FileContentCache(2);
+    const cache = createNodeFileContentCache(2);
 
     await cache.get(fileA);
     await cache.get(fileB);

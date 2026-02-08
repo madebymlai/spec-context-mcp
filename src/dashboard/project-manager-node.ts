@@ -2,7 +2,7 @@ import { SpecParser } from './parser.js';
 import { SpecWatcher } from './watcher.js';
 import { ApprovalStorage } from './approval-storage.js';
 import { SpecArchiveService } from '../core/workflow/archive-service.js';
-import { ProjectRegistry } from '../core/workflow/project-registry.js';
+import { ProjectRegistry } from '../core/workflow/project-registry-node.js';
 import {
   ProjectManager,
   type ProjectManagerDependencies,
