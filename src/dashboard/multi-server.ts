@@ -11,7 +11,8 @@ import open from 'open';
 import { WebSocket } from 'ws';
 import { validateAndCheckPort, DASHBOARD_HEALTH_MESSAGE } from './utils.js';
 import { parseTasksFromMarkdown } from '../core/workflow/task-parser.js';
-import { ProjectManager } from './project-manager.js';
+import type { ProjectManager } from './project-manager.js';
+import { createNodeProjectManager } from './project-manager-node.js';
 import { JobScheduler } from './job-scheduler.js';
 import { createNodeJobSchedulerForProjectManager } from './job-scheduler-node.js';
 import { DashboardSessionManager } from '../core/workflow/dashboard-session.js';
@@ -84,7 +85,7 @@ export class MultiProjectDashboardServer {
 
   constructor(options: MultiDashboardOptions = {}) {
     this.options = options;
-    this.projectManager = new ProjectManager();
+    this.projectManager = createNodeProjectManager();
     this.jobScheduler = createNodeJobSchedulerForProjectManager(this.projectManager);
     this.sessionManager = new DashboardSessionManager();
 

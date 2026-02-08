@@ -1,4 +1,4 @@
-import { resolveDashboardUrlForNode } from '../core/workflow/node-dashboard-url.js';
+import { resolveDashboardUrlForNode } from '../core/workflow/node-dashboard-url-default.js';
 import { getSharedFileContentCache } from '../core/cache/shared-file-content-cache.js';
 import { createApprovalsHandler } from './workflow/approvals.js';
 import { nodeApprovalStoreFactory } from './workflow/approval-store-node.js';

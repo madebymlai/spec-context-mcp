@@ -1,7 +1,7 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.js';
-import { resolveDashboardUrlForNode } from '../../core/workflow/node-dashboard-url.js';
+import { resolveDashboardUrlForNode } from '../../core/workflow/node-dashboard-url-default.js';
 import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 import { findDashboardProjectByPath, type DashboardProject } from './dashboard-project-resolver.js';
 

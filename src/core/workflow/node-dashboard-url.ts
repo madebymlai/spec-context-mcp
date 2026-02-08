@@ -1,13 +1,18 @@
-import { DashboardSessionManager } from './dashboard-session.js';
-import { resolveDashboardUrl, type ResolveDashboardUrlOptions } from './dashboard-url.js';
+import {
+  resolveDashboardUrl,
+  type DashboardSessionReader,
+  type ResolveDashboardUrlOptions,
+} from './dashboard-url.js';
 
-const dashboardSessionReader = new DashboardSessionManager();
+type ResolveDashboardUrlForNode = (
+  options?: Omit<ResolveDashboardUrlOptions, 'sessionReader'>
+) => Promise<string>;
 
-export async function resolveDashboardUrlForNode(
-  options: Omit<ResolveDashboardUrlOptions, 'sessionReader'> = {}
-): Promise<string> {
-  return resolveDashboardUrl({
-    ...options,
-    sessionReader: dashboardSessionReader,
-  });
+export function createResolveDashboardUrlForNode(sessionReader: DashboardSessionReader): ResolveDashboardUrlForNode {
+  return async (options: Omit<ResolveDashboardUrlOptions, 'sessionReader'> = {}): Promise<string> => {
+    return resolveDashboardUrl({
+      ...options,
+      sessionReader,
+    });
+  };
 }

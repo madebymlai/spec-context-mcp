@@ -5,7 +5,7 @@ import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.j
 import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 import { readFile } from 'fs/promises';
 import { validateTasksMarkdown, formatValidationErrors } from '../../core/workflow/task-validator.js';
-import type { ApprovalStoreFactory, ApprovalRecord, ApprovalStatus } from './approval-store.js';
+import type { ApprovalStoreFactory, ApprovalStore, ApprovalRecord, ApprovalStatus } from './approval-store.js';
 import { findDashboardProjectByPath } from './dashboard-project-resolver.js';
 
 async function tryResolveDashboardProjectId(
@@ -42,54 +42,76 @@ type ApprovalProgressState = 'awaiting_review' | 'approved' | 'rejected' | 'need
 
 type ApprovalStatusProjection = {
   progressState: ApprovalProgressState;
+  resolution: 'pending' | 'resolved';
+  workflowOutcome: 'proceed' | 'blocked';
+};
+
+const APPROVAL_STATUS_PROJECTIONS: Record<ApprovalStatus, ApprovalStatusProjection> = {
+  pending: {
+    progressState: 'awaiting_review',
+    resolution: 'pending',
+    workflowOutcome: 'blocked',
+  },
+  approved: {
+    progressState: 'approved',
+    resolution: 'resolved',
+    workflowOutcome: 'proceed',
+  },
+  rejected: {
+    progressState: 'rejected',
+    resolution: 'resolved',
+    workflowOutcome: 'blocked',
+  },
+  'needs-revision': {
+    progressState: 'needs_revision',
+    resolution: 'pending',
+    workflowOutcome: 'blocked',
+  },
+};
+
+function projectApprovalStatus(status: ApprovalStatus): ApprovalStatusProjection {
+  return APPROVAL_STATUS_PROJECTIONS[status];
+}
+
+function toApprovalStatusFlags(statusProjection: ApprovalStatusProjection): {
   isCompleted: boolean;
   canProceed: boolean;
   mustWait: boolean;
   blockNext: boolean;
-};
+} {
+  const isCompleted = statusProjection.resolution === 'resolved';
+  const canProceed = statusProjection.workflowOutcome === 'proceed';
+  return {
+    isCompleted,
+    canProceed,
+    mustWait: !canProceed,
+    blockNext: !canProceed,
+  };
+}
 
-const APPROVAL_PROGRESS_STATE_BY_STATUS: Record<ApprovalStatus, ApprovalProgressState> = {
-  pending: 'awaiting_review',
-  approved: 'approved',
-  rejected: 'rejected',
-  'needs-revision': 'needs_revision',
-};
+interface ApprovalStoreContext {
+  validatedProjectPath: string;
+  translatedPath: string;
+  approvalStore: ApprovalStore;
+}
 
-function projectApprovalStatus(status: ApprovalStatus): ApprovalStatusProjection {
-  const progressState = APPROVAL_PROGRESS_STATE_BY_STATUS[status];
-  switch (progressState) {
-    case 'approved':
-      return {
-        progressState,
-        isCompleted: true,
-        canProceed: true,
-        mustWait: false,
-        blockNext: false
-      };
-    case 'awaiting_review':
-      return {
-        progressState,
-        isCompleted: false,
-        canProceed: false,
-        mustWait: true,
-        blockNext: true
-      };
-    case 'rejected':
-      return {
-        progressState,
-        isCompleted: true,
-        canProceed: false,
-        mustWait: true,
-        blockNext: true
-      };
-    case 'needs_revision':
-      return {
-        progressState,
-        isCompleted: false,
-        canProceed: false,
-        mustWait: true,
-        blockNext: true
-      };
+async function withApprovalStore<T>(
+  projectPath: string,
+  approvalStoreFactory: ApprovalStoreFactory,
+  action: (context: ApprovalStoreContext) => Promise<T>,
+): Promise<T> {
+  const validatedProjectPath = await validateProjectPath(projectPath);
+  const translatedPath = PathUtils.translatePath(validatedProjectPath);
+  const approvalStore = approvalStoreFactory.create(translatedPath, validatedProjectPath);
+  await approvalStore.start();
+  try {
+    return await action({
+      validatedProjectPath,
+      translatedPath,
+      approvalStore,
+    });
+  } finally {
+    await approvalStore.stop();
   }
 }
 
@@ -325,42 +347,112 @@ async function handleRequestApproval(
   }
 
   try {
-    // Validate and resolve project path
-    const validatedProjectPath = await validateProjectPath(projectPath);
-    // Translate path at tool entry point (approval store expects pre-translated paths)
-    const translatedPath = PathUtils.translatePath(validatedProjectPath);
-    const dashboardProjectId = await tryResolveDashboardProjectId(context.dashboardUrl, validatedProjectPath, translatedPath);
+    return withApprovalStore(projectPath, approvalStoreFactory, async ({
+      validatedProjectPath,
+      translatedPath,
+      approvalStore,
+    }) => {
+      const dashboardProjectId = await tryResolveDashboardProjectId(context.dashboardUrl, validatedProjectPath, translatedPath);
 
-    const approvalStorage = approvalStoreFactory.create(translatedPath, validatedProjectPath);
-    await approvalStorage.start();
+      const existingApprovals = await approvalStore.getAllPendingApprovals();
+      const existingApproval = existingApprovals.find(
+        a => a.filePath === args.filePath && a.categoryName === args.categoryName
+      );
 
-    // Check for existing pending approval for the same file/category
-    const existingApprovals = await approvalStorage.getAllPendingApprovals();
-    const existingApproval = existingApprovals.find(
-      a => a.filePath === args.filePath && a.categoryName === args.categoryName
-    );
+      if (existingApproval) {
+        const approvalUrl = context.dashboardUrl
+          ? buildApprovalDeeplink(context.dashboardUrl, existingApproval.id, dashboardProjectId || undefined)
+          : undefined;
+        return {
+          success: true,
+          message: `Found existing pending approval. Use wait-for-approval to block until user responds.`,
+          data: {
+            approvalId: existingApproval.id,
+            title: existingApproval.title,
+            filePath: existingApproval.filePath,
+            type: existingApproval.type,
+            status: existingApproval.status,
+            createdAt: existingApproval.createdAt,
+            dashboardUrl: context.dashboardUrl,
+            approvalUrl,
+            reusedExisting: true
+          },
+          nextSteps: [
+            `NEXT: Call wait-for-approval approvalId:"${existingApproval.id}"`,
+            'This will block until user approves/rejects/requests-revision',
+            'Auto-cleanup happens on resolution',
+            approvalUrl ? `Review in dashboard: ${approvalUrl}` : 'Start dashboard: spec-context-dashboard'
+          ],
+          projectContext: {
+            projectPath: validatedProjectPath,
+            workflowRoot: join(validatedProjectPath, '.spec-context'),
+            dashboardUrl: context.dashboardUrl
+          }
+        };
+      }
 
-    if (existingApproval) {
-      await approvalStorage.stop();
+      if (args.filePath.endsWith('tasks.md')) {
+        try {
+          const fullPath = join(validatedProjectPath, args.filePath);
+          const content = await readFile(fullPath, 'utf-8');
+          const validationResult = validateTasksMarkdown(content);
+
+          if (!validationResult.valid) {
+            const errorMessages = formatValidationErrors(validationResult);
+
+            return {
+              success: false,
+              message: 'Tasks document has format errors that must be fixed before approval',
+              data: {
+                errorCount: validationResult.errors.length,
+                warningCount: validationResult.warnings.length,
+                summary: validationResult.summary
+              },
+              nextSteps: [
+                'Fix the format errors listed below',
+                'Ensure each task has: checkbox (- [ ]), numeric ID (1.1), description',
+                'Ensure metadata uses underscores: _Requirements: ..._',
+                'Ensure _Prompt ends with underscore',
+                'Re-request approval after fixing',
+                ...errorMessages
+              ]
+            };
+          }
+        } catch (fileError) {
+          const errorMessage = fileError instanceof Error ? fileError.message : String(fileError);
+          return {
+            success: false,
+            message: `Failed to read tasks file for validation: ${errorMessage}`
+          };
+        }
+      }
+
+      const approvalId = await approvalStore.createApproval(
+        args.title,
+        args.filePath,
+        args.category,
+        args.categoryName,
+        args.type
+      );
+
       const approvalUrl = context.dashboardUrl
-        ? buildApprovalDeeplink(context.dashboardUrl, existingApproval.id, dashboardProjectId || undefined)
+        ? buildApprovalDeeplink(context.dashboardUrl, approvalId, dashboardProjectId || undefined)
         : undefined;
+
       return {
         success: true,
-        message: `Found existing pending approval. Use wait-for-approval to block until user responds.`,
+        message: `Approval request created. Now call wait-for-approval to block until user responds.`,
         data: {
-          approvalId: existingApproval.id,
-          title: existingApproval.title,
-          filePath: existingApproval.filePath,
-          type: existingApproval.type,
-          status: existingApproval.status,
-          createdAt: existingApproval.createdAt,
+          approvalId,
+          title: args.title,
+          filePath: args.filePath,
+          type: args.type,
+          status: 'pending',
           dashboardUrl: context.dashboardUrl,
           approvalUrl,
-          reusedExisting: true
         },
         nextSteps: [
-          `NEXT: Call wait-for-approval approvalId:"${existingApproval.id}"`,
+          `NEXT: Call wait-for-approval approvalId:"${approvalId}"`,
           'This will block until user approves/rejects/requests-revision',
           'Auto-cleanup happens on resolution',
           approvalUrl ? `Review in dashboard: ${approvalUrl}` : 'Start dashboard: spec-context-dashboard'
@@ -371,91 +463,7 @@ async function handleRequestApproval(
           dashboardUrl: context.dashboardUrl
         }
       };
-    }
-
-    // Validate tasks.md format before allowing approval request
-    if (args.filePath.endsWith('tasks.md')) {
-      try {
-        const fullPath = join(validatedProjectPath, args.filePath);
-        const content = await readFile(fullPath, 'utf-8');
-        const validationResult = validateTasksMarkdown(content);
-
-        if (!validationResult.valid) {
-          await approvalStorage.stop();
-
-          const errorMessages = formatValidationErrors(validationResult);
-
-          return {
-            success: false,
-            message: 'Tasks document has format errors that must be fixed before approval',
-            data: {
-              errorCount: validationResult.errors.length,
-              warningCount: validationResult.warnings.length,
-              summary: validationResult.summary
-            },
-            nextSteps: [
-              'Fix the format errors listed below',
-              'Ensure each task has: checkbox (- [ ]), numeric ID (1.1), description',
-              'Ensure metadata uses underscores: _Requirements: ..._',
-              'Ensure _Prompt ends with underscore',
-              'Re-request approval after fixing',
-              ...errorMessages
-            ]
-          };
-        }
-
-        // If there are warnings, include them but allow approval to proceed
-        if (validationResult.warnings.length > 0) {
-          // Warnings don't block approval, but will be included in the response
-          // This allows the user to see potential issues while still proceeding
-        }
-      } catch (fileError) {
-        await approvalStorage.stop();
-        const errorMessage = fileError instanceof Error ? fileError.message : String(fileError);
-        return {
-          success: false,
-          message: `Failed to read tasks file for validation: ${errorMessage}`
-        };
-      }
-    }
-
-    const approvalId = await approvalStorage.createApproval(
-      args.title,
-      args.filePath,
-      args.category,
-      args.categoryName,
-      args.type
-    );
-
-    await approvalStorage.stop();
-    const approvalUrl = context.dashboardUrl
-      ? buildApprovalDeeplink(context.dashboardUrl, approvalId, dashboardProjectId || undefined)
-      : undefined;
-
-    return {
-      success: true,
-      message: `Approval request created. Now call wait-for-approval to block until user responds.`,
-      data: {
-        approvalId,
-        title: args.title,
-        filePath: args.filePath,
-        type: args.type,
-        status: 'pending',
-        dashboardUrl: context.dashboardUrl,
-        approvalUrl,
-      },
-      nextSteps: [
-        `NEXT: Call wait-for-approval approvalId:"${approvalId}"`,
-        'This will block until user approves/rejects/requests-revision',
-        'Auto-cleanup happens on resolution',
-        approvalUrl ? `Review in dashboard: ${approvalUrl}` : 'Start dashboard: spec-context-dashboard'
-      ],
-      projectContext: {
-        projectPath: validatedProjectPath,
-        workflowRoot: join(validatedProjectPath, '.spec-context'),
-        dashboardUrl: context.dashboardUrl
-      }
-    };
+    });
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -471,73 +479,64 @@ async function handleGetApprovalStatus(
   context: ToolContext,
   approvalStoreFactory: ApprovalStoreFactory
 ): Promise<ToolResponse> {
-  // approvalId is guaranteed by type
+  const projectPath = args.projectPath || context.projectPath;
+  if (!projectPath) {
+    return {
+      success: false,
+      message: 'Project path is required. Please provide projectPath parameter.'
+    };
+  }
 
   try {
-    // Use provided projectPath or fall back to context
-    const projectPath = args.projectPath || context.projectPath;
-    if (!projectPath) {
-      return {
-        success: false,
-        message: 'Project path is required. Please provide projectPath parameter.'
-      };
-    }
+    return withApprovalStore(projectPath, approvalStoreFactory, async ({
+      validatedProjectPath,
+      approvalStore,
+    }) => {
+      const approval = await approvalStore.getApproval(args.approvalId);
 
-    // Validate and resolve project path
-    const validatedProjectPath = await validateProjectPath(projectPath);
-    // Translate path at tool entry point (approval store expects pre-translated paths)
-    const translatedPath = PathUtils.translatePath(validatedProjectPath);
-
-    const approvalStorage = approvalStoreFactory.create(translatedPath, validatedProjectPath);
-    await approvalStorage.start();
-
-    const approval = await approvalStorage.getApproval(args.approvalId);
-
-    if (!approval) {
-      await approvalStorage.stop();
-      return {
-        success: false,
-        message: `Approval request not found: ${args.approvalId}`
-      };
-    }
-
-    await approvalStorage.stop();
-
-    const statusProjection = projectApprovalStatus(approval.status);
-    const approvalUrl = context.dashboardUrl ? buildApprovalDeeplink(context.dashboardUrl, args.approvalId) : undefined;
-    const nextSteps = APPROVAL_NEXT_STEP_BUILDERS[approval.status](approval, approvalUrl);
-
-    return {
-      success: true,
-      message: approval.status === 'pending'
-        ? `BLOCKED: Status is ${approval.status}. Verbal approval is NOT accepted. Use dashboard only.`
-        : `Approval status: ${approval.status}`,
-      data: {
-        approvalId: args.approvalId,
-        title: approval.title,
-        type: approval.type,
-        status: approval.status,
-        createdAt: approval.createdAt,
-        respondedAt: approval.respondedAt,
-        response: approval.response,
-        annotations: approval.annotations,
-        comments: approval.comments,
-        progressState: statusProjection.progressState,
-        isCompleted: statusProjection.isCompleted,
-        canProceed: statusProjection.canProceed,
-        mustWait: statusProjection.mustWait,
-        blockNext: statusProjection.blockNext,
-        dashboardUrl: context.dashboardUrl,
-        approvalUrl
-      },
-      nextSteps,
-      projectContext: {
-        projectPath: validatedProjectPath,
-        workflowRoot: join(validatedProjectPath, '.spec-context'),
-        dashboardUrl: context.dashboardUrl
+      if (!approval) {
+        return {
+          success: false,
+          message: `Approval request not found: ${args.approvalId}`
+        };
       }
-    };
 
+      const statusProjection = projectApprovalStatus(approval.status);
+      const statusFlags = toApprovalStatusFlags(statusProjection);
+      const approvalUrl = context.dashboardUrl ? buildApprovalDeeplink(context.dashboardUrl, args.approvalId) : undefined;
+      const nextSteps = APPROVAL_NEXT_STEP_BUILDERS[approval.status](approval, approvalUrl);
+
+      return {
+        success: true,
+        message: approval.status === 'pending'
+          ? `BLOCKED: Status is ${approval.status}. Verbal approval is NOT accepted. Use dashboard only.`
+          : `Approval status: ${approval.status}`,
+        data: {
+          approvalId: args.approvalId,
+          title: approval.title,
+          type: approval.type,
+          status: approval.status,
+          createdAt: approval.createdAt,
+          respondedAt: approval.respondedAt,
+          response: approval.response,
+          annotations: approval.annotations,
+          comments: approval.comments,
+          progressState: statusProjection.progressState,
+          isCompleted: statusFlags.isCompleted,
+          canProceed: statusFlags.canProceed,
+          mustWait: statusFlags.mustWait,
+          blockNext: statusFlags.blockNext,
+          dashboardUrl: context.dashboardUrl,
+          approvalUrl
+        },
+        nextSteps,
+        projectContext: {
+          projectPath: validatedProjectPath,
+          workflowRoot: join(validatedProjectPath, '.spec-context'),
+          dashboardUrl: context.dashboardUrl
+        }
+      };
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
@@ -552,88 +551,78 @@ async function handleDeleteApproval(
   context: ToolContext,
   approvalStoreFactory: ApprovalStoreFactory
 ): Promise<ToolResponse> {
-  // approvalId is guaranteed by type
+  const projectPath = args.projectPath || context.projectPath;
+  if (!projectPath) {
+    return {
+      success: false,
+      message: 'Project path is required. Please provide projectPath parameter.'
+    };
+  }
 
   try {
-    // Use provided projectPath or fall back to context
-    const projectPath = args.projectPath || context.projectPath;
-    if (!projectPath) {
-      return {
-        success: false,
-        message: 'Project path is required. Please provide projectPath parameter.'
-      };
-    }
+    return withApprovalStore(projectPath, approvalStoreFactory, async ({
+      validatedProjectPath,
+      approvalStore,
+    }) => {
+      const approval = await approvalStore.getApproval(args.approvalId);
+      if (!approval) {
+        return {
+          success: false,
+          message: `Approval request "${args.approvalId}" not found`,
+          nextSteps: [
+            'Verify approval ID',
+            'Check status with approvals action:"status"'
+          ]
+        };
+      }
 
-    // Validate and resolve project path
-    const validatedProjectPath = await validateProjectPath(projectPath);
-    // Translate path at tool entry point (approval store expects pre-translated paths)
-    const translatedPath = PathUtils.translatePath(validatedProjectPath);
+      const statusProjection = projectApprovalStatus(approval.status);
+      if (statusProjection.resolution === 'pending') {
+        const approvalUrl = context.dashboardUrl ? buildApprovalDeeplink(context.dashboardUrl, args.approvalId) : undefined;
+        return {
+          success: false,
+          message: `BLOCKED: Cannot delete - status is "${approval.status}". This approval is still awaiting review. VERBAL APPROVAL NOT ACCEPTED. Use dashboard only.`,
+          data: {
+            approvalId: args.approvalId,
+            currentStatus: approval.status,
+            title: approval.title,
+            blockProgress: true,
+            canProceed: false
+          },
+          nextSteps: [
+            'STOP - Cannot delete pending approval',
+            'Wait for approval or rejection',
+            'Poll with approvals action:"status"',
+            ...(approvalUrl ? [`Review in dashboard: ${approvalUrl}`] : []),
+            'Delete only after status changes to approved, rejected, or needs-revision'
+          ]
+        };
+      }
 
-    const approvalStorage = approvalStoreFactory.create(translatedPath, validatedProjectPath);
-    await approvalStorage.start();
+      const deleted = await approvalStore.deleteApproval(args.approvalId);
 
-    // Check if approval exists and its status
-    const approval = await approvalStorage.getApproval(args.approvalId);
-    if (!approval) {
-      return {
-        success: false,
-        message: `Approval request "${args.approvalId}" not found`,
-        nextSteps: [
-          'Verify approval ID',
-          'Check status with approvals action:"status"'
-        ]
-      };
-    }
+      if (deleted) {
+        return {
+          success: true,
+          message: `Approval request "${args.approvalId}" deleted successfully`,
+          data: {
+            deletedApprovalId: args.approvalId,
+            title: approval.title,
+            category: approval.category,
+            categoryName: approval.categoryName
+          },
+          nextSteps: [
+            'Cleanup complete',
+            'Continue to next phase'
+          ],
+          projectContext: {
+            projectPath: validatedProjectPath,
+            workflowRoot: join(validatedProjectPath, '.spec-context'),
+            dashboardUrl: context.dashboardUrl
+          }
+        };
+      }
 
-    // Only block deletion of pending requests (still awaiting approval)
-    // Allow deletion of: approved, needs-revision, rejected
-    if (approval.status === 'pending') {
-      const approvalUrl = context.dashboardUrl ? buildApprovalDeeplink(context.dashboardUrl, args.approvalId) : undefined;
-      return {
-        success: false,
-        message: `BLOCKED: Cannot delete - status is "${approval.status}". This approval is still awaiting review. VERBAL APPROVAL NOT ACCEPTED. Use dashboard only.`,
-        data: {
-          approvalId: args.approvalId,
-          currentStatus: approval.status,
-          title: approval.title,
-          blockProgress: true,
-          canProceed: false
-        },
-        nextSteps: [
-          'STOP - Cannot delete pending approval',
-          'Wait for approval or rejection',
-          'Poll with approvals action:"status"',
-          ...(approvalUrl ? [`Review in dashboard: ${approvalUrl}`] : []),
-          'Delete only after status changes to approved, rejected, or needs-revision'
-        ]
-      };
-    }
-
-    // Delete the approval
-    const deleted = await approvalStorage.deleteApproval(args.approvalId);
-    await approvalStorage.stop();
-
-    if (deleted) {
-      return {
-        success: true,
-        message: `Approval request "${args.approvalId}" deleted successfully`,
-        data: {
-          deletedApprovalId: args.approvalId,
-          title: approval.title,
-          category: approval.category,
-          categoryName: approval.categoryName
-        },
-        nextSteps: [
-          'Cleanup complete',
-          'Continue to next phase'
-        ],
-        projectContext: {
-          projectPath: validatedProjectPath,
-          workflowRoot: join(validatedProjectPath, '.spec-context'),
-          dashboardUrl: context.dashboardUrl
-        }
-      };
-    } else {
       return {
         success: false,
         message: `Failed to delete approval request "${args.approvalId}"`,
@@ -643,8 +632,7 @@ async function handleDeleteApproval(
           'Retry'
         ]
       };
-    }
-
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {

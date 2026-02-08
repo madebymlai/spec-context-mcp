@@ -1,17 +1,14 @@
 import { EventEmitter } from 'events';
 import chokidar, { FSWatcher } from 'chokidar';
-import { SpecParser, type ISpecParser } from './parser.js';
-import { SpecWatcher, type SpecChangeEvent } from './watcher.js';
+import type { ISpecParser } from './parser.js';
+import type { SpecChangeEvent } from './watcher.js';
 import {
-  ApprovalStorage,
   type ApprovalRequest,
   type ApprovalComment,
   type DocumentSnapshot,
   type DiffResult
 } from './approval-storage.js';
-import { SpecArchiveService } from '../core/workflow/archive-service.js';
 import {
-  ProjectRegistry,
   type ProjectRegistryEntry,
   type ProjectInstance
 } from '../core/workflow/project-registry.js';
@@ -46,7 +43,7 @@ export interface ProjectApprovalStoragePort {
   getApproval(id: string): Promise<ApprovalRequest | null>;
   updateApproval(
     id: string,
-    status: 'approved' | 'rejected' | 'needs-revision',
+    status: Exclude<ApprovalRequest['status'], 'pending'>,
     response: string,
     annotations?: string,
     comments?: ApprovalComment[]
@@ -93,28 +90,16 @@ export interface ProjectManagerErrorEvent {
   error: unknown;
 }
 
-const defaultComponentFactory: ProjectComponentFactory = {
-  createParser: (projectPath) => new SpecParser(projectPath),
-  createWatcher: (projectPath, parser) => new SpecWatcher(projectPath, parser),
-  createApprovalStorage: (translatedPath, originalPath) => new ApprovalStorage(translatedPath, originalPath),
-  createArchiveService: (projectPath) => new SpecArchiveService(projectPath)
-};
-
-const defaultDependencies: ProjectManagerDependencies = {
-  registry: new ProjectRegistry(),
-  componentFactory: defaultComponentFactory
-};
-
 export class ProjectManager extends EventEmitter {
   private readonly registry: ProjectRegistryPort;
   private readonly componentFactory: ProjectComponentFactory;
   private projects: Map<string, ProjectContext> = new Map();
   private registryWatcher?: FSWatcher;
 
-  constructor(dependencies: Partial<ProjectManagerDependencies> = {}) {
+  constructor(dependencies: ProjectManagerDependencies) {
     super();
-    this.registry = dependencies.registry ?? defaultDependencies.registry;
-    this.componentFactory = dependencies.componentFactory ?? defaultDependencies.componentFactory;
+    this.registry = dependencies.registry;
+    this.componentFactory = dependencies.componentFactory;
   }
 
   async initialize(): Promise<void> {
