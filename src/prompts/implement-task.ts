@@ -2,7 +2,6 @@ import { Prompt, PromptMessage } from '@modelcontextprotocol/sdk/types.js';
 import { PromptDefinition } from './types.js';
 import { ToolContext } from '../workflow-types.js';
 import { getDisciplineMode, getDispatchCli } from '../config/discipline.js';
-import { isDispatchRuntimeV2Enabled } from '../config/dispatch-runtime.js';
 
 const prompt: Prompt = {
   name: 'implement-task',
@@ -12,14 +11,14 @@ const prompt: Prompt = {
     {
       name: 'specName',
       description: 'Feature name in kebab-case for the task to implement',
-      required: true
+      required: true,
     },
     {
       name: 'taskId',
       description: 'Specific task ID to implement (e.g., "1", "2.1", "3")',
-      required: false
-    }
-  ]
+      required: false,
+    },
+  ],
 };
 
 async function handler(args: Record<string, any>, context: ToolContext): Promise<PromptMessage[]> {
@@ -33,19 +32,13 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
   const modeDescription = disciplineMode === 'full'
     ? 'TDD required (Red-Green-Refactor), code reviews enabled'
     : disciplineMode === 'standard'
-    ? 'Code reviews enabled (no TDD requirement)'
-    : 'Verification only (no reviews)';
+      ? 'Code reviews enabled (no TDD requirement)'
+      : 'Verification only (no reviews)';
 
   const implementerCli = getDispatchCli('implementer');
-  const reviewerCli = getDispatchCli('reviewer');
+  const reviewsEnabled = disciplineMode !== 'minimal';
 
-  const isMinimal = disciplineMode === 'minimal';
-  const reviewsEnabled = !isMinimal;
-  const dispatchRuntimeV2 = isDispatchRuntimeV2Enabled();
-  const reviewerEnvRequired = reviewsEnabled && !dispatchRuntimeV2;
-  const reviewerMissingForLegacy = reviewerEnvRequired && !reviewerCli;
-
-  const runtimeSteps = dispatchRuntimeV2 ? `
+  const runtimeSteps = `
 4. **Initialize Runtime State (once per task):**
    - Call \`dispatch-runtime\` with:
      - \`action: "init_run"\`
@@ -61,10 +54,12 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      - \`taskId: "${taskId || '{taskId}'}"\`
      - \`maxOutputTokens: 1200\`
    - Omit \`taskPrompt\` to use the ledger/task prompt from runtime state (fail fast if missing).
-   - Use returned \`prompt\` as the exact implementer dispatch payload.
-` : '';
+   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` as dispatch context.
+`;
 
-  const implementerIngestStep = dispatchRuntimeV2 ? `
+  const implementerDispatchCommand = '{dispatch_cli from implementer compile_prompt} "{compiled implementer prompt from dispatch-runtime}" 1>"{contractOutputPath from step 5}" 2>"{debugOutputPath from step 5}"';
+
+  const implementerIngestStep = `
 7. **Ingest Implementer Result (no raw-log parsing):**
    - Call \`dispatch-runtime\` with:
      - \`action: "ingest_output"\`
@@ -74,27 +69,9 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      - \`maxOutputTokens: 1200\`
      - \`outputFilePath: "{contractOutputPath from step 5}"\`
    - If contract validation fails: halt this dispatch attempt and surface the terminal error.
-` : `
-6. **Legacy Result Handling (runtime v2 disabled):**
-   - Use task marker changes + targeted diagnostics from logs.
-   - Keep log reads minimal; do not parse full logs.
 `;
 
-  const reviewIngestStep = dispatchRuntimeV2 ? `
-   - Ingest reviewer result via \`dispatch-runtime\`:
-     - \`action: "ingest_output"\`
-     - \`runId: "{runId from step 4}"\`
-     - \`role: "reviewer"\`
-     - \`taskId: "${taskId || '{taskId}'}"\`
-     - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "{contractOutputPath from reviewer compile step}"\`` : `
-   - Runtime v2 disabled: evaluate reviewer verdict from structured final output manually`;
-
-  const implementerDispatchCommand = dispatchRuntimeV2
-    ? `${implementerCli} "{compiled implementer prompt from dispatch-runtime}" 1>"{contractOutputPath from step 5}" 2>"{debugOutputPath from step 5}"`
-    : `${implementerCli} "Implement the task for spec ${specName}, first call get-implementer-guide to load implementation rules then implement the task: [task prompt content from _Prompt field]." > /tmp/spec-impl.log 2>&1`;
-
-  const reviewerDispatchBlock = dispatchRuntimeV2
+  const reviewerDispatchBlock = reviewsEnabled
     ? `   - First call \`dispatch-runtime\` with:
      - \`action: "compile_prompt"\`
      - \`runId: "{runId from step 4}"\`
@@ -108,24 +85,17 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      \`\`\`bash
      {dispatch_cli from reviewer compile_prompt} "{compiled reviewer prompt from dispatch-runtime}" 1>"{contractOutputPath from reviewer compile step}" 2>"{debugOutputPath from reviewer compile step}"
      \`\`\`
-${reviewIngestStep}`
-    : reviewerCli
-      ? `   - Dispatch to reviewer agent via bash (redirect output to log):
-     \`\`\`bash
-     ${reviewerCli} "Review task ${taskId || '{taskId}'} for spec ${specName}. Base SHA: {base-sha from step 2}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1
-     \`\`\`
-${reviewIngestStep}`
-      : `   - ⛔ **BLOCKED: SPEC_CONTEXT_REVIEWER is not set while runtime v2 is disabled.**
-   - Set \`SPEC_CONTEXT_REVIEWER\` to a reviewer CLI (supported: \`claude\`, \`codex\`, \`gemini\`, \`opencode\`)
-   - STOP and ask the user to configure reviewer dispatch before continuing`;
+   - Ingest reviewer result via \`dispatch-runtime\`:
+     - \`action: "ingest_output"\`
+     - \`runId: "{runId from step 4}"\`
+     - \`role: "reviewer"\`
+     - \`taskId: "${taskId || '{taskId}'}"\`
+     - \`maxOutputTokens: 1200\`
+     - \`outputFilePath: "{contractOutputPath from reviewer compile step}"\``
+    : '   - Skip review in minimal mode.';
 
-  const runtimeGuideline = dispatchRuntimeV2
-    ? '- Never branch orchestration logic from raw logs — only from \`dispatch-runtime\` structured results'
-    : '- Runtime v2 disabled: prefer minimal log reads and deterministic task markers';
-
-  const runtimeToolLine = dispatchRuntimeV2
-    ? '- dispatch-runtime: Validate structured agent output and update runtime snapshot'
-    : '- dispatch-runtime: disabled (enable with SPEC_CONTEXT_DISPATCH_RUNTIME_V2=1)';
+  const runtimeGuideline = '- Never branch orchestration logic from raw logs; only from \`dispatch-runtime\` structured results';
+  const runtimeToolLine = '- dispatch-runtime: Validate structured agent output and update runtime snapshot';
 
   const messages: PromptMessage[] = [
     {
@@ -139,11 +109,9 @@ ${reviewIngestStep}`
 - Feature: ${specName}
 - **Discipline Mode: ${disciplineMode}** — ${modeDescription}
 ${implementerCli ? `- **Implementer CLI: ${implementerCli}** — dispatch tasks to this agent` : '- Implementer: direct (no dispatch CLI configured)'}
-${dispatchRuntimeV2
-  ? `- **Reviewer Dispatch:** runtime-resolved via \`dispatch-runtime\` compile_prompt (\`dispatch_cli\`)`
-  : reviewerCli
-    ? `- **Reviewer CLI: ${reviewerCli}** — dispatch reviews to this agent`
-    : '- Reviewer CLI: missing (required when reviews are enabled and runtime v2 is disabled)'}
+${reviewsEnabled
+    ? '- **Reviewer Dispatch:** runtime-resolved via \`dispatch-runtime\` compile_prompt (\`dispatch_cli\`)'
+    : '- Reviewer dispatch: not required in minimal mode'}
 ${taskId ? `- Task ID: ${taskId}` : ''}
 ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 ${!implementerCli ? `
@@ -154,15 +122,6 @@ Implementation requires a dispatch CLI. Set the \`SPEC_CONTEXT_IMPLEMENTER\` env
 Example: \`SPEC_CONTEXT_IMPLEMENTER=claude\`
 
 Do NOT implement tasks yourself. STOP and ask the user to configure the env var.
-` : reviewerMissingForLegacy ? `
-⛔ **BLOCKED: SPEC_CONTEXT_REVIEWER is not set.**
-
-Reviews are required in ${disciplineMode} mode when dispatch runtime v2 is disabled.
-Set the \`SPEC_CONTEXT_REVIEWER\` environment variable to your reviewer CLI command (supported shortcuts: \`claude\`, \`codex\`, \`gemini\`, \`opencode\`).
-
-Example: \`SPEC_CONTEXT_REVIEWER=codex\`
-
-Do NOT proceed with implementation until reviewer dispatch is configured.
 ` : `
 ╔══════════════════════════════════════════════════════════════╗
 ║  YOU ARE THE ORCHESTRATOR — DO NOT IMPLEMENT YOURSELF        ║
@@ -200,8 +159,8 @@ Do NOT proceed with implementation until reviewer dispatch is configured.
 
 ${runtimeSteps}
 
-${dispatchRuntimeV2 ? '6.' : '5.'} **Build and Dispatch to Implementer Agent** (split contract and debug logs):
-   - ${dispatchRuntimeV2 ? 'Use compiled prompt from dispatch-runtime compile_prompt action' : 'Build the task prompt from the _Prompt field content'}
+6. **Build and Dispatch to Implementer Agent** (split contract and debug logs):
+   - Use compiled prompt from dispatch-runtime compile_prompt action
    - Dispatch via bash:
      \`\`\`bash
      ${implementerDispatchCommand}
@@ -211,20 +170,20 @@ ${dispatchRuntimeV2 ? '6.' : '5.'} **Build and Dispatch to Implementer Agent** (
 
 ${implementerIngestStep}
 
-${dispatchRuntimeV2 ? '8.' : '7.'} **Verify Completion:**
+8. **Verify Completion:**
    - Check tasks.md — task should now be marked [x]
-   ${dispatchRuntimeV2 ? '- Use \\`dispatch-runtime\\` nextAction as source of truth for orchestration branch' : '- Use explicit task marker + review status as source of truth'}
+   - Use \`dispatch-runtime\` nextAction as source of truth for orchestration branch
    - Get the diff (this is all you need to see):
      \`\`\`bash
      git diff {base-sha from step 2}..HEAD
      \`\`\`
 
-${reviewsEnabled ? `${dispatchRuntimeV2 ? '9' : '8'}. **Dispatch Review:**` : `${dispatchRuntimeV2 ? '9' : '8'}. **Skip Review (minimal mode):**`}
+9. **${reviewsEnabled ? 'Dispatch Review' : 'Skip Review (minimal mode)'}:**
 ${reviewerDispatchBlock}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: this task is done
 
-${dispatchRuntimeV2 ? '10' : '9'}. **STOP** — do NOT proceed to the next task in this same session
+10. **STOP** — do NOT proceed to the next task in this same session
 
 **Important Guidelines:**
 - You are the ORCHESTRATOR — NEVER implement tasks yourself
@@ -241,9 +200,9 @@ ${runtimeToolLine}
 - Edit: Update task markers if agents fail to
 - Read: Read tasks.md, _Prompt fields`}
 
-Please proceed with implementing ${taskId ? `task ${taskId}` : 'the next task'} following this workflow. Remember: ONE task only.`
-      }
-    }
+Please proceed with implementing ${taskId ? `task ${taskId}` : 'the next task'} following this workflow. Remember: ONE task only.`,
+      },
+    },
   ];
 
   return messages;

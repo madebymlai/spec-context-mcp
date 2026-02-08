@@ -3,7 +3,6 @@ import { implementTaskPrompt } from './implement-task.js';
 
 const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
 const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
-const ORIGINAL_DISPATCH_RUNTIME_V2 = process.env.SPEC_CONTEXT_DISPATCH_RUNTIME_V2;
 const ORIGINAL_DISCIPLINE = process.env.SPEC_CONTEXT_DISCIPLINE;
 
 function restoreEnvVar(key: string, value: string | undefined): void {
@@ -23,14 +22,12 @@ describe('implement-task prompt', () => {
   beforeEach(() => {
     process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
     process.env.SPEC_CONTEXT_REVIEWER = 'gemini';
-    process.env.SPEC_CONTEXT_DISPATCH_RUNTIME_V2 = '1';
     process.env.SPEC_CONTEXT_DISCIPLINE = 'full';
   });
 
   afterEach(() => {
     restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER', ORIGINAL_IMPLEMENTER);
     restoreEnvVar('SPEC_CONTEXT_REVIEWER', ORIGINAL_REVIEWER);
-    restoreEnvVar('SPEC_CONTEXT_DISPATCH_RUNTIME_V2', ORIGINAL_DISPATCH_RUNTIME_V2);
     restoreEnvVar('SPEC_CONTEXT_DISCIPLINE', ORIGINAL_DISCIPLINE);
   });
 
@@ -65,19 +62,5 @@ describe('implement-task prompt', () => {
     expect(text).toContain('{dispatch_cli from reviewer compile_prompt}');
     expect(text).not.toContain('review yourself');
     expect(text).not.toContain('No reviewer CLI configured');
-  });
-
-  it('fails fast when runtime v2 is disabled and reviewer CLI is missing', async () => {
-    process.env.SPEC_CONTEXT_DISPATCH_RUNTIME_V2 = '0';
-    delete process.env.SPEC_CONTEXT_REVIEWER;
-
-    const messages = await implementTaskPrompt.handler(
-      { specName: 'sample-spec', taskId: '1.1' },
-      context as any
-    );
-
-    const text = messages[0]?.content?.type === 'text' ? messages[0].content.text : '';
-    expect(text).toContain('⛔ **BLOCKED: SPEC_CONTEXT_REVIEWER is not set.**');
-    expect(text).toContain('Do NOT proceed with implementation until reviewer dispatch is configured.');
   });
 });
