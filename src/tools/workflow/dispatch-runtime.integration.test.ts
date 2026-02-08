@@ -5,7 +5,7 @@ import { join } from 'path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolResponse } from '../../workflow-types.js';
 
-let handleToolCall: typeof import('../index.js').handleToolCall;
+let handleToolCall: typeof import('../node-runtime.js').handleToolCall;
 
 async function createTempProject(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'dispatch-runtime-int-'));
@@ -49,7 +49,7 @@ describe('dispatch-runtime integration (no mocks)', () => {
   beforeAll(async () => {
     process.env.SPEC_CONTEXT_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER || 'claude';
     process.env.SPEC_CONTEXT_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER || 'codex';
-    const module = await import('../index.js');
+    const module = await import('../node-runtime.js');
     handleToolCall = module.handleToolCall;
   });
 

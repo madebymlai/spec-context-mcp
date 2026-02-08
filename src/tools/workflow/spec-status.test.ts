@@ -2,8 +2,21 @@ import { mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { specStatusHandler } from './spec-status-node.js';
+import { SpecParser } from '../../core/workflow/parser.js';
+import {
+  createSpecStatusHandler,
+  type SpecStatusReader,
+  type SpecStatusReaderFactory,
+} from './spec-status.js';
 import { TestFileContentCache } from './test-file-content-cache.js';
+
+const specStatusReaderFactory: SpecStatusReaderFactory = {
+  create(projectPath: string): SpecStatusReader {
+    return new SpecParser(projectPath);
+  },
+};
+
+const specStatusHandler = createSpecStatusHandler(specStatusReaderFactory);
 
 describe('spec-status cache integration', () => {
   const testDirs: string[] = [];

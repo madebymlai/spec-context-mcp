@@ -1,12 +1,10 @@
 import type { ToolContext as WorkflowToolContext, ToolResponse } from '../workflow-types.js';
 import { getChunkHoundBridge, SearchArgs, CodeResearchArgs } from '../bridge/chunkhound-bridge.js';
-import { resolveDashboardUrlForNode } from '../core/workflow/node-dashboard-url.js';
 import { filterVisibleTools } from './registry.js';
 import { TOOL_CATALOG_ORDER, type ToolName } from './catalog.js';
 import { mkdir, readdir, rm, stat, writeFile } from 'fs/promises';
 import { join, relative } from 'path';
 import { randomUUID } from 'crypto';
-import { getSharedFileContentCache } from '../core/cache/shared-file-content-cache.js';
 
 // Workflow tools
 import {
@@ -20,12 +18,9 @@ import {
 import {
     specStatusTool,
 } from './workflow/spec-status.js';
-import { specStatusHandler } from './workflow/spec-status-node.js';
 import {
     approvalsTool,
-    createApprovalsHandler,
 } from './workflow/approvals.js';
-import { nodeApprovalStoreFactory } from './workflow/approval-store-node.js';
 import {
     waitForApprovalTool,
     waitForApprovalHandler,
@@ -45,7 +40,6 @@ import {
 import {
     dispatchRuntimeTool,
 } from './workflow/dispatch-runtime.js';
-import { dispatchRuntimeHandler } from './workflow/dispatch-runtime-node.js';
 
 export interface Tool {
     name: string;
@@ -290,7 +284,7 @@ ERROR RECOVERY: If incomplete, try narrower query or use path parameter to scope
     },
 };
 
-type ToolHandler = (
+export type ToolHandler = (
     args: Record<string, unknown>,
     context: WorkflowToolContext
 ) => Promise<ToolResponse>;
@@ -298,6 +292,25 @@ type ToolHandler = (
 interface RegisteredTool {
     tool: Tool;
     handler: ToolHandler;
+}
+
+export interface ToolRuntimeDependencies {
+    resolveDashboardUrl: () => Promise<string | undefined>;
+    getFileContentCache: () => NonNullable<WorkflowToolContext['fileContentCache']>;
+    specStatusHandler: ToolHandler;
+    approvalsHandler: ToolHandler;
+    dispatchRuntimeHandler: ToolHandler;
+}
+
+export interface ToolRuntime {
+    getAllTools(): Tool[];
+    getVisibleTools(): Tool[];
+    getTools(): Tool[];
+    handleToolCall(
+        name: string,
+        args: Record<string, unknown>,
+        workflowContext?: WorkflowToolContext
+    ): Promise<unknown>;
 }
 
 function buildSuccess(message: string, data?: unknown): ToolResponse {
@@ -320,96 +333,101 @@ const codeResearchHandler: ToolHandler = async (args, context) => {
     return buildSuccess('Code research completed', result);
 };
 
-const approvalsHandler = createApprovalsHandler(nodeApprovalStoreFactory);
-
-const TOOL_REGISTRY: Record<ToolName, RegisteredTool> = {
-    search: {
-        tool: searchTool,
-        handler: searchHandler,
-    },
-    code_research: {
-        tool: codeResearchTool,
-        handler: codeResearchHandler,
-    },
-    'spec-workflow-guide': {
-        tool: specWorkflowGuideTool as Tool,
-        handler: specWorkflowGuideHandler,
-    },
-    'steering-guide': {
-        tool: steeringGuideTool as Tool,
-        handler: steeringGuideHandler,
-    },
-    'spec-status': {
-        tool: specStatusTool as Tool,
-        handler: specStatusHandler,
-    },
-    approvals: {
-        tool: approvalsTool as Tool,
-        handler: (args, context) => approvalsHandler(args as any, context),
-    },
-    'wait-for-approval': {
-        tool: waitForApprovalTool as Tool,
-        handler: (args, context) => waitForApprovalHandler(args as any, context),
-    },
-    'get-implementer-guide': {
-        tool: getImplementerGuideTool as Tool,
-        handler: getImplementerGuideHandler,
-    },
-    'get-reviewer-guide': {
-        tool: getReviewerGuideTool as Tool,
-        handler: getReviewerGuideHandler,
-    },
-    'get-brainstorm-guide': {
-        tool: getBrainstormGuideTool as Tool,
-        handler: getBrainstormGuideHandler,
-    },
-    'dispatch-runtime': {
-        tool: dispatchRuntimeTool as Tool,
-        handler: dispatchRuntimeHandler,
-    },
-};
-
-function getRegisteredTool(name: string): RegisteredTool | undefined {
-    if (!Object.prototype.hasOwnProperty.call(TOOL_REGISTRY, name)) {
-        return undefined;
-    }
-    return TOOL_REGISTRY[name as ToolName];
-}
-
-/** Returns all registered tools (unfiltered). */
-export function getAllTools(): Tool[] {
-    return TOOL_CATALOG_ORDER.map(name => TOOL_REGISTRY[name].tool);
-}
-
-/** Returns only the tools visible in the current session mode. */
-export function getVisibleTools(): Tool[] {
-    return filterVisibleTools(getAllTools());
-}
-
-/** Default export — returns visible tools for the current session. */
-export const getTools = getVisibleTools;
-
-export async function handleToolCall(
-    name: string,
-    args: Record<string, unknown>,
-    workflowContext?: WorkflowToolContext
-): Promise<unknown> {
-    // Create workflow context if not provided
-    const projectPath = (args.projectPath as string) || workflowContext?.projectPath || process.cwd();
-    const dashboardUrl = workflowContext?.dashboardUrl || await resolveDashboardUrlForNode();
-    const fileContentCache = workflowContext?.fileContentCache ?? getSharedFileContentCache();
-    const wfCtx: WorkflowToolContext = {
-        ...workflowContext,
-        projectPath,
-        dashboardUrl,
-        fileContentCache,
+function buildToolRegistry(dependencies: ToolRuntimeDependencies): Record<ToolName, RegisteredTool> {
+    return {
+        search: {
+            tool: searchTool,
+            handler: searchHandler,
+        },
+        code_research: {
+            tool: codeResearchTool,
+            handler: codeResearchHandler,
+        },
+        'spec-workflow-guide': {
+            tool: specWorkflowGuideTool as Tool,
+            handler: specWorkflowGuideHandler,
+        },
+        'steering-guide': {
+            tool: steeringGuideTool as Tool,
+            handler: steeringGuideHandler,
+        },
+        'spec-status': {
+            tool: specStatusTool as Tool,
+            handler: dependencies.specStatusHandler,
+        },
+        approvals: {
+            tool: approvalsTool as Tool,
+            handler: dependencies.approvalsHandler,
+        },
+        'wait-for-approval': {
+            tool: waitForApprovalTool as Tool,
+            handler: (args, context) => waitForApprovalHandler(args as any, context),
+        },
+        'get-implementer-guide': {
+            tool: getImplementerGuideTool as Tool,
+            handler: getImplementerGuideHandler,
+        },
+        'get-reviewer-guide': {
+            tool: getReviewerGuideTool as Tool,
+            handler: getReviewerGuideHandler,
+        },
+        'get-brainstorm-guide': {
+            tool: getBrainstormGuideTool as Tool,
+            handler: getBrainstormGuideHandler,
+        },
+        'dispatch-runtime': {
+            tool: dispatchRuntimeTool as Tool,
+            handler: dependencies.dispatchRuntimeHandler,
+        },
     };
+}
 
-    const registeredTool = getRegisteredTool(name);
-    if (!registeredTool) {
-        throw new Error(`Unknown tool: ${name}`);
+export function createToolRuntime(dependencies: ToolRuntimeDependencies): ToolRuntime {
+    const toolRegistry = buildToolRegistry(dependencies);
+
+    function getRegisteredTool(name: string): RegisteredTool | undefined {
+        if (!Object.prototype.hasOwnProperty.call(toolRegistry, name)) {
+            return undefined;
+        }
+        return toolRegistry[name as ToolName];
     }
 
-    const rawResponse = await registeredTool.handler(args, wfCtx);
-    return maybeOffloadToolResponse(name, rawResponse, wfCtx);
+    function getAllTools(): Tool[] {
+        return TOOL_CATALOG_ORDER.map(name => toolRegistry[name].tool);
+    }
+
+    function getVisibleTools(): Tool[] {
+        return filterVisibleTools(getAllTools());
+    }
+
+    async function handleToolCall(
+        name: string,
+        args: Record<string, unknown>,
+        workflowContext?: WorkflowToolContext
+    ): Promise<unknown> {
+        const projectPath = (args.projectPath as string) || workflowContext?.projectPath || process.cwd();
+        const dashboardUrl = workflowContext?.dashboardUrl || await dependencies.resolveDashboardUrl();
+        const fileContentCache = workflowContext?.fileContentCache ?? dependencies.getFileContentCache();
+        const wfCtx: WorkflowToolContext = {
+            ...workflowContext,
+            projectPath,
+            dashboardUrl,
+            fileContentCache,
+        };
+
+        const registeredTool = getRegisteredTool(name);
+        if (!registeredTool) {
+            throw new Error(`Unknown tool: ${name}`);
+        }
+
+        const rawResponse = await registeredTool.handler(args, wfCtx);
+        return maybeOffloadToolResponse(name, rawResponse, wfCtx);
+    }
+
+    return {
+        getAllTools,
+        getVisibleTools,
+        getTools: getVisibleTools,
+        handleToolCall,
+    };
 }

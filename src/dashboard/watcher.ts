@@ -11,6 +11,12 @@ export interface SpecChangeEvent {
   data?: ParsedSpec | any;
 }
 
+export interface SpecWatcherErrorEvent {
+  stage: 'watcher' | 'file_change';
+  filePath?: string;
+  error: unknown;
+}
+
 function isNotFoundError(error: unknown): boolean {
   return typeof error === 'object'
     && error !== null
@@ -59,8 +65,7 @@ export class SpecWatcher extends EventEmitter {
 
     // Add error handler to prevent watcher crashes
     this.watcher.on('error', (error: unknown) => {
-      console.error('File watcher error:', error);
-      // Don't propagate error to prevent system crash
+      this.emitWatcherError('watcher', error);
     });
 
     // File watcher started for workflow directories
@@ -162,9 +167,17 @@ export class SpecWatcher extends EventEmitter {
         await this.handleSteeringChange(action, normalizedPath);
       }
     } catch (error) {
-      console.error(`Error handling file change for ${filePath}:`, error);
-      // Don't propagate error to prevent watcher crash
+      this.emitWatcherError('file_change', error, filePath);
     }
+  }
+
+  private emitWatcherError(stage: 'watcher' | 'file_change', error: unknown, filePath?: string): void {
+    console.error(`Spec watcher error (${stage})${filePath ? ` for ${filePath}` : ''}:`, error);
+    this.emit('watcher-error', {
+      stage,
+      filePath,
+      error
+    } satisfies SpecWatcherErrorEvent);
   }
 
   private async handleSpecChange(action: 'created' | 'updated' | 'deleted', filePath: string): Promise<void> {

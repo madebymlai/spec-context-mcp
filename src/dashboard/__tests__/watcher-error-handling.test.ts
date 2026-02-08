@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SpecWatcher } from '../watcher.js';
-import { SpecParser } from '../parser.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { SpecWatcher, type SpecWatcherErrorEvent } from '../watcher.js';
+import type { ISpecParser, ParsedSpec } from '../parser.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -8,12 +8,31 @@ import { tmpdir } from 'os';
 describe('SpecWatcher Error Handling', () => {
   let testDir: string;
   let watcher: SpecWatcher;
-  let parser: SpecParser;
+  let parser: ISpecParser;
+  let failGetSpec = false;
+  let specByName = new Map<string, ParsedSpec>();
+
+  function makeParsedSpec(name: string): ParsedSpec {
+    return {
+      name,
+      displayName: name,
+      createdAt: new Date().toISOString(),
+      lastModified: new Date().toISOString(),
+      phases: {
+        requirements: { exists: true },
+        design: { exists: false },
+        tasks: { exists: false },
+        implementation: { exists: true },
+      },
+    };
+  }
 
   beforeEach(async () => {
     // Create a temporary test directory
     testDir = join(tmpdir(), `spec-context-test-${Date.now()}`);
     await fs.mkdir(testDir, { recursive: true });
+    failGetSpec = false;
+    specByName = new Map<string, ParsedSpec>();
     
     // Create the workflow directory structure
     const workflowDir = join(testDir, '.spec-context');
@@ -28,9 +47,30 @@ describe('SpecWatcher Error Handling', () => {
     const testSpecDir = join(specsDir, 'test-spec');
     await fs.mkdir(testSpecDir, { recursive: true });
     await fs.writeFile(join(testSpecDir, 'requirements.md'), '# Test Requirements\n\nSome content');
+    specByName.set('test-spec', makeParsedSpec('test-spec'));
 
-    // Initialize parser and watcher
-    parser = new SpecParser(testDir);
+    parser = {
+      getAllSpecs: async () => Array.from(specByName.values()),
+      getAllArchivedSpecs: async () => [],
+      getSpec: async (name: string) => {
+        if (failGetSpec) {
+          throw new Error('Parser error');
+        }
+        return specByName.get(name) ?? null;
+      },
+      getArchivedSpec: async () => null,
+      getProjectSteeringStatus: async () => ({
+        exists: true,
+        documents: {
+          product: true,
+          tech: true,
+          structure: true,
+          principles: true,
+        },
+        lastModified: new Date().toISOString(),
+      }),
+    };
+
     watcher = new SpecWatcher(testDir, parser);
   });
 
@@ -40,12 +80,7 @@ describe('SpecWatcher Error Handling', () => {
       await watcher.stop();
     }
     
-    // Clean up test directory
-    try {
-      await fs.rm(testDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+    await fs.rm(testDir, { recursive: true, force: true });
   });
 
   it('should start without crashing', async () => {
@@ -75,28 +110,20 @@ describe('SpecWatcher Error Handling', () => {
   it('should handle parser errors gracefully', async () => {
     await watcher.start();
 
-    // Mock parser to throw an error
-    const originalGetSpec = parser.getSpec.bind(parser);
-    parser.getSpec = vi.fn().mockRejectedValue(new Error('Parser error'));
+    failGetSpec = true;
 
-    // Set up event listener
-    const changeEvents: any[] = [];
-    watcher.on('change', (event) => {
-      changeEvents.push(event);
+    const watcherErrors: SpecWatcherErrorEvent[] = [];
+    watcher.on('watcher-error', (event: SpecWatcherErrorEvent) => {
+      watcherErrors.push(event);
     });
 
-    // Modify a file (this will trigger the error)
     const requirementsPath = join(testDir, '.spec-context', 'specs', 'test-spec', 'requirements.md');
-    await fs.writeFile(requirementsPath, '# Updated Requirements\n\nUpdated content');
-
-    // Wait for file system events to propagate
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await (watcher as any).handleFileChange('updated', requirementsPath);
 
     // Watcher should still be running despite the error
     expect(watcher).toBeDefined();
-
-    // Restore original method
-    parser.getSpec = originalGetSpec;
+    expect(watcherErrors.length).toBeGreaterThan(0);
+    expect(watcherErrors[0]?.stage).toBe('file_change');
   });
 
   it('should handle steering file changes', async () => {
