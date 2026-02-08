@@ -15,8 +15,26 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
   
   // Extract the guide content from the tool response
   const guide = toolResponse.data?.guide || '';
+  const templates = toolResponse.data?.templates || {};
   const dashboardUrl = toolResponse.data?.dashboardUrl;
   const nextSteps = toolResponse.nextSteps || [];
+  const injectedTemplates = ['product', 'tech', 'structure', 'principles']
+    .map((key) => {
+      const template = templates[key];
+      if (!template || typeof template.content !== 'string') {
+        return null;
+      }
+      return [
+        `### ${key}-template.md`,
+        `Source: ${template.source ?? 'unknown'}`,
+        `Path: ${template.path ?? 'unknown'}`,
+        '```markdown',
+        template.content,
+        '```',
+      ].join('\n');
+    })
+    .filter((section): section is string => section !== null)
+    .join('\n\n');
 
   const messages: PromptMessage[] = [
     {
@@ -34,11 +52,14 @@ ${dashboardUrl ? `- Dashboard: ${dashboardUrl}` : '- Dashboard: Please start the
 **Next Steps:**
 ${nextSteps.map(step => `- ${step}`).join('\n')}
 
+**Injected Steering Templates (use these directly; do not re-read template files from disk):**
+${injectedTemplates || '_No templates were resolved by the server_'}
+
 **Important Instructions:**
 1. This guide has been injected into your context for creating steering documents
 2. Only proceed if the user explicitly requested steering document creation
-3. Follow the sequence exactly: product.md → tech.md → structure.md
-4. Read templates from .spec-context/templates/ directory
+3. Follow the sequence exactly: product.md → tech.md → structure.md → principles.md
+4. Use injected template content above as the canonical template source
 5. Create documents in .spec-context/steering/ directory
 6. Request approval after each document using the approvals tool
 7. Never proceed to the next document without successful approval cleanup

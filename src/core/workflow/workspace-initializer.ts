@@ -52,7 +52,8 @@ export class WorkspaceInitializer {
       'tasks-template',
       'product-template',
       'tech-template',
-      'structure-template'
+      'structure-template',
+      'principles-template'
     ];
     
     for (const template of templates) {
@@ -87,6 +88,7 @@ This directory allows you to create custom templates that override the default S
    - \`product-template.md\` - Override product steering template
    - \`tech-template.md\` - Override tech steering template
    - \`structure-template.md\` - Override structure steering template
+   - \`principles-template.md\` - Override principles steering template
 
 2. **Template Loading Priority**:
    - The system first checks this \`user-templates/\` directory

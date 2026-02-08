@@ -1,5 +1,5 @@
 /**
- * Shared spec template loader
+ * Shared workflow template loader
  * Loads server-bundled templates only.
  */
 
@@ -16,19 +16,27 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export type SpecTemplateType = 'requirements' | 'design' | 'tasks';
 export const SPEC_WORKFLOW_TEMPLATES = ['requirements', 'design', 'tasks'] as const;
+export type SteeringTemplateType = 'product' | 'tech' | 'structure' | 'principles';
+export const STEERING_WORKFLOW_TEMPLATES = ['product', 'tech', 'structure', 'principles'] as const;
+type WorkflowTemplateType = SpecTemplateType | SteeringTemplateType;
 
 export type TemplateSource = 'server';
 
-export interface SpecTemplatePayload {
+export interface WorkflowTemplatePayload {
   content: string;
   source: TemplateSource;
   path: string;
 }
 
-export type SpecTemplateResult = Partial<Record<SpecTemplateType, SpecTemplatePayload>>;
-export type TemplateFingerprintMap = Partial<Record<SpecTemplateType, FileContentFingerprint>>;
+export type SpecTemplatePayload = WorkflowTemplatePayload;
+export type SteeringTemplatePayload = WorkflowTemplatePayload;
 
-export function buildBundledTemplatePath(template: SpecTemplateType): string {
+export type SpecTemplateResult = Partial<Record<SpecTemplateType, SpecTemplatePayload>>;
+export type SteeringTemplateResult = Partial<Record<SteeringTemplateType, SteeringTemplatePayload>>;
+export type TemplateFingerprintMap = Partial<Record<SpecTemplateType, FileContentFingerprint>>;
+export type SteeringTemplateFingerprintMap = Partial<Record<SteeringTemplateType, FileContentFingerprint>>;
+
+export function buildBundledTemplatePath(template: WorkflowTemplateType): string {
   return join(__dirname, '..', '..', 'templates', `${template}-template.md`);
 }
 
@@ -36,28 +44,28 @@ export async function getSpecTemplates(
   templates: readonly SpecTemplateType[],
   cache?: IFileContentCache
 ): Promise<SpecTemplateResult> {
-  const result: SpecTemplateResult = {};
+  return resolveTemplates(templates, cache);
+}
 
-  for (const template of templates) {
-    const resolved = await resolveTemplate(template, cache);
-    result[template] = resolved;
-  }
-
-  return result;
+export async function getSteeringTemplates(
+  templates: readonly SteeringTemplateType[],
+  cache?: IFileContentCache
+): Promise<SteeringTemplateResult> {
+  return resolveTemplates(templates, cache);
 }
 
 export function collectTemplateFingerprints(
   templates: readonly SpecTemplateType[],
   fileContentCache: IFileContentCache
 ): TemplateFingerprintMap {
-  const fingerprints: TemplateFingerprintMap = {};
-  for (const template of templates) {
-    const fingerprint = fileContentCache.getFingerprint(buildBundledTemplatePath(template));
-    if (fingerprint) {
-      fingerprints[template] = fingerprint;
-    }
-  }
-  return fingerprints;
+  return collectFingerprints(templates, fileContentCache);
+}
+
+export function collectSteeringTemplateFingerprints(
+  templates: readonly SteeringTemplateType[],
+  fileContentCache: IFileContentCache
+): SteeringTemplateFingerprintMap {
+  return collectFingerprints(templates, fileContentCache);
 }
 
 export function hasTemplateFingerprintMismatch(
@@ -67,9 +75,55 @@ export function hasTemplateFingerprintMismatch(
     fileContentCache: IFileContentCache;
   }
 ): boolean {
-  for (const template of args.templates) {
-    const current = args.fileContentCache.getFingerprint(buildBundledTemplatePath(template));
-    const previous = args.previous[template];
+  return hasFingerprintMismatch(args.templates, args.previous, args.fileContentCache);
+}
+
+export function hasSteeringTemplateFingerprintMismatch(
+  args: {
+    templates: readonly SteeringTemplateType[];
+    previous: SteeringTemplateFingerprintMap;
+    fileContentCache: IFileContentCache;
+  }
+): boolean {
+  return hasFingerprintMismatch(args.templates, args.previous, args.fileContentCache);
+}
+
+async function resolveTemplates<T extends WorkflowTemplateType>(
+  templates: readonly T[],
+  cache?: IFileContentCache
+): Promise<Partial<Record<T, WorkflowTemplatePayload>>> {
+  const result: Partial<Record<T, WorkflowTemplatePayload>> = {};
+
+  for (const template of templates) {
+    const resolved = await resolveTemplate(template, cache);
+    result[template] = resolved;
+  }
+
+  return result;
+}
+
+function collectFingerprints<T extends WorkflowTemplateType>(
+  templates: readonly T[],
+  fileContentCache: IFileContentCache
+): Partial<Record<T, FileContentFingerprint>> {
+  const fingerprints: Partial<Record<T, FileContentFingerprint>> = {};
+  for (const template of templates) {
+    const fingerprint = fileContentCache.getFingerprint(buildBundledTemplatePath(template));
+    if (fingerprint) {
+      fingerprints[template] = fingerprint;
+    }
+  }
+  return fingerprints;
+}
+
+function hasFingerprintMismatch<T extends WorkflowTemplateType>(
+  templates: readonly T[],
+  previousFingerprints: Partial<Record<T, FileContentFingerprint>>,
+  fileContentCache: IFileContentCache
+): boolean {
+  for (const template of templates) {
+    const current = fileContentCache.getFingerprint(buildBundledTemplatePath(template));
+    const previous = previousFingerprints[template];
     if (!current || !previous) {
       return true;
     }
@@ -81,9 +135,9 @@ export function hasTemplateFingerprintMismatch(
 }
 
 async function resolveTemplate(
-  template: SpecTemplateType,
+  template: WorkflowTemplateType,
   cache?: IFileContentCache
-): Promise<SpecTemplatePayload> {
+): Promise<WorkflowTemplatePayload> {
   const path = buildBundledTemplatePath(template);
   const content = cache
     ? await cache.get(path, { namespace: 'templates.server' })
