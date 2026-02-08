@@ -313,7 +313,7 @@ ${reviewsRequired
      - \`action: "init_run"\`
      - \`specName: "{spec-name}"\`
      - \`taskId: "{taskId}"\`
-   - Save \`runId\` for subsequent ingest calls.
+   - Save \`runId\` for subsequent runtime actions.
 5. **Dispatch implementer and ingest result in one action:**
    - Call \`dispatch-runtime\` with:
      - \`action: "dispatch_and_ingest"\`
@@ -321,6 +321,7 @@ ${reviewsRequired
      - \`role: "implementer"\`
      - \`taskId: "{taskId}"\`
      - \`maxOutputTokens: 1200\`
+   - Use this single runtime action for dispatch execution and result ingestion.
    - Omit \`taskPrompt\` to use runtime ledger task prompt (fail fast if missing).
    - Runtime compiles prompt, executes provider, validates strict contract, ingests output, and returns \`nextAction\`.
    - Use returned \`execution.contractOutputPath\` and \`execution.debugOutputPath\` for diagnostics.
