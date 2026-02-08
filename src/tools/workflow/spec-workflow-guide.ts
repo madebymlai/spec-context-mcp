@@ -26,6 +26,8 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
 
   // Get discipline mode
   const disciplineMode = getDisciplineMode();
+  const dispatchRuntimeV2 = isDispatchRuntimeV2Enabled();
+  const reviewsRequired = disciplineMode !== 'minimal';
 
   // Get dispatch CLIs
   const implementerCli = getDispatchCli('implementer');
@@ -55,7 +57,7 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
         implementerCli,
         reviewerCli,
         implementerConfigured: !!implementerCli,
-        reviewerConfigured: !!reviewerCli,
+        reviewerConfigured: dispatchRuntimeV2 || !reviewsRequired || !!reviewerCli,
       },
       dashboardUrl: context.dashboardUrl,
       dashboardAvailable: !!context.dashboardUrl
@@ -73,6 +75,8 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
 function getSpecWorkflowGuide(disciplineMode: 'full' | 'standard' | 'minimal', implementerCli: string | null, reviewerCli: string | null): string {
   const currentYear = new Date().getFullYear();
   const dispatchRuntimeV2 = isDispatchRuntimeV2Enabled();
+  const reviewsRequired = disciplineMode !== 'minimal';
+  const reviewerMissingForLegacy = reviewsRequired && !dispatchRuntimeV2 && !reviewerCli;
   return `# Spec Development Workflow
 
 ## Overview
@@ -136,7 +140,11 @@ flowchart TD
     P4_Pick --> P4_Dispatch[Dispatch to implementer:<br/>${implementerCli}]
     P4_Dispatch --> P4_Verify[Verify: task marked [x],<br/>tests pass]
     P4_Verify --> P4_Review{Reviews enabled?}
-    P4_Review -->|Yes| P4_DoReview[${reviewerCli ? `Dispatch to reviewer:<br/>${reviewerCli}` : 'Review implementation<br/>directly'}]
+    P4_Review -->|Yes| P4_DoReview[${dispatchRuntimeV2
+      ? 'Dispatch reviewer via<br/>dispatch-runtime compile_prompt'
+      : reviewerCli
+        ? `Dispatch to reviewer:<br/>${reviewerCli}`
+        : 'BLOCKED:<br/>missing SPEC_CONTEXT_REVIEWER'}]
     P4_DoReview --> P4_ReviewResult{Review result?}
     P4_ReviewResult -->|Issues found| P4_Fix[Dispatch implementer<br/>to fix issues]
     P4_Fix --> P4_DoReview
@@ -255,14 +263,27 @@ Implementation requires a dispatch CLI. Set the \`SPEC_CONTEXT_IMPLEMENTER\` env
 Example: \`SPEC_CONTEXT_IMPLEMENTER=claude\`
 
 Do NOT implement tasks yourself. STOP and ask the user to configure the env var.
+` : reviewerMissingForLegacy ? `
+**⛔ BLOCKED: SPEC_CONTEXT_REVIEWER is not set.**
+
+Reviews are required in ${disciplineMode} mode when dispatch runtime v2 is disabled.
+Set \`SPEC_CONTEXT_REVIEWER\` to a reviewer CLI command (supported shortcuts: \`claude\`, \`codex\`, \`gemini\`, \`opencode\`).
+
+Example: \`SPEC_CONTEXT_REVIEWER=codex\`
+
+STOP and configure reviewer dispatch before implementation.
 ` : `**Purpose**: Execute tasks ONE AT A TIME with ${disciplineMode === 'full' ? 'TDD, ' : ''}verification${disciplineMode !== 'minimal' ? ', and review' : ''}.
 
 **Agent Dispatch:**
 - Implementer CLI: \`${implementerCli}\`
-${reviewerCli ? `- Reviewer CLI: \`${reviewerCli}\`` : '- Reviewer CLI: not configured (you review directly)'}
+${!reviewsRequired
+  ? '- Reviewer dispatch: not required in minimal mode'
+  : dispatchRuntimeV2
+    ? '- Reviewer dispatch CLI: runtime-resolved from `dispatch-runtime` compile_prompt (`dispatch_cli`)'
+    : `- Reviewer CLI: \`${reviewerCli}\``}
 - You are the ORCHESTRATOR. You do NOT implement tasks yourself.
 - You DISPATCH each task to the implementer agent via bash.
-${reviewerCli ? '- You DISPATCH reviews to the reviewer agent via bash.' : '- You review directly (call `get-reviewer-guide` once before first review).'}
+${reviewsRequired ? '- You DISPATCH reviews to the reviewer agent via bash.' : '- Reviews are disabled in minimal mode.'}
 
 **File Operations**:
 - Read tasks.md to check status and pick next task
@@ -276,7 +297,11 @@ ${reviewerCli ? '- You DISPATCH reviews to the reviewer agent via bash.' : '- Yo
 ${dispatchRuntimeV2 ? '- dispatch-runtime: Validate/ingest structured agent output and read runtime snapshot state' : '- dispatch-runtime: disabled (enable with SPEC_CONTEXT_DISPATCH_RUNTIME_V2=1)'}
 - Direct editing: Mark tasks as in-progress [-] or complete [x] in tasks.md
 - Bash: Dispatch tasks to implementer agent (\`${implementerCli}\`)
-${reviewerCli ? `- Bash: Dispatch reviews to reviewer agent (\`${reviewerCli}\`)` : '- get-reviewer-guide: Load review checklist (you review directly)'}
+${!reviewsRequired
+  ? '- Review dispatch is skipped in minimal mode'
+  : dispatchRuntimeV2
+    ? '- Bash: Dispatch reviewer using `dispatch_cli` returned by reviewer compile_prompt'
+    : `- Bash: Dispatch reviews to reviewer agent (\`${reviewerCli}\`)`}
 
 \`\`\`
 ╔══════════════════════════════════════════════════════════════╗
@@ -344,7 +369,9 @@ ${dispatchRuntimeV2 ? `6. **Ingest implementer output (no raw-log orchestration)
      git diff {base-sha}..HEAD
      \`\`\`
 8. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
-   ${reviewerCli ? `${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
+   ${disciplineMode === 'minimal'
+      ? '   - Skip review in minimal mode.'
+      : dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
      - \`action: "compile_prompt"\`
      - \`runId: "{runId}"\`
      - \`role: "reviewer"\`
@@ -352,19 +379,22 @@ ${dispatchRuntimeV2 ? `6. **Ingest implementer output (no raw-log orchestration)
      - \`maxOutputTokens: 1200\`
    - Omit \`taskPrompt\` to use runtime ledger task prompt (fail fast if missing).
    - Reviewer context remains explicit here: use base SHA and run \`git diff {base-sha}..HEAD\` before/while reviewing.
-   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` for reviewer dispatch.` : ''}
+   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` for reviewer dispatch.
    \`\`\`bash
-   ${dispatchRuntimeV2
-     ? `{dispatch_cli from dispatch-runtime} "{compiled reviewer prompt from dispatch-runtime}" 1>"{contractOutputPath}" 2>"{debugOutputPath}"`
-     : `${reviewerCli} "Review task {taskId} for spec {spec-name}. Base SHA: {base-sha}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1`}
+   {dispatch_cli from reviewer compile_prompt} "{compiled reviewer prompt from dispatch-runtime}" 1>"{contractOutputPath}" 2>"{debugOutputPath}"
    \`\`\`
-${dispatchRuntimeV2 ? `   - Call \`dispatch-runtime\` with:
+   - Call \`dispatch-runtime\` with:
      - \`action: "ingest_output"\`
      - \`runId: "{runId}"\`
      - \`role: "reviewer"\`
      - \`taskId: "{taskId}"\`
      - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "{contractOutputPath}"\`` : '   - Runtime v2 disabled: evaluate reviewer verdict from final structured output manually'}` : '   - Review the implementation yourself using loaded reviewer guide\n   - Run `git diff {base-sha}..HEAD` to see changes'}
+     - \`outputFilePath: "{contractOutputPath}"\``
+      : `   - Dispatch to reviewer agent via bash (redirect output to log):
+   \`\`\`bash
+   ${reviewerCli} "Review task {taskId} for spec {spec-name}. Base SHA: {base-sha}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1
+   \`\`\`
+   - Runtime v2 disabled: evaluate reviewer verdict from final structured output manually`}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: proceed to next task
 9. **Repeat from step 1** for the next pending task
@@ -392,7 +422,7 @@ ${dispatchRuntimeV2 ? '- NEVER branch orchestration state from raw logs; only us
 - Steering docs are optional - only create when explicitly requested
 - **CRITICAL: ONE task at a time during implementation — never batch, never parallelize**
 - **CRITICAL: NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`**
-${reviewerCli ? `- **CRITICAL: NEVER review tasks yourself — always dispatch to \`${reviewerCli}\`**` : ''}
+${reviewsRequired ? '- **CRITICAL: NEVER review tasks yourself — always dispatch to reviewer via configured CLI/runtime dispatch_cli**' : ''}
 
 ## Implementation Review Workflow
 ${disciplineMode === 'minimal' ? `
@@ -404,16 +434,16 @@ Reviews are disabled in minimal mode. Focus on verification before completion.
 For EACH task:
 1. **Implement**: Dispatch to \`${implementerCli}\` via bash — agent calls \`get-implementer-guide\`, follows ${disciplineMode === 'full' ? 'TDD' : 'verification'} rules, marks [x]
    - Guide policy: call \`get-implementer-guide\` in \`mode:"full"\` once per run, then \`mode:"compact"\` on later tasks
-2. **Review**: ${reviewerCli ? `Dispatch to \`${reviewerCli}\` via bash` : 'Review directly (using loaded `get-reviewer-guide`)'} — check spec compliance, code quality, principles
+2. **Review**: ${dispatchRuntimeV2 ? 'Dispatch reviewer via reviewer compile_prompt -> dispatch_cli' : `Dispatch to \`${reviewerCli}\` via bash`} — check spec compliance, code quality, principles
 3. **Handle feedback:**
-   - If issues found: dispatch implementer again to fix, re-verify, ${reviewerCli ? 'dispatch reviewer again' : 're-review'}
+   - If issues found: dispatch implementer again to fix, re-verify, dispatch reviewer again
    - If same issue appears twice: orchestrator takes over (implementer doesn't understand)
    - If approved: START the next task (go back to step 1)
 
 **NEVER start the next task before the current task is reviewed and approved.**
 **NEVER have more than one task marked [-] in-progress at any time.**
 **NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`.**
-${reviewerCli ? `**NEVER review tasks yourself — always dispatch to \`${reviewerCli}\`.**` : ''}
+**NEVER review tasks yourself — always dispatch to reviewer via configured CLI/runtime dispatch_cli.**
 `}
 ## File Structure
 \`\`\`
