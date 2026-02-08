@@ -311,18 +311,18 @@ ${dispatchRuntimeV2 ? `4. **Initialize runtime state for this task**:
      - \`taskId: "{taskId}"\`
    - Save \`runId\` for subsequent ingest calls.` : `4. **Runtime v2 disabled**:
    - Use legacy dispatch flow with minimal log inspection.`}
-5. **Dispatch to implementer agent via bash** (redirect output to log):
+5. **Dispatch to implementer agent via bash** (split contract and debug logs):
    ${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
      - \`action: "compile_prompt"\`
      - \`runId: "{runId}"\`
      - \`role: "implementer"\`
      - \`taskId: "{taskId}"\`
-     - \`taskPrompt: "{task prompt content}"\`
      - \`maxOutputTokens: 1200\`
-   - Use returned \`prompt\` and \`dispatch_cli\` for dispatch.` : ''}
+   - Omit \`taskPrompt\` to use runtime ledger task prompt (fail fast if missing).
+   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` for dispatch.` : ''}
    \`\`\`bash
    ${dispatchRuntimeV2
-     ? `{dispatch_cli from dispatch-runtime} "{compiled implementer prompt from dispatch-runtime}" > /tmp/spec-impl.log 2>&1`
+     ? `{dispatch_cli from dispatch-runtime} "{compiled implementer prompt from dispatch-runtime}" 1>"{contractOutputPath}" 2>"{debugOutputPath}"`
      : `${implementerCli} "Implement the task for spec {spec-name}, first call get-implementer-guide to load implementation rules then implement the task: {task prompt content}." > /tmp/spec-impl.log 2>&1`}
    \`\`\`
    - Implementer LAST output must be strict contract markers \`BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT\`
@@ -334,7 +334,7 @@ ${dispatchRuntimeV2 ? `6. **Ingest implementer output (no raw-log orchestration)
      - \`role: "implementer"\`
      - \`taskId: "{taskId}"\`
      - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "/tmp/spec-impl.log"\`
+     - \`outputFilePath: "{contractOutputPath}"\`
    - Use returned \`nextAction\` for branch decisions.` : `6. **Legacy result handling**:
    - Runtime v2 disabled: use task markers and minimal diagnostics to decide next action.`}
 7. **Verify task completion**:
@@ -344,17 +344,18 @@ ${dispatchRuntimeV2 ? `6. **Ingest implementer output (no raw-log orchestration)
      git diff {base-sha}..HEAD
      \`\`\`
 8. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
-${reviewerCli ? `${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
+   ${reviewerCli ? `${dispatchRuntimeV2 ? `   - First call \`dispatch-runtime\` with:
      - \`action: "compile_prompt"\`
      - \`runId: "{runId}"\`
      - \`role: "reviewer"\`
      - \`taskId: "{taskId}"\`
-     - \`taskPrompt: "{review prompt + base SHA + diff scope}"\`
      - \`maxOutputTokens: 1200\`
-   - Use returned \`prompt\` and \`dispatch_cli\` for reviewer dispatch.` : ''}
+   - Omit \`taskPrompt\` to use runtime ledger task prompt (fail fast if missing).
+   - Reviewer context remains explicit here: use base SHA and run \`git diff {base-sha}..HEAD\` before/while reviewing.
+   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` for reviewer dispatch.` : ''}
    \`\`\`bash
    ${dispatchRuntimeV2
-     ? `{dispatch_cli from dispatch-runtime} "{compiled reviewer prompt from dispatch-runtime}" > /tmp/spec-review.log 2>&1`
+     ? `{dispatch_cli from dispatch-runtime} "{compiled reviewer prompt from dispatch-runtime}" 1>"{contractOutputPath}" 2>"{debugOutputPath}"`
      : `${reviewerCli} "Review task {taskId} for spec {spec-name}. Base SHA: {base-sha}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1`}
    \`\`\`
 ${dispatchRuntimeV2 ? `   - Call \`dispatch-runtime\` with:
@@ -363,7 +364,7 @@ ${dispatchRuntimeV2 ? `   - Call \`dispatch-runtime\` with:
      - \`role: "reviewer"\`
      - \`taskId: "{taskId}"\`
      - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "/tmp/spec-review.log"\`` : '   - Runtime v2 disabled: evaluate reviewer verdict from final structured output manually'}` : '   - Review the implementation yourself using loaded reviewer guide\n   - Run `git diff {base-sha}..HEAD` to see changes'}
+     - \`outputFilePath: "{contractOutputPath}"\`` : '   - Runtime v2 disabled: evaluate reviewer verdict from final structured output manually'}` : '   - Review the implementation yourself using loaded reviewer guide\n   - Run `git diff {base-sha}..HEAD` to see changes'}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: proceed to next task
 9. **Repeat from step 1** for the next pending task

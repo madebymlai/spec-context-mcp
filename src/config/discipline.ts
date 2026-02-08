@@ -34,8 +34,9 @@ const CLAUDE_ALLOWED_TOOLS = {
  */
 export const PROVIDER_CATALOG = {
   claude: {
-    implementer: `claude -p --dangerously-skip-permissions --allowedTools "${CLAUDE_ALLOWED_TOOLS.implementer}"`,
-    reviewer: `claude -p --allowedTools "${CLAUDE_ALLOWED_TOOLS.reviewer}"`,
+    // `--allowedTools <tools...>` is variadic; terminate options with `--` so prompt remains positional.
+    implementer: `claude -p --dangerously-skip-permissions --allowedTools "${CLAUDE_ALLOWED_TOOLS.implementer}" --`,
+    reviewer: `claude -p --allowedTools "${CLAUDE_ALLOWED_TOOLS.reviewer}" --`,
   },
   codex: {
     implementer: 'codex exec --full-auto',

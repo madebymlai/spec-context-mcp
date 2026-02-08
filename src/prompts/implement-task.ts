@@ -58,8 +58,8 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      - \`runId: "{runId from step 4}"\`
      - \`role: "implementer"\`
      - \`taskId: "${taskId || '{taskId}'}"\`
-     - \`taskPrompt: "{_Prompt content}"\`
      - \`maxOutputTokens: 1200\`
+   - Omit \`taskPrompt\` to use the ledger/task prompt from runtime state (fail fast if missing).
    - Use returned \`prompt\` as the exact implementer dispatch payload.
 ` : '';
 
@@ -71,7 +71,7 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      - \`role: "implementer"\`
      - \`taskId: "${taskId || '{taskId}'}"\`
      - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "/tmp/spec-impl.log"\`
+     - \`outputFilePath: "{contractOutputPath from step 5}"\`
    - If contract validation fails: halt this dispatch attempt and surface the terminal error.
 ` : `
 6. **Legacy Result Handling (runtime v2 disabled):**
@@ -86,11 +86,11 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      - \`role: "reviewer"\`
      - \`taskId: "${taskId || '{taskId}'}"\`
      - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "/tmp/spec-review.log"\`` : `
+     - \`outputFilePath: "{contractOutputPath from reviewer compile step}"\`` : `
    - Runtime v2 disabled: evaluate reviewer verdict from structured final output manually`;
 
   const implementerDispatchCommand = dispatchRuntimeV2
-    ? `${implementerCli} "{compiled implementer prompt from dispatch-runtime}" > /tmp/spec-impl.log 2>&1`
+    ? `${implementerCli} "{compiled implementer prompt from dispatch-runtime}" 1>"{contractOutputPath from step 5}" 2>"{debugOutputPath from step 5}"`
     : `${implementerCli} "Implement the task for spec ${specName}, first call get-implementer-guide to load implementation rules then implement the task: [task prompt content from _Prompt field]." > /tmp/spec-impl.log 2>&1`;
 
   const reviewerDispatchBlock = reviewerCli
@@ -100,12 +100,13 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      - \`runId: "{runId from step 4}"\`
      - \`role: "reviewer"\`
      - \`taskId: "${taskId || '{taskId}'}"\`
-     - \`taskPrompt: "{review prompt + base SHA + diff scope}"\`
      - \`maxOutputTokens: 1200\`
-   - Use returned \`prompt\` as the exact reviewer dispatch payload.
-   - Dispatch to reviewer agent via bash (redirect output to log):
+   - Omit \`taskPrompt\` to use the ledger/task prompt from runtime state (fail fast if missing).
+   - Reviewer context remains explicit in workflow steps: base SHA + \`git diff {base-sha}..HEAD\`.
+   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` as reviewer dispatch context.
+   - Dispatch to reviewer agent via bash (split contract and debug logs):
      \`\`\`bash
-     ${reviewerCli} "{compiled reviewer prompt from dispatch-runtime}" > /tmp/spec-review.log 2>&1
+     ${reviewerCli} "{compiled reviewer prompt from dispatch-runtime}" 1>"{contractOutputPath from reviewer compile step}" 2>"{debugOutputPath from reviewer compile step}"
      \`\`\`
 ${reviewIngestStep}`
       : `   - Dispatch to reviewer agent via bash (redirect output to log):
@@ -185,7 +186,7 @@ Do NOT implement tasks yourself. STOP and ask the user to configure the env var.
 
 ${runtimeSteps}
 
-${dispatchRuntimeV2 ? '6.' : '5.'} **Build and Dispatch to Implementer Agent** (redirect output to log):
+${dispatchRuntimeV2 ? '6.' : '5.'} **Build and Dispatch to Implementer Agent** (split contract and debug logs):
    - ${dispatchRuntimeV2 ? 'Use compiled prompt from dispatch-runtime compile_prompt action' : 'Build the task prompt from the _Prompt field content'}
    - Dispatch via bash:
      \`\`\`bash
