@@ -4,7 +4,7 @@ import { PathUtils } from '../../core/workflow/path-utils.js';
 import { validateProjectPath } from '../../core/workflow/path-utils-node.js';
 import { resolveDashboardUrlForNode } from '../../core/workflow/node-dashboard-url-default.js';
 import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
-import { findDashboardProjectByPath, type DashboardProject } from './dashboard-project-resolver.js';
+import { resolveDashboardProject } from './dashboard-project-registration.js';
 
 type ApprovalResolutionStatus = 'approved' | 'rejected' | 'needs-revision';
 type AutoDeleteMode = 'enabled' | 'disabled';
@@ -167,13 +167,6 @@ function isAbortError(error: unknown): boolean {
     && (error as { name?: unknown }).name === 'AbortError';
 }
 
-function parseDashboardProjectList(payload: unknown): DashboardProject[] {
-  if (!Array.isArray(payload)) {
-    throw new Error('Dashboard project list response is not an array');
-  }
-  return payload as DashboardProject[];
-}
-
 function getFailureMessageFromPayload(payload: unknown, statusText: string): string {
   if (typeof payload !== 'object' || payload === null || !('error' in payload)) {
     return statusText;
@@ -259,18 +252,19 @@ export function createWaitForApprovalHandler(
       const translatedPath = dependencies.translateProjectPath(validatedProjectPath);
       const dashboardUrl = await dependencies.resolveDashboardUrl(context);
 
-      const projectsResponse = await dependencies.fetchJson(`${dashboardUrl}/api/projects/list`);
-      if (!projectsResponse.ok) {
+      const projectResolution = await resolveDashboardProject(
+        dashboardUrl,
+        validatedProjectPath,
+        translatedPath,
+        dependencies.fetchJson
+      );
+      if (projectResolution.kind === 'dashboard-unavailable') {
         return {
           success: false,
           message: `Dashboard not available at ${dashboardUrl}. Please start dashboard with: spec-context-dashboard`
         };
       }
-
-      const projectsPayload = await projectsResponse.json();
-      const projects = parseDashboardProjectList(projectsPayload);
-      const project = findDashboardProjectByPath(projects, validatedProjectPath, translatedPath);
-      if (!project) {
+      if (projectResolution.kind === 'project-unregistered') {
         return {
           success: false,
           message: `Project not registered with dashboard. Path: ${validatedProjectPath}`,
@@ -283,8 +277,8 @@ export function createWaitForApprovalHandler(
 
       const timeoutMs = Math.min(args.timeoutMs ?? 600000, 1800000);
       const autoDeleteMode = resolveAutoDeleteMode(args.autoDelete);
-      const waitUrl = `${dashboardUrl}/api/projects/${project.projectId}/approvals/${args.approvalId}/wait?timeout=${timeoutMs}&autoDelete=${isAutoDeleteEnabled(autoDeleteMode)}`;
-      const approvalUrl = dependencies.buildApprovalDeeplink(dashboardUrl, args.approvalId, project.projectId);
+      const waitUrl = `${dashboardUrl}/api/projects/${projectResolution.projectId}/approvals/${args.approvalId}/wait?timeout=${timeoutMs}&autoDelete=${isAutoDeleteEnabled(autoDeleteMode)}`;
+      const approvalUrl = dependencies.buildApprovalDeeplink(dashboardUrl, args.approvalId, projectResolution.projectId);
 
       const controller = dependencies.createAbortController();
       const fetchTimeout = dependencies.createTimeout(() => controller.abort(), timeoutMs + 5000);

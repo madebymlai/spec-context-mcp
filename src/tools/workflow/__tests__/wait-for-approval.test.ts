@@ -62,7 +62,10 @@ describe('waitForApprovalHandler', () => {
 
     expect(result.success).toBe(false);
     expect(result.message).toMatch(/Dashboard not available/i);
-    expect(fetchJson).toHaveBeenCalledWith('http://localhost:3000/api/projects/list');
+    expect(fetchJson).toHaveBeenCalledWith(
+      'http://localhost:3000/api/projects/list',
+      expect.any(Object)
+    );
   });
 
   it('returns timeout result when wait endpoint reports timeout', async () => {
@@ -107,5 +110,39 @@ describe('waitForApprovalHandler', () => {
     expect(result.success).toBe(true);
     expect(result.data?.status).toBe('approved');
     expect(result.data?.canProceed).toBe(true);
+  });
+
+  it('auto-registers project before waiting when dashboard has no project entry', async () => {
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url.endsWith('/api/projects/list')) {
+        return createResponse([]);
+      }
+      if (url.endsWith('/api/projects/add')) {
+        return createResponse({ projectId: 'p-registered', success: true });
+      }
+      if (url.includes('/api/projects/p-registered/approvals/abc/wait')) {
+        return createResponse({
+          resolved: true,
+          status: 'approved',
+          response: 'Looks good',
+          autoDeleted: true,
+          respondedAt: '2024-01-01T00:00:00.000Z',
+        });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    const handler = createWaitForApprovalHandler(createDependencies(fetchJson));
+
+    const result = await handler(
+      { approvalId: 'abc', projectPath: '/tmp/project' },
+      { projectPath: '/tmp/project' }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.status).toBe('approved');
+    expect(fetchJson).toHaveBeenCalledWith(
+      'http://localhost:3000/api/projects/add',
+      expect.objectContaining({ method: 'POST' })
+    );
   });
 });
