@@ -136,7 +136,7 @@ flowchart TD
     P4_Pick --> P4_Dispatch[Dispatch to implementer:<br/>${implementerCli}]
     P4_Dispatch --> P4_Verify[Verify: task marked [x],<br/>tests pass]
     P4_Verify --> P4_Review{Reviews enabled?}
-    P4_Review -->|Yes| P4_DoReview[Dispatch reviewer via<br/>dispatch-runtime compile_prompt]
+    P4_Review -->|Yes| P4_DoReview[Dispatch reviewer via<br/>dispatch-runtime dispatch_and_ingest]
     P4_DoReview --> P4_ReviewResult{Review result?}
     P4_ReviewResult -->|Issues found| P4_Fix[Dispatch implementer<br/>to fix issues]
     P4_Fix --> P4_DoReview
@@ -260,11 +260,11 @@ Do NOT implement tasks yourself. STOP and ask the user to configure the env var.
 **Agent Dispatch:**
 - Implementer CLI: \`${implementerCli}\`
 ${reviewsRequired
-  ? '- Reviewer dispatch CLI: runtime-resolved from `dispatch-runtime` compile_prompt (`dispatch_cli`)'
+  ? '- Reviewer dispatch: runtime-owned via `dispatch-runtime` (`dispatch_and_ingest`)'
   : '- Reviewer dispatch: not required in minimal mode'}
 - You are the ORCHESTRATOR. You do NOT implement tasks yourself.
-- You DISPATCH each task to the implementer agent via bash.
-${reviewsRequired ? '- You DISPATCH reviews to the reviewer agent via bash.' : '- Reviews are disabled in minimal mode.'}
+- You DISPATCH each task through \`dispatch-runtime\` single-action orchestration.
+${reviewsRequired ? '- You DISPATCH reviews through \`dispatch-runtime\` single-action orchestration.' : '- Reviews are disabled in minimal mode.'}
 
 **File Operations**:
 - Read tasks.md to check status and pick next task
@@ -277,9 +277,9 @@ ${reviewsRequired ? '- You DISPATCH reviews to the reviewer agent via bash.' : '
 - spec-status: Check overall progress
 - dispatch-runtime: Validate/ingest structured agent output and read runtime snapshot state
 - Direct editing: Mark tasks as in-progress [-] or complete [x] in tasks.md
-- Bash: Dispatch tasks to implementer agent (\`${implementerCli}\`)
+- Bash: Capture base SHA and inspect git diff
 ${reviewsRequired
-  ? '- Bash: Dispatch reviewer using `dispatch_cli` returned by reviewer compile_prompt'
+  ? '- dispatch-runtime: Dispatch reviewer using `dispatch_and_ingest`'
   : '- Review dispatch is skipped in minimal mode'}
 
 \`\`\`
@@ -314,60 +314,37 @@ ${reviewsRequired
      - \`specName: "{spec-name}"\`
      - \`taskId: "{taskId}"\`
    - Save \`runId\` for subsequent ingest calls.
-5. **Dispatch to implementer agent via bash** (split contract and debug logs):
-   - First call \`dispatch-runtime\` with:
-     - \`action: "compile_prompt"\`
+5. **Dispatch implementer and ingest result in one action:**
+   - Call \`dispatch-runtime\` with:
+     - \`action: "dispatch_and_ingest"\`
      - \`runId: "{runId}"\`
      - \`role: "implementer"\`
      - \`taskId: "{taskId}"\`
      - \`maxOutputTokens: 1200\`
    - Omit \`taskPrompt\` to use runtime ledger task prompt (fail fast if missing).
-   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` for dispatch.
-   \`\`\`bash
-   {dispatch_cli from implementer compile_prompt} "{compiled implementer prompt from dispatch-runtime}" 1>"{contractOutputPath}" 2>"{debugOutputPath}"
-   \`\`\`
-   - Implementer LAST output must be strict contract markers \`BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT\`
-   - Wait for the command to complete before proceeding
-6. **Ingest implementer output (no raw-log orchestration):**
-   - Call \`dispatch-runtime\` with:
-     - \`action: "ingest_output"\`
-     - \`runId: "{runId}"\`
-     - \`role: "implementer"\`
-     - \`taskId: "{taskId}"\`
-     - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "{contractOutputPath}"\`
-   - Use returned \`nextAction\` for branch decisions.
-7. **Verify task completion**:
+   - Runtime compiles prompt, executes provider, validates strict contract, ingests output, and returns \`nextAction\`.
+   - Use returned \`execution.contractOutputPath\` and \`execution.debugOutputPath\` for diagnostics.
+6. **Verify task completion**:
    - Check tasks.md — task should now be [x].
    - Get the diff (this is all you need to see):
      \`\`\`bash
      git diff {base-sha}..HEAD
      \`\`\`
-8. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
+7. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
    ${disciplineMode === 'minimal'
       ? '   - Skip review in minimal mode.'
-      : `   - First call \`dispatch-runtime\` with:
-     - \`action: "compile_prompt"\`
+      : `   - Call \`dispatch-runtime\` with:
+     - \`action: "dispatch_and_ingest"\`
      - \`runId: "{runId}"\`
      - \`role: "reviewer"\`
      - \`taskId: "{taskId}"\`
      - \`maxOutputTokens: 1200\`
    - Omit \`taskPrompt\` to use runtime ledger task prompt (fail fast if missing).
    - Reviewer context remains explicit here: use base SHA and run \`git diff {base-sha}..HEAD\` before/while reviewing.
-   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` for reviewer dispatch.
-   \`\`\`bash
-   {dispatch_cli from reviewer compile_prompt} "{compiled reviewer prompt from dispatch-runtime}" 1>"{contractOutputPath}" 2>"{debugOutputPath}"
-   \`\`\`
-   - Call \`dispatch-runtime\` with:
-     - \`action: "ingest_output"\`
-     - \`runId: "{runId}"\`
-     - \`role: "reviewer"\`
-     - \`taskId: "{taskId}"\`
-     - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "{contractOutputPath}"\``}
+   - Runtime executes reviewer dispatch and ingests strict contract in one action.`}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: proceed to next task
-9. **Repeat from step 1** for the next pending task
+8. **Repeat from step 1** for the next pending task
 
 **CRITICAL rules:**
 - NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`
@@ -392,7 +369,7 @@ ${reviewsRequired
 - Steering docs are optional - only create when explicitly requested
 - **CRITICAL: ONE task at a time during implementation — never batch, never parallelize**
 - **CRITICAL: NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`**
-${reviewsRequired ? '- **CRITICAL: NEVER review tasks yourself — always dispatch to reviewer via configured CLI/runtime dispatch_cli**' : ''}
+${reviewsRequired ? '- **CRITICAL: NEVER review tasks yourself — always dispatch to reviewer via `dispatch-runtime` `dispatch_and_ingest`**' : ''}
 
 ## Implementation Review Workflow
 ${disciplineMode === 'minimal' ? `
@@ -402,9 +379,9 @@ Reviews are disabled in minimal mode. Focus on verification before completion.
 **MANDATORY after EACH task** (${disciplineMode === 'full' ? 'TDD + ' : ''}verification + review):
 
 For EACH task:
-1. **Implement**: Dispatch to \`${implementerCli}\` via bash — agent calls \`get-implementer-guide\`, follows ${disciplineMode === 'full' ? 'TDD' : 'verification'} rules, marks [x]
+1. **Implement**: Dispatch using \`dispatch-runtime\` \`dispatch_and_ingest\` (role=\`implementer\`) — agent calls \`get-implementer-guide\`, follows ${disciplineMode === 'full' ? 'TDD' : 'verification'} rules, marks [x]
    - Guide policy: call \`get-implementer-guide\` in \`mode:"full"\` once per run, then \`mode:"compact"\` on later tasks
-2. **Review**: Dispatch reviewer via reviewer compile_prompt -> dispatch_cli — check spec compliance, code quality, principles
+2. **Review**: Dispatch reviewer via \`dispatch-runtime\` \`dispatch_and_ingest\` (role=\`reviewer\`) — check spec compliance, code quality, principles
 3. **Handle feedback:**
    - If issues found: dispatch implementer again to fix, re-verify, dispatch reviewer again
    - If same issue appears twice: runtime returns \`halt_and_escalate\`; orchestrator takes over
@@ -413,7 +390,7 @@ For EACH task:
 **NEVER start the next task before the current task is reviewed and approved.**
 **NEVER have more than one task marked [-] in-progress at any time.**
 **NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`.**
-**NEVER review tasks yourself — always dispatch to reviewer via configured CLI/runtime dispatch_cli.**
+**NEVER review tasks yourself — always dispatch to reviewer via \`dispatch-runtime\` \`dispatch_and_ingest\`.**
 `}
 ## File Structure
 \`\`\`

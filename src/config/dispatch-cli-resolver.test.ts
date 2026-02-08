@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getDispatchCliForComplexity } from './dispatch-cli-resolver.js';
+import { getDispatchCommandForComplexity } from './dispatch-cli-resolver.js';
 
 describe('dispatch-cli-resolver', () => {
   const originalEnv = process.env;
@@ -25,8 +25,8 @@ describe('dispatch-cli-resolver', () => {
     process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE = 'sonnet-4.5';
     process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX = 'opus-4.6';
 
-    expect(getDispatchCliForComplexity('implementer', 'simple')).toContain('--model sonnet-4.5');
-    expect(getDispatchCliForComplexity('implementer', 'complex')).toContain('--model opus-4.6');
+    expect(getDispatchCommandForComplexity('implementer', 'simple')?.args).toContain('sonnet-4.5');
+    expect(getDispatchCommandForComplexity('implementer', 'complex')?.args).toContain('opus-4.6');
   });
 
   it('appends model and reasoning effort for codex tiers', () => {
@@ -34,9 +34,9 @@ describe('dispatch-cli-resolver', () => {
     process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE = 'codex-5.3';
     process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT = 'medium';
 
-    const command = getDispatchCliForComplexity('reviewer', 'simple');
-    expect(command).toContain('--model codex-5.3');
-    expect(command).toContain('model_reasoning_effort=medium');
+    const command = getDispatchCommandForComplexity('reviewer', 'simple');
+    expect(command?.args).toContain('codex-5.3');
+    expect(command?.args).toContain('model_reasoning_effort=medium');
   });
 
   it('uses non-tiered reasoning effort when set', () => {
@@ -44,14 +44,15 @@ describe('dispatch-cli-resolver', () => {
     process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX = 'codex-5.3';
     process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT = 'xhigh';
 
-    const command = getDispatchCliForComplexity('reviewer', 'complex');
-    expect(command).toContain('--model codex-5.3');
-    expect(command).toContain('model_reasoning_effort=xhigh');
+    const command = getDispatchCommandForComplexity('reviewer', 'complex');
+    expect(command?.args).toContain('codex-5.3');
+    expect(command?.args).toContain('model_reasoning_effort=xhigh');
   });
 
-  it('keeps custom commands unchanged', () => {
+  it('fails loud when role env does not resolve to known provider', () => {
     process.env.SPEC_CONTEXT_IMPLEMENTER = 'my-agent --headless';
-    process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE = 'ignored-model';
-    expect(getDispatchCliForComplexity('implementer', 'simple')).toBe('my-agent --headless');
+    expect(() => getDispatchCommandForComplexity('implementer', 'simple')).toThrow(
+      'SPEC_CONTEXT_IMPLEMENTER must reference a known provider; received "my-agent --headless"'
+    );
   });
 });

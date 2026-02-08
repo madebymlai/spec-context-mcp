@@ -42,22 +42,35 @@ describe('spec-workflow-guide', () => {
     const guide = String(result.data?.guide ?? '');
     expect(guide).toContain('Omit `taskPrompt` to use runtime ledger task prompt (fail fast if missing).');
     expect(guide).toContain('Reviewer context remains explicit here: use base SHA and run `git diff {base-sha}..HEAD` before/while reviewing.');
-    expect(guide).toContain('`outputFilePath: "{contractOutputPath}"`');
-    expect(guide).toContain('1>"{contractOutputPath}" 2>"{debugOutputPath}"');
+    expect(guide).toContain('`action: "dispatch_and_ingest"`');
+    expect(guide).toContain('Runtime compiles prompt, executes provider, validates strict contract, ingests output, and returns `nextAction`.');
+    expect(guide).not.toContain('Reviews are disabled in minimal mode.');
     expect(guide).not.toContain('`taskPrompt: "{task prompt content}"`');
     expect(guide).not.toContain('`taskPrompt: "{review prompt + base SHA + diff scope}"`');
-    expect(guide).not.toContain('/tmp/spec-impl.log 2>&1');
+    expect(guide).not.toContain('{dispatch_cli from reviewer compile_prompt}');
   });
 
-  it('uses runtime reviewer dispatch guidance when SPEC_CONTEXT_REVIEWER is unset', async () => {
+  it('uses runtime reviewer dispatch_and_ingest guidance when SPEC_CONTEXT_REVIEWER is unset', async () => {
     delete process.env.SPEC_CONTEXT_REVIEWER;
 
     const result = await specWorkflowGuideHandler({}, createContext());
     expect(result.success).toBe(true);
 
     const guide = String(result.data?.guide ?? '');
-    expect(guide).toContain('{dispatch_cli from reviewer compile_prompt}');
+    expect(guide).toContain('`action: "dispatch_and_ingest"`');
     expect(guide).not.toContain('Review implementation<br/>directly');
     expect(guide).not.toContain('review yourself');
+  });
+
+  it('shows review-disabled copy only in minimal mode', async () => {
+    process.env.SPEC_CONTEXT_DISCIPLINE = 'minimal';
+
+    const result = await specWorkflowGuideHandler({}, createContext());
+    expect(result.success).toBe(true);
+
+    const guide = String(result.data?.guide ?? '');
+    expect(guide).toContain('Reviews are disabled in minimal mode.');
+    expect(guide).toContain('Review dispatch is skipped in minimal mode');
+    expect(guide).not.toContain('You DISPATCH reviews through \\`dispatch-runtime\\` single-action orchestration.');
   });
 });

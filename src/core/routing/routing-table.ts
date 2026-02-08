@@ -70,10 +70,8 @@ export class RoutingTable implements IRoutingTable {
   }
 
   resolve(level: ComplexityLevel, role: DispatchRole): RoutingTableEntry {
-    const provider = this.config[level];
     return {
-      provider,
-      cli: PROVIDER_CATALOG[provider][role],
+      provider: this.config[level],
       role,
     };
   }

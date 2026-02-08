@@ -120,8 +120,10 @@ describe('discipline config', () => {
       expect(resolveAgentCli('OpEnCoDe', 'reviewer')).toBe('opencode run');
     });
 
-    it('passes through unknown values as-is', () => {
-      expect(resolveAgentCli('my-custom-agent --flag', 'implementer')).toBe('my-custom-agent --flag');
+    it('fails loud for unknown values', () => {
+      expect(() => resolveAgentCli('my-custom-agent --flag', 'implementer')).toThrow(
+        'Unknown provider "my-custom-agent --flag" for role implementer'
+      );
     });
 
     it('trims whitespace', () => {
@@ -152,9 +154,11 @@ describe('discipline config', () => {
       expect(getDispatchCli('reviewer')).toBe('codex exec --sandbox read-only');
     });
 
-    it('passes through custom commands', () => {
+    it('fails loud for custom commands', () => {
       process.env.SPEC_CONTEXT_IMPLEMENTER = 'my-agent --headless';
-      expect(getDispatchCli('implementer')).toBe('my-agent --headless');
+      expect(() => getDispatchCli('implementer')).toThrow(
+        'Unknown provider "my-agent --headless" for role implementer'
+      );
     });
 
     it('returns null for empty string', () => {

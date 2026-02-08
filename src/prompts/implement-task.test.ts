@@ -42,14 +42,15 @@ describe('implement-task prompt', () => {
 
     expect(text).toContain('Omit `taskPrompt` to use the ledger/task prompt from runtime state (fail fast if missing).');
     expect(text).toContain('Reviewer context remains explicit in workflow steps: base SHA + `git diff {base-sha}..HEAD`.');
-    expect(text).toContain('`outputFilePath: "{contractOutputPath from step 5}"`');
-    expect(text).toContain('1>"{contractOutputPath from step 5}" 2>"{debugOutputPath from step 5}"');
+    expect(text).toContain('`action: "dispatch_and_ingest"`');
+    expect(text).toContain('Runtime compiles prompt, executes provider, ingests strict contract, and returns deterministic `nextAction`.');
+    expect(text).not.toContain('Reviews are disabled in minimal mode.');
     expect(text).not.toContain('`taskPrompt: "{_Prompt content}"`');
     expect(text).not.toContain('`taskPrompt: "{review prompt + base SHA + diff scope}"`');
-    expect(text).not.toContain('/tmp/spec-impl.log 2>&1');
+    expect(text).not.toContain('{dispatch_cli from reviewer compile_prompt}');
   });
 
-  it('uses runtime dispatch_cli for reviewer even when SPEC_CONTEXT_REVIEWER is unset', async () => {
+  it('uses runtime dispatch_and_ingest for reviewer even when SPEC_CONTEXT_REVIEWER is unset', async () => {
     delete process.env.SPEC_CONTEXT_REVIEWER;
 
     const messages = await implementTaskPrompt.handler(
@@ -58,9 +59,23 @@ describe('implement-task prompt', () => {
     );
 
     const text = messages[0]?.content?.type === 'text' ? messages[0].content.text : '';
-    expect(text).toContain('Reviewer Dispatch:** runtime-resolved via `dispatch-runtime` compile_prompt (`dispatch_cli`)');
-    expect(text).toContain('{dispatch_cli from reviewer compile_prompt}');
+    expect(text).toContain('Reviewer Dispatch:** runtime-owned via `dispatch-runtime` (`dispatch_and_ingest`)');
+    expect(text).toContain('`action: "dispatch_and_ingest"`');
     expect(text).not.toContain('review yourself');
     expect(text).not.toContain('No reviewer CLI configured');
+  });
+
+  it('shows minimal-mode review-disabled copy only in minimal mode', async () => {
+    process.env.SPEC_CONTEXT_DISCIPLINE = 'minimal';
+
+    const messages = await implementTaskPrompt.handler(
+      { specName: 'sample-spec', taskId: '1.1' },
+      context as any
+    );
+
+    const text = messages[0]?.content?.type === 'text' ? messages[0].content.text : '';
+    expect(text).toContain('Skip Review (minimal mode)');
+    expect(text).toContain('Skip review in minimal mode.');
+    expect(text).not.toContain('Dispatch Review');
   });
 });

@@ -35,7 +35,6 @@ export interface RoutingTableConfig {
 
 export interface RoutingTableEntry {
   provider: CanonicalProvider;
-  cli: string;
   role: DispatchRole;
 }
 

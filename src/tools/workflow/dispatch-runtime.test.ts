@@ -292,7 +292,8 @@ END_DISPATCH_RESULT`,
     expect(result.data?.snapshot?.goal).toContain('dispatch_task');
     expect(result.data?.classification_level).toBeTypeOf('string');
     expect(result.data?.selected_provider).toBeTypeOf('string');
-    expect(result.data?.dispatch_cli).toBeTypeOf('string');
+    const facts = (result.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
+    expect(facts.find(fact => fact.k === 'dispatch_cli')?.v).toBeTypeOf('string');
   });
 
   it('classifies simple tasks and selects the mapped provider during init_run', async () => {
@@ -314,7 +315,6 @@ END_DISPATCH_RESULT`,
     const facts = (result.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
     expect(facts.find(fact => fact.k === 'classification_level')?.v).toBe('simple');
     expect(facts.find(fact => fact.k === 'selected_provider')?.v).toBe('codex');
-    expect(result.data?.dispatch_cli).toContain('--model sonnet-4.5');
     expect(facts.find(fact => fact.k === 'dispatch_cli')?.v).toContain('--model sonnet-4.5');
     expect(facts.find(fact => fact.k === 'classification_features')?.v).toContain('keyword_match');
   });
@@ -565,9 +565,10 @@ END_DISPATCH_RESULT`;
     expect(second.data?.nextAction).toBe('halt_schema_invalid_terminal');
   });
 
-  it('compiles prompt even when implementer provider command is custom', async () => {
+  it('fails loud when implementer provider command is not canonical', async () => {
     process.env.SPEC_CONTEXT_IMPLEMENTER = 'custom-provider --json';
-    await dispatchRuntimeHandler(
+
+    const result = await dispatchRuntimeHandler(
       {
         action: 'init_run',
         runId: 'test-run-unsupported-provider',
@@ -577,20 +578,8 @@ END_DISPATCH_RESULT`;
       context
     );
 
-    const result = await dispatchRuntimeHandler(
-      {
-        action: 'compile_prompt',
-        runId: 'test-run-unsupported-provider',
-        role: 'implementer',
-        taskId: '6.1',
-        taskPrompt: 'Implement provider gate enforcement',
-        maxOutputTokens: 600,
-      },
-      context
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.data?.prompt).toContain('Task ID: 6.1');
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('SPEC_CONTEXT_IMPLEMENTER must reference a known provider');
   });
 
   it('rejects extra prose outside dispatch contract markers', async () => {
@@ -652,7 +641,9 @@ END_DISPATCH_RESULT`,
     expect(result.data?.guideMode).toBe('full');
     expect(result.data?.guideCacheKey).toBe('implementer:test-run-compile');
     expect(result.data?.deltaPacket?.guide_mode).toBe('full');
-    expect(result.data?.dispatch_cli).toBeTypeOf('string');
+    expect(result.data?.dispatchCommand?.command).toBeTypeOf('string');
+    expect(Array.isArray(result.data?.dispatchCommand?.args)).toBe(true);
+    expect(result.data?.dispatchCommand?.display).toBeTypeOf('string');
     expect(result.data?.contractOutputPath).toBeTypeOf('string');
     expect(result.data?.contractOutputPath).toContain('spec-context-dispatch-implementer-test-run-compile-1.contract.log');
     expect(result.data?.debugOutputPath).toBeTypeOf('string');
@@ -678,7 +669,7 @@ END_DISPATCH_RESULT`,
     expect(second.data?.deltaPacket?.guide_mode).toBe('compact');
   });
 
-  it('returns role-specific dispatch_cli with complexity model flags', async () => {
+  it('returns role-specific dispatchCommand with complexity model flags', async () => {
     process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE = 'codex-5.3';
     process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT = 'medium';
 
@@ -705,9 +696,10 @@ END_DISPATCH_RESULT`,
     );
 
     expect(compile.success).toBe(true);
-    expect(compile.data?.dispatch_cli).toContain('codex exec --sandbox read-only');
-    expect(compile.data?.dispatch_cli).toContain('--model codex-5.3');
-    expect(compile.data?.dispatch_cli).toContain('model_reasoning_effort=medium');
+    expect(compile.data?.dispatchCommand?.command).toBe('codex');
+    expect(compile.data?.dispatchCommand?.args).toEqual(expect.arrayContaining(['exec', '--sandbox', 'read-only']));
+    expect(compile.data?.dispatchCommand?.args).toContain('codex-5.3');
+    expect(compile.data?.dispatchCommand?.args).toContain('model_reasoning_effort=medium');
     const reviewerPrompt = String(compile.data?.prompt ?? '');
     expect(reviewerPrompt).toContain('"required_fixes"');
     expect(reviewerPrompt).toContain('"issues"');

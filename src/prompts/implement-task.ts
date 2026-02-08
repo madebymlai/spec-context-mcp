@@ -46,52 +46,29 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
      - \`taskId: "${taskId || '{taskId}'}"\`
    - Save returned \`runId\` for this task.
 
-5. **Compile Dispatch Prompt (stable prefix + delta):**
+5. **Dispatch Implementer and Ingest Result (single runtime action):**
    - Call \`dispatch-runtime\` with:
-     - \`action: "compile_prompt"\`
+     - \`action: "dispatch_and_ingest"\`
      - \`runId: "{runId from step 4}"\`
      - \`role: "implementer"\`
      - \`taskId: "${taskId || '{taskId}'}"\`
      - \`maxOutputTokens: 1200\`
    - Omit \`taskPrompt\` to use the ledger/task prompt from runtime state (fail fast if missing).
-   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` as dispatch context.
-`;
-
-  const implementerDispatchCommand = '{dispatch_cli from implementer compile_prompt} "{compiled implementer prompt from dispatch-runtime}" 1>"{contractOutputPath from step 5}" 2>"{debugOutputPath from step 5}"';
-
-  const implementerIngestStep = `
-7. **Ingest Implementer Result (no raw-log parsing):**
-   - Call \`dispatch-runtime\` with:
-     - \`action: "ingest_output"\`
-     - \`runId: "{runId from step 4}"\`
-     - \`role: "implementer"\`
-     - \`taskId: "${taskId || '{taskId}'}"\`
-     - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "{contractOutputPath from step 5}"\`
-   - If contract validation fails: halt this dispatch attempt and surface the terminal error.
+   - Runtime compiles prompt, executes provider, ingests strict contract, and returns deterministic \`nextAction\`.
+   - Use returned \`execution.contractOutputPath\` and \`execution.debugOutputPath\` for diagnostics only.
 `;
 
   const reviewerDispatchBlock = reviewsEnabled
-    ? `   - First call \`dispatch-runtime\` with:
-     - \`action: "compile_prompt"\`
+    ? `   - Call \`dispatch-runtime\` with:
+     - \`action: "dispatch_and_ingest"\`
      - \`runId: "{runId from step 4}"\`
      - \`role: "reviewer"\`
      - \`taskId: "${taskId || '{taskId}'}"\`
      - \`maxOutputTokens: 1200\`
    - Omit \`taskPrompt\` to use the ledger/task prompt from runtime state (fail fast if missing).
    - Reviewer context remains explicit in workflow steps: base SHA + \`git diff {base-sha}..HEAD\`.
-   - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` as reviewer dispatch context.
-   - Dispatch to reviewer agent via bash (split contract and debug logs):
-     \`\`\`bash
-     {dispatch_cli from reviewer compile_prompt} "{compiled reviewer prompt from dispatch-runtime}" 1>"{contractOutputPath from reviewer compile step}" 2>"{debugOutputPath from reviewer compile step}"
-     \`\`\`
-   - Ingest reviewer result via \`dispatch-runtime\`:
-     - \`action: "ingest_output"\`
-     - \`runId: "{runId from step 4}"\`
-     - \`role: "reviewer"\`
-     - \`taskId: "${taskId || '{taskId}'}"\`
-     - \`maxOutputTokens: 1200\`
-     - \`outputFilePath: "{contractOutputPath from reviewer compile step}"\``
+   - Runtime executes reviewer dispatch and ingests strict contract in one action.
+   - Use returned \`nextAction\` to branch deterministically.`
     : '   - Skip review in minimal mode.';
 
   const runtimeGuideline = '- Never branch orchestration logic from raw logs; only from \`dispatch-runtime\` structured results';
@@ -110,7 +87,7 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
 - **Discipline Mode: ${disciplineMode}** — ${modeDescription}
 ${implementerCli ? `- **Implementer CLI: ${implementerCli}** — dispatch tasks to this agent` : '- Implementer: direct (no dispatch CLI configured)'}
 ${reviewsEnabled
-    ? '- **Reviewer Dispatch:** runtime-resolved via \`dispatch-runtime\` compile_prompt (\`dispatch_cli\`)'
+    ? '- **Reviewer Dispatch:** runtime-owned via \`dispatch-runtime\` (\`dispatch_and_ingest\`)'
     : '- Reviewer dispatch: not required in minimal mode'}
 ${taskId ? `- Task ID: ${taskId}` : ''}
 ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
@@ -159,18 +136,7 @@ Do NOT implement tasks yourself. STOP and ask the user to configure the env var.
 
 ${runtimeSteps}
 
-6. **Build and Dispatch to Implementer Agent** (split contract and debug logs):
-   - Use compiled prompt from dispatch-runtime compile_prompt action
-   - Dispatch via bash:
-     \`\`\`bash
-     ${implementerDispatchCommand}
-     \`\`\`
-   - Agent output must end with strict contract markers (\`BEGIN_DISPATCH_RESULT ... END_DISPATCH_RESULT\`)
-   - WAIT for the command to complete — do not proceed until done
-
-${implementerIngestStep}
-
-8. **Verify Completion:**
+6. **Verify Completion:**
    - Check tasks.md — task should now be marked [x]
    - Use \`dispatch-runtime\` nextAction as source of truth for orchestration branch
    - Get the diff (this is all you need to see):
@@ -178,12 +144,12 @@ ${implementerIngestStep}
      git diff {base-sha from step 2}..HEAD
      \`\`\`
 
-9. **${reviewsEnabled ? 'Dispatch Review' : 'Skip Review (minimal mode)'}:**
+7. **${reviewsEnabled ? 'Dispatch Review' : 'Skip Review (minimal mode)'}:**
 ${reviewerDispatchBlock}
    - If issues found: dispatch implementer again to fix, then re-review
    - If approved: this task is done
 
-10. **STOP** — do NOT proceed to the next task in this same session
+8. **STOP** — do NOT proceed to the next task in this same session
 
 **Important Guidelines:**
 - You are the ORCHESTRATOR — NEVER implement tasks yourself
@@ -196,7 +162,6 @@ ${runtimeGuideline}
 **Tools to Use:**
 - spec-status: Check overall progress
 ${runtimeToolLine}
-- Bash: Dispatch to implementer/reviewer agents
 - Edit: Update task markers if agents fail to
 - Read: Read tasks.md, _Prompt fields`}
 

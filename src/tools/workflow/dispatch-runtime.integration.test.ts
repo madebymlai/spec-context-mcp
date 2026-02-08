@@ -101,7 +101,7 @@ describe('dispatch-runtime integration (no mocks)', () => {
       expect(findFact(init, 'ledger.progress.active_task_id')).toBe(taskId);
       expect(init.data?.selected_provider).toBeTypeOf('string');
       expect(init.data?.classification_level).toBeTypeOf('string');
-      expect(init.data?.dispatch_cli).toBeTypeOf('string');
+      expect(findFact(init, 'dispatch_cli')).toBeTypeOf('string');
 
       const compileImplementer = await callDispatch(projectPath, {
         action: 'compile_prompt',
@@ -115,7 +115,8 @@ describe('dispatch-runtime integration (no mocks)', () => {
       expect(compileImplementer.data?.stablePrefixHash).toHaveLength(64);
       expect(compileImplementer.data?.guideMode).toBe('full');
       expect(compileImplementer.data?.prompt).toContain('"mode":"full"');
-      expect(compileImplementer.data?.dispatch_cli).toBeTypeOf('string');
+      expect(compileImplementer.data?.dispatchCommand?.command).toBeTypeOf('string');
+      expect(Array.isArray(compileImplementer.data?.dispatchCommand?.args)).toBe(true);
       expect(compileImplementer.data?.contractOutputPath).toBeTypeOf('string');
       expect(compileImplementer.data?.debugOutputPath).toBeTypeOf('string');
 
@@ -298,31 +299,22 @@ END_DISPATCH_RESULT`,
     }
   });
 
-  it('compiles prompt with unknown custom provider command', async () => {
+  it('fails loud for unknown custom provider command', async () => {
     const projectPath = await createTempProject();
     try {
       process.env.SPEC_CONTEXT_IMPLEMENTER = 'custom-provider --json';
       const runId = `int-provider-${randomUUID()}`;
       const taskId = '3.2';
       await ensureSpecTasks(projectPath, 'feature-provider-gate', taskId);
-      await callDispatch(projectPath, {
+
+      const init = await callDispatch(projectPath, {
         action: 'init_run',
         runId,
         specName: 'feature-provider-gate',
         taskId,
       });
-
-      const compile = await callDispatch(projectPath, {
-        action: 'compile_prompt',
-        runId,
-        role: 'implementer',
-        taskId,
-        taskPrompt: 'Implement provider gate test',
-        maxOutputTokens: 500,
-      });
-
-      expect(compile.success).toBe(true);
-      expect(compile.data?.prompt).toContain(`Task ID: ${taskId}`);
+      expect(init.success).toBe(false);
+      expect(init.message).toContain('SPEC_CONTEXT_IMPLEMENTER must reference a known provider');
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }
