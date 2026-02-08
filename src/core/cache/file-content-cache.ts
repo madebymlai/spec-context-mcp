@@ -1,4 +1,3 @@
-import { readFile, stat } from 'fs/promises';
 import { setBoundedMapEntry } from './bounded-map.js';
 
 export interface FileContentFingerprint {
@@ -31,6 +30,12 @@ export interface IFileContentCache {
   clear(): void;
 }
 
+export interface FileContentCacheStorage {
+  stat(filePath: string): Promise<FileContentFingerprint>;
+  readFile(filePath: string): Promise<string>;
+  isFileNotFoundError(error: unknown): boolean;
+}
+
 export function areFileFingerprintsEqual(
   left: FileContentFingerprint | null,
   right: FileContentFingerprint | null
@@ -48,11 +53,13 @@ export class FileContentCache implements IFileContentCache {
   private readonly entries = new Map<string, FileContentCacheEntry>();
   private readonly namespaceTelemetry = new Map<string, FileContentCacheNamespaceTelemetry>();
   private readonly maxEntries: number;
+  private readonly storage: FileContentCacheStorage;
   private hits = 0;
   private misses = 0;
   private errors = 0;
 
-  constructor(maxEntries = 512) {
+  constructor(storage: FileContentCacheStorage, maxEntries = 512) {
+    this.storage = storage;
     this.maxEntries = Math.max(1, Math.floor(maxEntries));
   }
 
@@ -62,10 +69,10 @@ export class FileContentCache implements IFileContentCache {
 
     let mtimeMs: number;
     try {
-      const fileStats = await stat(filePath);
+      const fileStats = await this.storage.stat(filePath);
       mtimeMs = fileStats.mtimeMs;
     } catch (error) {
-      if (isFileNotFoundError(error)) {
+      if (this.storage.isFileNotFoundError(error)) {
         this.recordMiss(namespace);
         this.entries.delete(filePath);
         return null;
@@ -82,9 +89,9 @@ export class FileContentCache implements IFileContentCache {
 
     let content: string;
     try {
-      content = await readFile(filePath, 'utf-8');
+      content = await this.storage.readFile(filePath);
     } catch (error) {
-      if (isFileNotFoundError(error)) {
+      if (this.storage.isFileNotFoundError(error)) {
         this.recordMiss(namespace);
         this.entries.delete(filePath);
         return null;
@@ -162,11 +169,4 @@ export class FileContentCache implements IFileContentCache {
     this.namespaceTelemetry.set(namespace, created);
     return created;
   }
-}
-
-function isFileNotFoundError(error: unknown): boolean {
-  return typeof error === 'object'
-    && error !== null
-    && 'code' in error
-    && (error as { code?: string }).code === 'ENOENT';
 }

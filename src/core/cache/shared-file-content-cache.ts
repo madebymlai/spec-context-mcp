@@ -1,7 +1,7 @@
 import type { FileContentCacheTelemetry, IFileContentCache } from './file-content-cache.js';
-import { FileContentCache } from './file-content-cache.js';
+import { createNodeFileContentCache } from './file-content-cache-node.js';
 
-const sharedFileContentCache = new FileContentCache();
+const sharedFileContentCache = createNodeFileContentCache();
 
 export function getSharedFileContentCache(): IFileContentCache {
   return sharedFileContentCache;

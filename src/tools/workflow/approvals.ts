@@ -1,7 +1,8 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { join } from 'path';
-import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.js';
+import { PathUtils } from '../../core/workflow/path-utils.js';
+import { validateProjectPath } from '../../core/workflow/path-utils-node.js';
 import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 import { readFile } from 'fs/promises';
 import { validateTasksMarkdown, formatValidationErrors } from '../../core/workflow/task-validator.js';

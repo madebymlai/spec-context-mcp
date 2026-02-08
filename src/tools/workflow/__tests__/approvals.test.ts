@@ -11,8 +11,11 @@ const mocks = vi.hoisted(() => ({
   approvalStorageDeleteApproval: vi.fn(async () => false),
 }));
 
-vi.mock('../../../core/workflow/path-utils.js', () => ({
+vi.mock('../../../core/workflow/path-utils-node.js', () => ({
   validateProjectPath: mocks.validateProjectPath,
+}));
+
+vi.mock('../../../core/workflow/path-utils.js', () => ({
   PathUtils: { translatePath: mocks.translatePath },
 }));
 
