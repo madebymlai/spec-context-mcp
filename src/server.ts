@@ -14,7 +14,7 @@ import { getTools, handleToolCall } from './tools/node-runtime.js';
 import { processToolCall, isToolVisible, getVisibilityTier, ensureTierAtLeast } from './tools/registry.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
 import { initChunkHoundBridge, resetChunkHoundBridge } from './bridge/chunkhound-bridge.js';
-import { resolveDashboardUrlForNode } from './core/workflow/node-dashboard-url.js';
+import { resolveDashboardUrlForNode } from './core/workflow/node-dashboard-url-default.js';
 import { DEFAULT_DASHBOARD_URL } from './core/workflow/constants.js';
 import { toMCPResponse } from './workflow-types.js';
 import { getSharedFileContentCache } from './core/cache/shared-file-content-cache.js';
