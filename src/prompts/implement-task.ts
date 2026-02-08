@@ -39,10 +39,11 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
   const implementerCli = getDispatchCli('implementer');
   const reviewerCli = getDispatchCli('reviewer');
 
-  const isFull = disciplineMode === 'full';
   const isMinimal = disciplineMode === 'minimal';
   const reviewsEnabled = !isMinimal;
   const dispatchRuntimeV2 = isDispatchRuntimeV2Enabled();
+  const reviewerEnvRequired = reviewsEnabled && !dispatchRuntimeV2;
+  const reviewerMissingForLegacy = reviewerEnvRequired && !reviewerCli;
 
   const runtimeSteps = dispatchRuntimeV2 ? `
 4. **Initialize Runtime State (once per task):**
@@ -93,9 +94,8 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
     ? `${implementerCli} "{compiled implementer prompt from dispatch-runtime}" 1>"{contractOutputPath from step 5}" 2>"{debugOutputPath from step 5}"`
     : `${implementerCli} "Implement the task for spec ${specName}, first call get-implementer-guide to load implementation rules then implement the task: [task prompt content from _Prompt field]." > /tmp/spec-impl.log 2>&1`;
 
-  const reviewerDispatchBlock = reviewerCli
-    ? dispatchRuntimeV2
-      ? `   - First call \`dispatch-runtime\` with:
+  const reviewerDispatchBlock = dispatchRuntimeV2
+    ? `   - First call \`dispatch-runtime\` with:
      - \`action: "compile_prompt"\`
      - \`runId: "{runId from step 4}"\`
      - \`role: "reviewer"\`
@@ -106,17 +106,18 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
    - Use returned \`prompt\`, \`dispatch_cli\`, \`contractOutputPath\`, and \`debugOutputPath\` as reviewer dispatch context.
    - Dispatch to reviewer agent via bash (split contract and debug logs):
      \`\`\`bash
-     ${reviewerCli} "{compiled reviewer prompt from dispatch-runtime}" 1>"{contractOutputPath from reviewer compile step}" 2>"{debugOutputPath from reviewer compile step}"
+     {dispatch_cli from reviewer compile_prompt} "{compiled reviewer prompt from dispatch-runtime}" 1>"{contractOutputPath from reviewer compile step}" 2>"{debugOutputPath from reviewer compile step}"
      \`\`\`
 ${reviewIngestStep}`
-      : `   - Dispatch to reviewer agent via bash (redirect output to log):
+    : reviewerCli
+      ? `   - Dispatch to reviewer agent via bash (redirect output to log):
      \`\`\`bash
      ${reviewerCli} "Review task ${taskId || '{taskId}'} for spec ${specName}. Base SHA: {base-sha from step 2}. Run: git diff {base-sha}..HEAD to see changes. Call get-reviewer-guide for review criteria. Check spec compliance, code quality, and principles. IMPORTANT: Your LAST output must be strict JSON contract from get-reviewer-guide." > /tmp/spec-review.log 2>&1
      \`\`\`
 ${reviewIngestStep}`
-    : `   - No reviewer CLI configured — review the implementation yourself
-   - Run \`git diff {base-sha}..HEAD\` to see changes
-   - Call get-reviewer-guide for review criteria`;
+      : `   - ⛔ **BLOCKED: SPEC_CONTEXT_REVIEWER is not set while runtime v2 is disabled.**
+   - Set \`SPEC_CONTEXT_REVIEWER\` to a reviewer CLI (supported: \`claude\`, \`codex\`, \`gemini\`, \`opencode\`)
+   - STOP and ask the user to configure reviewer dispatch before continuing`;
 
   const runtimeGuideline = dispatchRuntimeV2
     ? '- Never branch orchestration logic from raw logs — only from \`dispatch-runtime\` structured results'
@@ -138,7 +139,11 @@ ${reviewIngestStep}`
 - Feature: ${specName}
 - **Discipline Mode: ${disciplineMode}** — ${modeDescription}
 ${implementerCli ? `- **Implementer CLI: ${implementerCli}** — dispatch tasks to this agent` : '- Implementer: direct (no dispatch CLI configured)'}
-${reviewerCli ? `- **Reviewer CLI: ${reviewerCli}** — dispatch reviews to this agent` : '- Reviewer: direct (no dispatch CLI configured)'}
+${dispatchRuntimeV2
+  ? `- **Reviewer Dispatch:** runtime-resolved via \`dispatch-runtime\` compile_prompt (\`dispatch_cli\`)`
+  : reviewerCli
+    ? `- **Reviewer CLI: ${reviewerCli}** — dispatch reviews to this agent`
+    : '- Reviewer CLI: missing (required when reviews are enabled and runtime v2 is disabled)'}
 ${taskId ? `- Task ID: ${taskId}` : ''}
 ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 ${!implementerCli ? `
@@ -149,6 +154,15 @@ Implementation requires a dispatch CLI. Set the \`SPEC_CONTEXT_IMPLEMENTER\` env
 Example: \`SPEC_CONTEXT_IMPLEMENTER=claude\`
 
 Do NOT implement tasks yourself. STOP and ask the user to configure the env var.
+` : reviewerMissingForLegacy ? `
+⛔ **BLOCKED: SPEC_CONTEXT_REVIEWER is not set.**
+
+Reviews are required in ${disciplineMode} mode when dispatch runtime v2 is disabled.
+Set the \`SPEC_CONTEXT_REVIEWER\` environment variable to your reviewer CLI command (supported shortcuts: \`claude\`, \`codex\`, \`gemini\`, \`opencode\`).
+
+Example: \`SPEC_CONTEXT_REVIEWER=codex\`
+
+Do NOT proceed with implementation until reviewer dispatch is configured.
 ` : `
 ╔══════════════════════════════════════════════════════════════╗
 ║  YOU ARE THE ORCHESTRATOR — DO NOT IMPLEMENT YOURSELF        ║
