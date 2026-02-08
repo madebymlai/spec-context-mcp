@@ -14,6 +14,10 @@ async function ensureOutputDirectories(paths: string[]): Promise<void> {
   await Promise.all(paths.map(path => mkdir(dirname(path), { recursive: true })));
 }
 
+export function useShellForDispatch(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32';
+}
+
 export class NodeDispatchExecutor implements IDispatchExecutor {
   async execute(input: DispatchExecutorInput): Promise<DispatchExecutorResult> {
     await ensureOutputDirectories([input.contractOutputPath, input.debugOutputPath]);
@@ -24,7 +28,7 @@ export class NodeDispatchExecutor implements IDispatchExecutor {
     const startedAt = Date.now();
     const child = spawn(input.command.command, input.command.args, {
       cwd: input.projectPath,
-      shell: false,
+      shell: useShellForDispatch(),
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
     });

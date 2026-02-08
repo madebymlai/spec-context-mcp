@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { NodeDispatchExecutor } from './dispatch-executor.js';
+import { NodeDispatchExecutor, useShellForDispatch } from './dispatch-executor.js';
 
 const tempDirs: string[] = [];
 
@@ -17,6 +17,12 @@ afterEach(async () => {
 });
 
 describe('NodeDispatchExecutor', () => {
+  it('uses shell on win32 only', () => {
+    expect(useShellForDispatch('win32')).toBe(true);
+    expect(useShellForDispatch('linux')).toBe(false);
+    expect(useShellForDispatch('darwin')).toBe(false);
+  });
+
   it('executes command with prompt on stdin and writes output logs', async () => {
     const dir = await createTempDir();
     const contractOutputPath = join(dir, 'contract.log');
@@ -33,7 +39,7 @@ describe('NodeDispatchExecutor', () => {
         provider: 'claude',
         role: 'implementer',
         command: '/bin/sh',
-        args: ['-c', "cat >/dev/null; printf 'BEGIN_DISPATCH_RESULT\\n{}\\nEND_DISPATCH_RESULT\\n'"] ,
+        args: ['-c', "cat >/dev/null; printf 'BEGIN_DISPATCH_RESULT\\n{}\\nEND_DISPATCH_RESULT\\n'"],
         display: '/bin/sh -c ...',
       },
       contractOutputPath,
