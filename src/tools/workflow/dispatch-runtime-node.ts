@@ -23,6 +23,7 @@ import {
   createDispatchRuntimeHandler,
   DispatchRuntimeManager,
   type DispatchRunIdFactory,
+  type IDispatchExecutor,
   type DispatchOutputResolver,
   type DispatchRuntimeManagerDependencies,
   type DispatchRuntimeHandlerDependencies,
@@ -33,6 +34,7 @@ import {
   resolveDispatchStalledThresholdFromEnv,
   DISPATCH_RESULT_MARKERS,
 } from './dispatch-runtime.js';
+import { NodeDispatchExecutor } from './dispatch-executor.js';
 import type { ToolContext, ToolResponse } from '../../workflow-types.js';
 
 const DEFAULT_TOKEN_CHARS_PER_TOKEN = 4;
@@ -239,6 +241,7 @@ export function createNodeDispatchRuntimeManagerDependencies(): DispatchRuntimeM
 
 export function createNodeDispatchRuntimeHandlerDependencies(): DispatchRuntimeHandlerDependencies {
   const factStore = new InMemorySessionFactStore();
+  const dispatchExecutor: IDispatchExecutor = new NodeDispatchExecutor();
   return {
     runtimeManager: new DispatchRuntimeManager(
       new HeuristicComplexityClassifier(),
@@ -250,6 +253,7 @@ export function createNodeDispatchRuntimeHandlerDependencies(): DispatchRuntimeH
     ),
     runIdFactory: new UuidDispatchRunIdFactory(),
     outputResolver: new NodeDispatchOutputResolver(),
+    dispatchExecutor,
     fileContentCacheTelemetry: getSharedFileContentCacheTelemetry,
   };
 }

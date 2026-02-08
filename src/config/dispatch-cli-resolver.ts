@@ -1,7 +1,8 @@
 import {
   type CanonicalProvider,
   type DispatchRole,
-  getDispatchCli,
+  type DispatchCommandTemplate,
+  getProviderCommandTemplate,
   resolveDispatchProvider,
 } from './discipline.js';
 import type { ComplexityLevel } from '../core/routing/types.js';
@@ -21,6 +22,14 @@ const CODEX_REASONING_EFFORT_VALUES = new Set<CodexReasoningEffort>([
   'xhigh',
 ]);
 
+export interface DispatchExecutionCommand {
+  provider: CanonicalProvider;
+  role: DispatchRole;
+  command: string;
+  args: string[];
+  display: string;
+}
+
 function modelEnvVarFor(role: DispatchRole, complexity: ComplexityLevel): string {
   return `${ROLE_ENV_VAR[role]}_MODEL_${complexity.toUpperCase()}`;
 }
@@ -37,59 +46,73 @@ function readOptionalEnvVar(name: string): string | null {
   return value;
 }
 
-function shellToken(value: string): string {
+function renderToken(value: string): string {
   if (/^[A-Za-z0-9._/:=-]+$/.test(value)) {
     return value;
   }
-  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+  return JSON.stringify(value);
 }
 
-function appendModelFlags(args: {
-  baseCli: string;
+function renderDisplay(command: string, args: readonly string[]): string {
+  return [command, ...args.map(renderToken)].join(' ');
+}
+
+function appendModelArgs(args: {
+  baseTemplate: DispatchCommandTemplate;
   provider: CanonicalProvider;
-  model: string | null;
-  codexReasoningEffort: CodexReasoningEffort | null;
-}): string {
-  let command = args.baseCli;
-  if (args.model) {
-    command += ` --model ${shellToken(args.model)}`;
-  }
-  if (args.provider === 'codex' && args.codexReasoningEffort) {
-    command += ` -c model_reasoning_effort=${shellToken(args.codexReasoningEffort)}`;
-  }
-  return command;
-}
-
-export function getDispatchCliForComplexity(role: DispatchRole, complexity: ComplexityLevel): string | null {
-  const baseCli = getDispatchCli(role);
-  if (!baseCli) {
-    return null;
-  }
-
-  const configuredValue = process.env[ROLE_ENV_VAR[role]];
-  if (!configuredValue || !configuredValue.trim()) {
-    return baseCli;
-  }
-
-  const provider = resolveDispatchProvider(configuredValue);
-  if (!provider) {
-    return baseCli;
-  }
-
-  const model = readOptionalEnvVar(modelEnvVarFor(role, complexity));
-  const reasoningRaw = readOptionalEnvVar(reasoningGlobalEnvVarFor(role))?.toLowerCase() ?? null;
+  role: DispatchRole;
+  complexity: ComplexityLevel;
+}): DispatchExecutionCommand {
+  const commandArgs = [...args.baseTemplate.args];
+  const model = readOptionalEnvVar(modelEnvVarFor(args.role, args.complexity));
+  const reasoningRaw = readOptionalEnvVar(reasoningGlobalEnvVarFor(args.role))?.toLowerCase() ?? null;
   const codexReasoningEffort = reasoningRaw && CODEX_REASONING_EFFORT_VALUES.has(reasoningRaw as CodexReasoningEffort)
     ? (reasoningRaw as CodexReasoningEffort)
     : null;
 
-  if (!model && !codexReasoningEffort) {
-    return baseCli;
+  if (model) {
+    commandArgs.push('--model', model);
+  }
+  if (args.provider === 'codex' && codexReasoningEffort) {
+    commandArgs.push('-c', `model_reasoning_effort=${codexReasoningEffort}`);
   }
 
-  return appendModelFlags({
-    baseCli,
+  return {
+    provider: args.provider,
+    role: args.role,
+    command: args.baseTemplate.command,
+    args: commandArgs,
+    display: renderDisplay(args.baseTemplate.command, commandArgs),
+  };
+}
+
+export function resolveDispatchCommandForProvider(args: {
+  provider: CanonicalProvider;
+  role: DispatchRole;
+  complexity: ComplexityLevel;
+}): DispatchExecutionCommand {
+  return appendModelArgs({
+    provider: args.provider,
+    role: args.role,
+    complexity: args.complexity,
+    baseTemplate: getProviderCommandTemplate(args.provider, args.role),
+  });
+}
+
+export function getDispatchCommandForComplexity(role: DispatchRole, complexity: ComplexityLevel): DispatchExecutionCommand | null {
+  const configuredValue = process.env[ROLE_ENV_VAR[role]];
+  if (!configuredValue || !configuredValue.trim()) {
+    return null;
+  }
+
+  const provider = resolveDispatchProvider(configuredValue);
+  if (!provider) {
+    throw new Error(`${ROLE_ENV_VAR[role]} must reference a known provider; received "${configuredValue}"`);
+  }
+
+  return resolveDispatchCommandForProvider({
     provider,
-    model,
-    codexReasoningEffort,
+    role,
+    complexity,
   });
 }

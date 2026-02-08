@@ -55,14 +55,13 @@ describe('RoutingTable', () => {
     );
   });
 
-  it('returns cli command for configured provider/role without additional resolution', () => {
+  it('returns provider/role tuple for configured routing target', () => {
     const table = new RoutingTable({
       simple: 'codex',
       complex: 'claude',
     });
     expect(table.resolve('simple', 'reviewer')).toEqual({
       provider: 'codex',
-      cli: 'codex exec --sandbox read-only',
       role: 'reviewer',
     });
   });

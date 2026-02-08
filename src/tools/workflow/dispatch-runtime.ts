@@ -9,7 +9,11 @@ import type {
 } from '../../core/llm/index.js';
 import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import type { DispatchRole } from '../../config/discipline.js';
-import { getDispatchCliForComplexity } from '../../config/dispatch-cli-resolver.js';
+import {
+  getDispatchCommandForComplexity,
+  resolveDispatchCommandForProvider,
+  type DispatchExecutionCommand,
+} from '../../config/dispatch-cli-resolver.js';
 import {
   type LedgerMode,
   DispatchLedgerError,
@@ -43,7 +47,14 @@ import {
   formatSessionFacts,
 } from '../../core/session/index.js';
 
-const DISPATCH_ACTIONS = ['init_run', 'ingest_output', 'get_snapshot', 'compile_prompt', 'get_telemetry'] as const;
+const DISPATCH_ACTIONS = [
+  'init_run',
+  'ingest_output',
+  'dispatch_and_ingest',
+  'get_snapshot',
+  'compile_prompt',
+  'get_telemetry',
+] as const;
 type DispatchAction = typeof DISPATCH_ACTIONS[number];
 const DISPATCH_ROLES = ['implementer', 'reviewer'] as const;
 
@@ -98,7 +109,9 @@ type DispatchRuntimeErrorCode =
   | 'run_not_initialized'
   | 'run_task_mismatch'
   | 'dispatch_prompt_overflow_terminal'
-  | 'output_token_budget_exceeded';
+  | 'output_token_budget_exceeded'
+  | 'dispatch_execution_failed'
+  | 'dispatch_output_missing';
 
 class DispatchRuntimeError extends Error {
   constructor(
@@ -677,7 +690,12 @@ export class DispatchRuntimeManager {
       specName,
     });
     const routingEntry = this.routingTable.resolve(classification.level, 'implementer');
-    const dispatchCli = getDispatchCliForComplexity('implementer', classification.level) ?? routingEntry.cli;
+    const dispatchCommand = getDispatchCommandForComplexity('implementer', classification.level)
+      ?? resolveDispatchCommandForProvider({
+        provider: routingEntry.provider,
+        role: 'implementer',
+        complexity: classification.level,
+      });
 
     const initEvent = await this.publishEvent({
       partition_key: runId,
@@ -693,7 +711,7 @@ export class DispatchRuntimeManager {
         ledger_progress_active_task_id: progressLedger.activeTaskId,
         classification_level: classification.level,
         selected_provider: routingEntry.provider,
-        dispatch_cli: dispatchCli,
+        dispatch_cli: dispatchCommand.display,
       },
     });
 
@@ -706,7 +724,7 @@ export class DispatchRuntimeManager {
         { k: 'task_id', v: taskId, confidence: 1 },
         { k: DISPATCH_CLASSIFICATION_FACT_KEYS.level, v: classification.level, confidence: classification.confidence },
         { k: DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider, v: routingEntry.provider, confidence: 1 },
-        { k: DISPATCH_CLASSIFICATION_FACT_KEYS.dispatchCli, v: dispatchCli, confidence: 1 },
+        { k: DISPATCH_CLASSIFICATION_FACT_KEYS.dispatchCli, v: dispatchCommand.display, confidence: 1 },
         {
           k: DISPATCH_CLASSIFICATION_FACT_KEYS.features,
           v: JSON.stringify(classification.features),
@@ -949,7 +967,7 @@ export class DispatchRuntimeManager {
     compactionApplied: boolean;
     compactionStage: DispatchCompactionStage;
     compactionTrace: DispatchCompactionTrace[];
-    dispatchCli: string;
+    dispatchCommand: DispatchExecutionCommand;
     contractOutputPath: string;
     debugOutputPath: string;
   }> {
@@ -960,8 +978,13 @@ export class DispatchRuntimeManager {
     const dispatchComplexity = normalizeDispatchComplexity(
       snapshotFactMap.get(DISPATCH_CLASSIFICATION_FACT_KEYS.level)
     );
-    const dispatchCli = getDispatchCliForComplexity(args.role, dispatchComplexity)
-      ?? this.routingTable.resolve(dispatchComplexity, args.role).cli;
+    const routingEntry = this.routingTable.resolve(dispatchComplexity, args.role);
+    const dispatchCommand = getDispatchCommandForComplexity(args.role, dispatchComplexity)
+      ?? resolveDispatchCommandForProvider({
+        provider: routingEntry.provider,
+        role: args.role,
+        complexity: dispatchComplexity,
+      });
     let progressLedger = progressLedgerFromFacts(snapshot.facts ?? []);
     const missingProgressLedger = !progressLedger;
     const staleProgressLedger = progressLedger ? await isProgressLedgerStale(progressLedger) : false;
@@ -1218,7 +1241,7 @@ export class DispatchRuntimeManager {
       compactionApplied: compactionStage !== 'none',
       compactionStage,
       compactionTrace,
-      dispatchCli,
+      dispatchCommand,
       contractOutputPath: outputPaths.contractOutputPath,
       debugOutputPath: outputPaths.debugOutputPath,
     };
@@ -1439,12 +1462,36 @@ export interface DispatchOutputResolver {
   }): Promise<string>;
 }
 
+export interface DispatchExecutorInput {
+  runId: string;
+  role: DispatchRole;
+  taskId: string;
+  projectPath: string;
+  prompt: string;
+  command: DispatchExecutionCommand;
+  contractOutputPath: string;
+  debugOutputPath: string;
+}
+
+export interface DispatchExecutorResult {
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  durationMs: number;
+  contractOutputPath: string;
+  debugOutputPath: string;
+}
+
+export interface IDispatchExecutor {
+  execute(input: DispatchExecutorInput): Promise<DispatchExecutorResult>;
+}
+
 export type DispatchFileContentCacheTelemetry = unknown;
 
 export interface DispatchRuntimeHandlerDependencies {
   runtimeManager: DispatchRuntimeManager;
   runIdFactory: DispatchRunIdFactory;
   outputResolver: DispatchOutputResolver;
+  dispatchExecutor: IDispatchExecutor;
   fileContentCacheTelemetry: () => DispatchFileContentCacheTelemetry;
 }
 
@@ -1511,12 +1558,26 @@ type IngestOutputCommand = {
   maxOutputTokens?: number;
 };
 
+type DispatchAndIngestCommand = {
+  action: 'dispatch_and_ingest';
+  runId: string;
+  role: DispatchRole;
+  taskId: string;
+  projectPath: string;
+  taskPrompt?: string;
+  maxOutputTokens: number;
+  compactionContext?: string[];
+  compactionPromptOverride?: string;
+  compactionAuto?: boolean;
+};
+
 type DispatchToolCommand =
   | InitRunCommand
   | GetSnapshotCommand
   | GetTelemetryCommand
   | CompilePromptCommand
-  | IngestOutputCommand;
+  | IngestOutputCommand
+  | DispatchAndIngestCommand;
 
 type DispatchCommandParseResult =
   | { ok: true; command: DispatchToolCommand }
@@ -1658,6 +1719,54 @@ async function parseCompilePromptCommand(
   };
 }
 
+async function parseDispatchAndIngestCommand(
+  args: Record<string, unknown>,
+  context: ToolContext,
+): Promise<DispatchCommandParseResult> {
+  const runId = parseRunId(args);
+  if (!runId) {
+    return { ok: false, response: failure('dispatch_and_ingest requires runId') };
+  }
+
+  const roleTask = parseRoleTask('dispatch_and_ingest', args);
+  if (!roleTask.ok) {
+    return roleTask;
+  }
+
+  const maxOutputTokens = Number(args.maxOutputTokens ?? 1200);
+  if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
+    return { ok: false, response: failure('dispatch_and_ingest requires positive maxOutputTokens') };
+  }
+
+  const compactionAuto = parseCompactionAuto(args.compactionAuto);
+  if (!compactionAuto.ok) {
+    return compactionAuto;
+  }
+
+  return {
+    ok: true,
+    command: {
+      action: 'dispatch_and_ingest',
+      runId,
+      role: roleTask.role,
+      taskId: roleTask.taskId,
+      projectPath: context.projectPath,
+      taskPrompt: typeof args.taskPrompt === 'string' ? args.taskPrompt.trim() : undefined,
+      maxOutputTokens,
+      compactionContext: Array.isArray(args.compactionContext)
+        ? args.compactionContext
+          .filter(item => typeof item === 'string')
+          .map(item => item.trim())
+          .filter(Boolean)
+        : undefined,
+      compactionPromptOverride: typeof args.compactionPromptOverride === 'string'
+        ? args.compactionPromptOverride.trim()
+        : undefined,
+      compactionAuto: compactionAuto.value,
+    },
+  };
+}
+
 async function parseIngestOutputCommand(
   args: Record<string, unknown>,
   context: ToolContext,
@@ -1716,6 +1825,7 @@ const DISPATCH_COMMAND_PARSERS: Record<DispatchAction, DispatchCommandParser> = 
     command: { action: 'get_telemetry' },
   }),
   compile_prompt: async (args, context) => parseCompilePromptCommand(args, context),
+  dispatch_and_ingest: async (args, context) => parseDispatchAndIngestCommand(args, context),
   ingest_output: parseIngestOutputCommand,
 };
 
@@ -1745,7 +1855,6 @@ const DISPATCH_COMMAND_EXECUTORS: DispatchCommandExecutorMap = {
           snapshot,
           selected_provider: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider),
           classification_level: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.level),
-          dispatch_cli: getFactValue(snapshot, DISPATCH_CLASSIFICATION_FACT_KEYS.dispatchCli),
         },
       };
     } catch (error) {
@@ -1813,7 +1922,6 @@ const DISPATCH_COMMAND_EXECUTORS: DispatchCommandExecutorMap = {
           role: command.role,
           taskId: command.taskId,
           ...compiled,
-          dispatch_cli: compiled.dispatchCli,
         },
       };
     } catch (error) {
@@ -1897,6 +2005,147 @@ const DISPATCH_COMMAND_EXECUTORS: DispatchCommandExecutorMap = {
       };
     }
   },
+
+  async dispatch_and_ingest(command, dependencies) {
+    let compiled: Awaited<ReturnType<DispatchRuntimeManager['compilePrompt']>> | null = null;
+    try {
+      compiled = await dependencies.runtimeManager.compilePrompt({
+        runId: command.runId,
+        role: command.role,
+        taskId: command.taskId,
+        projectPath: command.projectPath,
+        taskPrompt: command.taskPrompt,
+        maxOutputTokens: command.maxOutputTokens,
+        compactionContext: command.compactionContext,
+        compactionPromptOverride: command.compactionPromptOverride,
+        compactionAuto: command.compactionAuto,
+      });
+
+      const execution = await dependencies.dispatchExecutor.execute({
+        runId: command.runId,
+        role: command.role,
+        taskId: command.taskId,
+        projectPath: command.projectPath,
+        prompt: compiled.prompt,
+        command: compiled.dispatchCommand,
+        contractOutputPath: compiled.contractOutputPath,
+        debugOutputPath: compiled.debugOutputPath,
+      });
+
+      if (execution.exitCode !== 0 || execution.signal) {
+        throw new DispatchRuntimeError(
+          'dispatch_execution_failed',
+          `dispatch_execution_failed: exitCode=${String(execution.exitCode)}, signal=${String(execution.signal)}, debugOutputPath=${execution.debugOutputPath}`
+        );
+      }
+
+      const outputContent = await dependencies.outputResolver.resolve({
+        outputContent: '',
+        outputFilePath: execution.contractOutputPath,
+        projectPath: command.projectPath,
+      });
+      if (!outputContent.trim()) {
+        throw new DispatchRuntimeError(
+          'dispatch_output_missing',
+          `dispatch_output_missing: contractOutputPath=${execution.contractOutputPath}, debugOutputPath=${execution.debugOutputPath}`
+        );
+      }
+
+      const result = await dependencies.runtimeManager.ingestOutput({
+        runId: command.runId,
+        role: command.role,
+        taskId: command.taskId,
+        outputContent,
+        maxOutputTokens: command.maxOutputTokens,
+      });
+
+      return {
+        success: true,
+        message: 'Dispatch executed and output ingested',
+        data: {
+          runId: command.runId,
+          role: command.role,
+          taskId: command.taskId,
+          nextAction: result.nextAction,
+          result: result.result,
+          snapshot: result.snapshot,
+          outputTokens: result.outputTokens,
+          prompt: {
+            stablePrefixHash: compiled.stablePrefixHash,
+            fullPromptHash: compiled.fullPromptHash,
+            promptTokensBefore: compiled.promptTokensBefore,
+            promptTokensAfter: compiled.promptTokensAfter,
+            promptTokenBudget: compiled.promptTokenBudget,
+            compactionApplied: compiled.compactionApplied,
+            compactionStage: compiled.compactionStage,
+            compactionTrace: compiled.compactionTrace,
+            guideMode: compiled.guideMode,
+            guideCacheKey: compiled.guideCacheKey,
+          },
+          execution,
+          telemetry: dependencies.runtimeManager.getTelemetrySnapshot(),
+        },
+        nextSteps: [
+          `Follow next action: ${result.nextAction}`,
+          'Use get_snapshot for latest runtime status before dispatching next agent call',
+        ],
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof DispatchContractError) {
+        const snapshot = await dependencies.runtimeManager.recordTerminalContractFailure({
+          runId: command.runId,
+          role: command.role,
+          taskId: command.taskId,
+          errorCode: error.code,
+          errorMessage: message,
+        });
+        return {
+          success: false,
+          message,
+          data: {
+            runId: command.runId,
+            role: command.role,
+            taskId: command.taskId,
+            errorCode: error.code,
+            nextAction: 'halt_schema_invalid_terminal',
+            snapshot,
+            prompt: compiled ? {
+              stablePrefixHash: compiled.stablePrefixHash,
+              fullPromptHash: compiled.fullPromptHash,
+              promptTokensBefore: compiled.promptTokensBefore,
+              promptTokensAfter: compiled.promptTokensAfter,
+              promptTokenBudget: compiled.promptTokenBudget,
+              compactionApplied: compiled.compactionApplied,
+              compactionStage: compiled.compactionStage,
+            } : undefined,
+            telemetry: dependencies.runtimeManager.getTelemetrySnapshot(),
+          },
+        };
+      }
+
+      const errorCode = toDispatchToolErrorCode(error);
+      return {
+        success: false,
+        message,
+        data: {
+          runId: command.runId,
+          role: command.role,
+          taskId: command.taskId,
+          errorCode,
+          prompt: compiled ? {
+            stablePrefixHash: compiled.stablePrefixHash,
+            fullPromptHash: compiled.fullPromptHash,
+            promptTokensBefore: compiled.promptTokensBefore,
+            promptTokensAfter: compiled.promptTokensAfter,
+            promptTokenBudget: compiled.promptTokenBudget,
+            compactionApplied: compiled.compactionApplied,
+            compactionStage: compiled.compactionStage,
+          } : undefined,
+        },
+      };
+    }
+  },
 };
 
 async function parseDispatchCommand(
@@ -1908,7 +2157,7 @@ async function parseDispatchCommand(
   if (!isDispatchAction(actionRaw)) {
     return {
       ok: false,
-      response: failure('action must be one of: init_run, ingest_output, get_snapshot, compile_prompt, get_telemetry'),
+      response: failure('action must be one of: init_run, ingest_output, dispatch_and_ingest, get_snapshot, compile_prompt, get_telemetry'),
     };
   }
   const parser = DISPATCH_COMMAND_PARSERS[actionRaw];
@@ -1938,7 +2187,7 @@ updates runtime events/snapshots, enforces output token budgets, and returns det
     properties: {
       action: {
         type: 'string',
-        enum: ['init_run', 'ingest_output', 'get_snapshot', 'compile_prompt', 'get_telemetry'],
+        enum: ['init_run', 'ingest_output', 'dispatch_and_ingest', 'get_snapshot', 'compile_prompt', 'get_telemetry'],
         description: 'Runtime action',
       },
       runId: {
@@ -1956,7 +2205,7 @@ updates runtime events/snapshots, enforces output token budgets, and returns det
       role: {
         type: 'string',
         enum: ['implementer', 'reviewer'],
-        description: 'Agent role for ingest_output',
+        description: 'Agent role for ingest_output/compile_prompt/dispatch_and_ingest',
       },
       outputFilePath: {
         type: 'string',
@@ -1972,7 +2221,7 @@ updates runtime events/snapshots, enforces output token budgets, and returns det
       },
       maxOutputTokens: {
         type: 'number',
-        description: 'Maximum output token budget for compile_prompt/ingest_output',
+        description: 'Maximum output token budget for compile_prompt/ingest_output/dispatch_and_ingest',
       },
       compactionContext: {
         type: 'array',

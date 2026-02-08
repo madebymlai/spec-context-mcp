@@ -6,6 +6,11 @@
 export type DisciplineMode = 'full' | 'standard' | 'minimal';
 export type DispatchRole = 'implementer' | 'reviewer';
 
+export interface DispatchCommandTemplate {
+  command: string;
+  args: readonly string[];
+}
+
 const VALID_MODES: DisciplineMode[] = ['full', 'standard', 'minimal'];
 const DEFAULT_MODE: DisciplineMode = 'full';
 
@@ -34,23 +39,46 @@ const CLAUDE_ALLOWED_TOOLS = {
  */
 export const PROVIDER_CATALOG = {
   claude: {
-    // `--allowedTools <tools...>` is variadic; terminate options with `--` so prompt remains positional.
-    implementer: `claude -p --dangerously-skip-permissions --allowedTools "${CLAUDE_ALLOWED_TOOLS.implementer}" --`,
-    reviewer: `claude -p --allowedTools "${CLAUDE_ALLOWED_TOOLS.reviewer}" --`,
+    implementer: {
+      command: 'claude',
+      args: ['-p', '--dangerously-skip-permissions', '--allowedTools', CLAUDE_ALLOWED_TOOLS.implementer, '--'],
+    },
+    reviewer: {
+      command: 'claude',
+      args: ['-p', '--allowedTools', CLAUDE_ALLOWED_TOOLS.reviewer, '--'],
+    },
   },
   codex: {
-    implementer: 'codex exec --full-auto',
-    reviewer: 'codex exec --sandbox read-only',
+    implementer: {
+      command: 'codex',
+      args: ['exec', '--full-auto'],
+    },
+    reviewer: {
+      command: 'codex',
+      args: ['exec', '--sandbox', 'read-only'],
+    },
   },
   gemini: {
-    implementer: 'gemini --yolo',
-    reviewer: 'gemini --plan',
+    implementer: {
+      command: 'gemini',
+      args: ['--yolo'],
+    },
+    reviewer: {
+      command: 'gemini',
+      args: ['--plan'],
+    },
   },
   opencode: {
-    implementer: 'opencode run',
-    reviewer: 'opencode run',
+    implementer: {
+      command: 'opencode',
+      args: ['run'],
+    },
+    reviewer: {
+      command: 'opencode',
+      args: ['run'],
+    },
   },
-} as const satisfies Record<string, Record<DispatchRole, string>>;
+} as const satisfies Record<string, Record<DispatchRole, DispatchCommandTemplate>>;
 
 const PROVIDER_ALIASES = {
   'claude-code': 'claude',
@@ -79,6 +107,17 @@ function resolveCanonicalProvider(value: string): CanonicalProvider | null {
     return null;
   }
   return alias as CanonicalProvider;
+}
+
+function renderDispatchToken(value: string): string {
+  if (/^[A-Za-z0-9._/:=-]+$/.test(value)) {
+    return value;
+  }
+  return JSON.stringify(value);
+}
+
+function renderDispatchTemplate(template: DispatchCommandTemplate): string {
+  return [template.command, ...template.args.map(renderDispatchToken)].join(' ');
 }
 
 export function resolveDispatchProvider(value: string): CanonicalProvider | null {
@@ -114,19 +153,22 @@ export function getDisciplineMode(): DisciplineMode {
 
 /**
  * Resolve an env var value to a full CLI command for the given role.
- * Known agent names (claude, codex, gemini, opencode) get mapped to proper flags.
- * Anything else is returned as-is (custom command).
+ * Only known providers are accepted.
  */
 export function resolveAgentCli(value: string, role: DispatchRole): string {
   const canonicalProvider = resolveCanonicalProvider(value);
   if (!canonicalProvider) {
-    return value.trim();
+    throw new Error(`Unknown provider "${value.trim()}" for role ${role}. Use one of: ${KNOWN_AGENTS.join(', ')}`);
   }
-  return PROVIDER_CATALOG[canonicalProvider][role];
+  return renderDispatchTemplate(PROVIDER_CATALOG[canonicalProvider][role]);
+}
+
+export function getProviderCommandTemplate(provider: CanonicalProvider, role: DispatchRole): DispatchCommandTemplate {
+  return PROVIDER_CATALOG[provider][role];
 }
 
 /**
- * Get the CLI command for a dispatch role.
+ * Get the CLI display command for a dispatch role.
  * Returns null if not configured.
  */
 export function getDispatchCli(role: DispatchRole): string | null {
