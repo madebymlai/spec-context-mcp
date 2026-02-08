@@ -45,39 +45,60 @@ async function tryResolveDashboardProjectId(
   }
 }
 
+type ApprovalProgressState = 'awaiting_review' | 'approved' | 'rejected' | 'needs_revision';
+
 type ApprovalStatusProjection = {
+  progressState: ApprovalProgressState;
   isCompleted: boolean;
   canProceed: boolean;
   mustWait: boolean;
   blockNext: boolean;
 };
 
-const APPROVAL_STATUS_PROJECTIONS: Record<ApprovalStatus, ApprovalStatusProjection> = {
-  pending: {
-    isCompleted: false,
-    canProceed: false,
-    mustWait: true,
-    blockNext: true
-  },
-  approved: {
-    isCompleted: true,
-    canProceed: true,
-    mustWait: false,
-    blockNext: false
-  },
-  rejected: {
-    isCompleted: true,
-    canProceed: false,
-    mustWait: true,
-    blockNext: true
-  },
-  'needs-revision': {
-    isCompleted: false,
-    canProceed: false,
-    mustWait: true,
-    blockNext: true
-  }
+const APPROVAL_PROGRESS_STATE_BY_STATUS: Record<ApprovalStatus, ApprovalProgressState> = {
+  pending: 'awaiting_review',
+  approved: 'approved',
+  rejected: 'rejected',
+  'needs-revision': 'needs_revision',
 };
+
+function projectApprovalStatus(status: ApprovalStatus): ApprovalStatusProjection {
+  const progressState = APPROVAL_PROGRESS_STATE_BY_STATUS[status];
+  switch (progressState) {
+    case 'approved':
+      return {
+        progressState,
+        isCompleted: true,
+        canProceed: true,
+        mustWait: false,
+        blockNext: false
+      };
+    case 'awaiting_review':
+      return {
+        progressState,
+        isCompleted: false,
+        canProceed: false,
+        mustWait: true,
+        blockNext: true
+      };
+    case 'rejected':
+      return {
+        progressState,
+        isCompleted: true,
+        canProceed: false,
+        mustWait: true,
+        blockNext: true
+      };
+    case 'needs_revision':
+      return {
+        progressState,
+        isCompleted: false,
+        canProceed: false,
+        mustWait: true,
+        blockNext: true
+      };
+  }
+}
 
 const APPROVAL_NEXT_STEP_BUILDERS: Record<ApprovalStatus, (approval: ApprovalRecord, approvalUrl?: string) => string[]> = {
   pending: (_approval, approvalUrl) => {
@@ -489,7 +510,7 @@ async function handleGetApprovalStatus(
 
     await approvalStorage.stop();
 
-    const statusProjection = APPROVAL_STATUS_PROJECTIONS[approval.status];
+    const statusProjection = projectApprovalStatus(approval.status);
     const approvalUrl = context.dashboardUrl ? buildApprovalDeeplink(context.dashboardUrl, args.approvalId) : undefined;
     const nextSteps = APPROVAL_NEXT_STEP_BUILDERS[approval.status](approval, approvalUrl);
 
@@ -508,6 +529,7 @@ async function handleGetApprovalStatus(
         response: approval.response,
         annotations: approval.annotations,
         comments: approval.comments,
+        progressState: statusProjection.progressState,
         isCompleted: statusProjection.isCompleted,
         canProceed: statusProjection.canProceed,
         mustWait: statusProjection.mustWait,

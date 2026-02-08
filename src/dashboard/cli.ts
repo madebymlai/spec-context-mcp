@@ -108,4 +108,7 @@ async function main() {
   }
 }
 
-main().catch(() => process.exit(1));
+main().catch((error) => {
+  console.error('Fatal dashboard error:', error);
+  process.exit(1);
+});

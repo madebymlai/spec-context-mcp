@@ -10,7 +10,7 @@ import {
 
 import type { SpecContextConfig } from './config.js';
 import type { ToolResponse, MCPToolResponse } from './workflow-types.js';
-import { getTools, handleToolCall } from './tools/index.js';
+import { getTools, handleToolCall } from './tools/node-runtime.js';
 import { processToolCall, isToolVisible, getVisibilityTier, ensureTierAtLeast } from './tools/registry.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
 import { initChunkHoundBridge, resetChunkHoundBridge } from './bridge/chunkhound-bridge.js';

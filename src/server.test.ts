@@ -27,7 +27,7 @@ vi.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({
   StdioServerTransport: class {},
 }));
 
-vi.mock('./tools/index.js', () => ({
+vi.mock('./tools/node-runtime.js', () => ({
   getTools: () => getToolsMock(),
   handleToolCall: (...args: any[]) => handleToolCallMock(...args),
 }));
