@@ -55,6 +55,12 @@ export interface TaskLedger {
     threshold: number;
     flagged: boolean;
   };
+  reviewLoop: {
+    consecutiveSameNeedsChanges: number;
+    threshold: number;
+    flagged: boolean;
+    lastNeedsChangesFingerprint?: string;
+  };
   replanHint?: string;
 }
 
@@ -73,6 +79,10 @@ export const DISPATCH_LEDGER_FACT_KEYS = {
   taskStalledCount: 'ledger.task.stalled_count',
   taskStalledThreshold: 'ledger.task.stalled_threshold',
   taskStalledFlagged: 'ledger.task.stalled_flagged',
+  taskReviewLoopCount: 'ledger.task.review_loop_same_issue_count',
+  taskReviewLoopThreshold: 'ledger.task.review_loop_threshold',
+  taskReviewLoopFlagged: 'ledger.task.review_loop_flagged',
+  taskReviewLoopFingerprint: 'ledger.task.review_loop_fingerprint',
   taskReplanHint: 'ledger.task.replan_hint',
   taskPlanVersion: 'ledger.task.plan_version',
   progressActiveTaskId: 'ledger.progress.active_task_id',
@@ -293,6 +303,7 @@ export function taskLedgerFromFacts(args: {
   taskId: string;
   facts: StateSnapshotFact[];
   stalledThreshold: number;
+  reviewLoopThreshold: number;
 }): TaskLedger {
   const factMap = new Map(args.facts.map(fact => [fact.k, fact.v]));
   return {
@@ -323,6 +334,18 @@ export function taskLedgerFromFacts(args: {
       ),
       flagged: parseBooleanValue(factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskStalledFlagged), false),
     },
+    reviewLoop: {
+      consecutiveSameNeedsChanges: parseNumberValue(
+        factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskReviewLoopCount),
+        0
+      ),
+      threshold: parseNumberValue(
+        factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskReviewLoopThreshold),
+        args.reviewLoopThreshold
+      ),
+      flagged: parseBooleanValue(factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskReviewLoopFlagged), false),
+      lastNeedsChangesFingerprint: factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskReviewLoopFingerprint) || undefined,
+    },
     replanHint: factMap.get(DISPATCH_LEDGER_FACT_KEYS.taskReplanHint) || undefined,
   };
 }
@@ -343,6 +366,21 @@ export function taskLedgerToFacts(taskLedger: TaskLedger): StateSnapshotFact[] {
     {
       k: DISPATCH_LEDGER_FACT_KEYS.taskStalledFlagged,
       v: String(taskLedger.stalled.flagged),
+      confidence: 1,
+    },
+    {
+      k: DISPATCH_LEDGER_FACT_KEYS.taskReviewLoopCount,
+      v: String(taskLedger.reviewLoop.consecutiveSameNeedsChanges),
+      confidence: 1,
+    },
+    {
+      k: DISPATCH_LEDGER_FACT_KEYS.taskReviewLoopThreshold,
+      v: String(taskLedger.reviewLoop.threshold),
+      confidence: 1,
+    },
+    {
+      k: DISPATCH_LEDGER_FACT_KEYS.taskReviewLoopFlagged,
+      v: String(taskLedger.reviewLoop.flagged),
       confidence: 1,
     },
     {
@@ -369,6 +407,13 @@ export function taskLedgerToFacts(taskLedger: TaskLedger): StateSnapshotFact[] {
     facts.push({
       k: DISPATCH_LEDGER_FACT_KEYS.taskReviewerAssessment,
       v: taskLedger.reviewerAssessment,
+      confidence: 1,
+    });
+  }
+  if (taskLedger.reviewLoop.lastNeedsChangesFingerprint) {
+    facts.push({
+      k: DISPATCH_LEDGER_FACT_KEYS.taskReviewLoopFingerprint,
+      v: taskLedger.reviewLoop.lastNeedsChangesFingerprint,
       confidence: 1,
     });
   }
@@ -443,6 +488,23 @@ function buildReplanHint(stalledCount: number, threshold: number): string {
   return `Stalled after ${stalledCount} non-progress outcomes (threshold=${threshold}); split the task, relax constraints, or resolve missing dependencies before redispatch.`;
 }
 
+function buildNeedsChangesFingerprint(
+  reviewerOutcome: Extract<TaskLedgerOutcome, { role: 'reviewer' }>
+): string {
+  const normalizedIssueTokens = reviewerOutcome.issues
+    .map(issue => `${issue.severity}|${issue.file ?? ''}|${issue.message}`)
+    .sort();
+  const normalizedFixes = reviewerOutcome.requiredFixes
+    .map(fix => fix.trim())
+    .filter(Boolean)
+    .sort();
+
+  return hashText(JSON.stringify({
+    issues: normalizedIssueTokens,
+    requiredFixes: normalizedFixes,
+  }));
+}
+
 export function applyOutcomeToTaskLedger(
   currentLedger: TaskLedger,
   outcome: TaskLedgerOutcome
@@ -454,6 +516,7 @@ export function applyOutcomeToTaskLedger(
     blockers: [...currentLedger.blockers],
     requiredFixes: [...currentLedger.requiredFixes],
     stalled: { ...currentLedger.stalled },
+    reviewLoop: { ...currentLedger.reviewLoop },
   };
 
   const applyImplementerOutcome = (
@@ -477,13 +540,36 @@ export function applyOutcomeToTaskLedger(
     ledger.requiredFixes = dedupeStrings([...reviewerOutcome.requiredFixes]);
 
     if (reviewerOutcome.assessment === 'approved') {
+      ledger.reviewLoop = {
+        ...ledger.reviewLoop,
+        consecutiveSameNeedsChanges: 0,
+        flagged: false,
+        lastNeedsChangesFingerprint: undefined,
+      };
       ledger.blockers = [];
       ledger.requiredFixes = [];
       return;
     }
     if (reviewerOutcome.assessment === 'blocked') {
+      ledger.reviewLoop = {
+        ...ledger.reviewLoop,
+        consecutiveSameNeedsChanges: 0,
+        flagged: false,
+        lastNeedsChangesFingerprint: undefined,
+      };
       ledger.blockers = dedupeStrings([...ledger.blockers, ...reviewerOutcome.requiredFixes]);
+      return;
     }
+
+    const nextFingerprint = buildNeedsChangesFingerprint(reviewerOutcome);
+    const isSameIssue = ledger.reviewLoop.lastNeedsChangesFingerprint === nextFingerprint;
+    const nextCount = isSameIssue ? ledger.reviewLoop.consecutiveSameNeedsChanges + 1 : 1;
+    ledger.reviewLoop = {
+      ...ledger.reviewLoop,
+      consecutiveSameNeedsChanges: nextCount,
+      flagged: nextCount >= ledger.reviewLoop.threshold,
+      lastNeedsChangesFingerprint: nextFingerprint,
+    };
   };
 
   const handlers: {
@@ -572,6 +658,8 @@ export function buildLedgerDeltaPacket(args: {
     ledger_blockers: args.taskLedger.blockers,
     ledger_stalled_count: args.taskLedger.stalled.consecutiveNonProgress,
     ledger_stalled_flagged: args.taskLedger.stalled.flagged,
+    ledger_review_loop_same_issue_count: args.taskLedger.reviewLoop.consecutiveSameNeedsChanges,
+    ledger_review_loop_flagged: args.taskLedger.reviewLoop.flagged,
     ledger_replan_hint: args.taskLedger.replanHint ?? null,
   };
 }

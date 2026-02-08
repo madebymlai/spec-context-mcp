@@ -178,7 +178,10 @@ function nextActionForImplementer(result: ImplementerResult): string {
   return IMPLEMENTER_NEXT_ACTION_BY_STATUS[result.status];
 }
 
-function nextActionForReviewer(result: ReviewerResult): string {
+function nextActionForReviewer(result: ReviewerResult, reviewLoopFlagged: boolean): string {
+  if (result.assessment === 'needs_changes' && reviewLoopFlagged) {
+    return 'halt_and_escalate';
+  }
   return REVIEWER_NEXT_ACTION_BY_ASSESSMENT[result.assessment];
 }
 
@@ -198,6 +201,7 @@ const DEFAULT_MAX_INPUT_TOKENS_IMPLEMENTER = 4800;
 const DEFAULT_MAX_INPUT_TOKENS_REVIEWER = 4000;
 const DEFAULT_TOKEN_CHARS_PER_TOKEN = 4;
 const DEFAULT_STALLED_THRESHOLD = 2;
+const DEFAULT_REVIEW_LOOP_THRESHOLD = 2;
 const MAX_DELTA_VALUE_CHARS = 240;
 const STAGE_B_HEAD_LINES = 18;
 const STAGE_B_TAIL_LINES = 8;
@@ -466,6 +470,14 @@ export function resolveDispatchStalledThresholdFromEnv(): number {
   );
 }
 
+export function resolveDispatchReviewLoopThresholdFromEnv(): number {
+  return intFromEnv(
+    process.env.SPEC_CONTEXT_DISPATCH_REVIEW_LOOP_THRESHOLD,
+    DEFAULT_REVIEW_LOOP_THRESHOLD,
+    'SPEC_CONTEXT_DISPATCH_REVIEW_LOOP_THRESHOLD',
+  );
+}
+
 interface DispatchCoreTelemetry {
   dispatch_count: number;
   total_output_tokens: number;
@@ -573,6 +585,7 @@ export interface DispatchRuntimeManagerDependencies {
   promptCompiler: DispatchRuntimePromptCompiler;
   compactionPolicy: DispatchCompactionPolicy;
   stalledThreshold: number;
+  reviewLoopThreshold: number;
 }
 
 export class DispatchRuntimeManager {
@@ -585,6 +598,7 @@ export class DispatchRuntimeManager {
   private readonly guidePromptCounts = new Map<string, number>();
   private readonly compactionPolicy: DispatchCompactionPolicy;
   private readonly stalledThreshold: number;
+  private readonly reviewLoopThreshold: number;
   private telemetry: DispatchTelemetrySnapshot = {
     dispatch_count: 0,
     total_output_tokens: 0,
@@ -633,6 +647,7 @@ export class DispatchRuntimeManager {
     this.promptCompiler = dependencies.promptCompiler;
     this.compactionPolicy = dependencies.compactionPolicy;
     this.stalledThreshold = dependencies.stalledThreshold;
+    this.reviewLoopThreshold = dependencies.reviewLoopThreshold;
     this.registerSchemas();
   }
 
@@ -647,6 +662,7 @@ export class DispatchRuntimeManager {
       taskId,
       facts: [],
       stalledThreshold: this.stalledThreshold,
+      reviewLoopThreshold: this.reviewLoopThreshold,
     });
 
     this.guidePromptCounts.delete(`${runId}:implementer`);
@@ -802,6 +818,7 @@ export class DispatchRuntimeManager {
         taskId: args.taskId,
         facts: snapshotBefore.facts ?? [],
         stalledThreshold: this.stalledThreshold,
+        reviewLoopThreshold: this.reviewLoopThreshold,
       }),
       {
         role: 'implementer',
@@ -871,6 +888,7 @@ export class DispatchRuntimeManager {
         taskId: args.taskId,
         facts: snapshotBefore.facts ?? [],
         stalledThreshold: this.stalledThreshold,
+        reviewLoopThreshold: this.reviewLoopThreshold,
       }),
       {
         role: 'reviewer',
@@ -898,7 +916,7 @@ export class DispatchRuntimeManager {
     return {
       result,
       snapshot,
-      nextAction: nextActionForReviewer(result),
+      nextAction: nextActionForReviewer(result, taskLedger.reviewLoop.flagged),
       outputTokens,
     };
   }
@@ -1006,6 +1024,7 @@ export class DispatchRuntimeManager {
       taskId: args.taskId,
       facts: snapshot.facts ?? [],
       stalledThreshold: this.stalledThreshold,
+      reviewLoopThreshold: this.reviewLoopThreshold,
     });
     let deltaPacket: Record<string, unknown> = buildLedgerDeltaPacket({
       taskId: args.taskId,

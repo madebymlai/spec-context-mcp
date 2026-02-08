@@ -94,6 +94,7 @@ describe('dispatch-ledger', () => {
       taskId: '1.2',
       facts: [],
       stalledThreshold: 2,
+      reviewLoopThreshold: 2,
     });
 
     const blockedOnce = applyOutcomeToTaskLedger(baseline, {
@@ -131,8 +132,38 @@ describe('dispatch-ledger', () => {
       taskId: '1.2',
       facts,
       stalledThreshold: 2,
+      reviewLoopThreshold: 2,
     });
     expect(rehydrated.summary).toBe('Dependency resolved');
+  });
+
+  it('flags review loop when identical needs_changes repeats', () => {
+    const baseline = taskLedgerFromFacts({
+      runId: 'run-2',
+      taskId: '1.3',
+      facts: [],
+      stalledThreshold: 2,
+      reviewLoopThreshold: 2,
+    });
+
+    const firstNeedsChanges = applyOutcomeToTaskLedger(baseline, {
+      role: 'reviewer',
+      assessment: 'needs_changes',
+      issues: [{ severity: 'important', message: 'Missing test coverage', file: 'src/a.ts' }],
+      requiredFixes: ['Add tests for edge path'],
+    });
+    expect(firstNeedsChanges.reviewLoop.consecutiveSameNeedsChanges).toBe(1);
+    expect(firstNeedsChanges.reviewLoop.flagged).toBe(false);
+    expect(firstNeedsChanges.reviewLoop.lastNeedsChangesFingerprint).toBeTruthy();
+
+    const repeatedNeedsChanges = applyOutcomeToTaskLedger(firstNeedsChanges, {
+      role: 'reviewer',
+      assessment: 'needs_changes',
+      issues: [{ severity: 'important', message: 'Missing test coverage', file: 'src/a.ts' }],
+      requiredFixes: ['Add tests for edge path'],
+    });
+    expect(repeatedNeedsChanges.reviewLoop.consecutiveSameNeedsChanges).toBe(2);
+    expect(repeatedNeedsChanges.reviewLoop.flagged).toBe(true);
   });
 
   it('requires current task prompt for strict ledger prompt building', () => {

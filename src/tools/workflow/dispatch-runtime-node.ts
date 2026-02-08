@@ -29,6 +29,7 @@ import {
   type DispatchRuntimePromptCompiler,
   type CompiledDispatchPrompt,
   resolveDispatchCompactionPolicyFromEnv,
+  resolveDispatchReviewLoopThresholdFromEnv,
   resolveDispatchStalledThresholdFromEnv,
   DISPATCH_RESULT_MARKERS,
 } from './dispatch-runtime.js';
@@ -232,6 +233,7 @@ export function createNodeDispatchRuntimeManagerDependencies(): DispatchRuntimeM
     promptCompiler: new DispatchPromptCompiler(),
     compactionPolicy: resolveDispatchCompactionPolicyFromEnv(),
     stalledThreshold: resolveDispatchStalledThresholdFromEnv(),
+    reviewLoopThreshold: resolveDispatchReviewLoopThresholdFromEnv(),
   };
 }
 
