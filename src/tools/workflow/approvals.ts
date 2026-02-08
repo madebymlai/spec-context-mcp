@@ -9,6 +9,86 @@ import { validateTasksMarkdown, formatValidationErrors } from '../../core/workfl
 import type { ApprovalStoreFactory, ApprovalStore, ApprovalRecord, ApprovalStatus } from './approval-store.js';
 import { findDashboardProjectByPath } from './dashboard-project-resolver.js';
 
+type DashboardProject = {
+  projectId: string;
+  projectPath?: string;
+  projectName: string;
+};
+
+function isDashboardRequestUnavailable(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return true;
+  }
+  return error instanceof TypeError;
+}
+
+function parseDashboardProjectId(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null || !('projectId' in payload)) {
+    return null;
+  }
+  const maybeProjectId = (payload as { projectId?: unknown }).projectId;
+  return typeof maybeProjectId === 'string' && maybeProjectId.length > 0 ? maybeProjectId : null;
+}
+
+async function listDashboardProjects(
+  dashboardUrl: string,
+  timeoutMs: number = 750
+): Promise<DashboardProject[] | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const projectsResponse = await fetch(`${dashboardUrl}/api/projects/list`, { signal: controller.signal });
+    if (!projectsResponse.ok) {
+      return null;
+    }
+
+    const payload = await projectsResponse.json();
+    if (!Array.isArray(payload)) {
+      return null;
+    }
+
+    return payload as DashboardProject[];
+  } catch (error) {
+    if (isDashboardRequestUnavailable(error)) {
+      return null;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function registerProjectWithDashboard(
+  dashboardUrl: string,
+  projectPath: string,
+  timeoutMs: number = 1200
+): Promise<string | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${dashboardUrl}/api/projects/add`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ projectPath }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = await response.json();
+    return parseDashboardProjectId(payload);
+  } catch (error) {
+    if (isDashboardRequestUnavailable(error)) {
+      return null;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function tryResolveDashboardProjectId(
   dashboardUrl: string | undefined,
   validatedProjectPath: string,
@@ -16,27 +96,35 @@ async function tryResolveDashboardProjectId(
 ): Promise<string | null> {
   if (!dashboardUrl) return null;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 750);
-
-  try {
-    const projectsResponse = await fetch(`${dashboardUrl}/api/projects/list`, { signal: controller.signal });
-    if (!projectsResponse.ok) return null;
-
-    const projects = await projectsResponse.json() as Array<{ projectId: string; projectPath?: string; projectName: string }>;
-    const project = findDashboardProjectByPath(projects, validatedProjectPath, translatedProjectPath);
-    return project?.projectId ?? null;
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      return null;
-    }
-    if (error instanceof TypeError) {
-      return null;
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
+  const projects = await listDashboardProjects(dashboardUrl);
+  if (!projects) {
+    return null;
   }
+
+  const existingProject = findDashboardProjectByPath(projects, validatedProjectPath, translatedProjectPath);
+  if (existingProject) {
+    return existingProject.projectId;
+  }
+
+  const registrationPaths = [validatedProjectPath];
+  if (translatedProjectPath !== validatedProjectPath) {
+    registrationPaths.push(translatedProjectPath);
+  }
+
+  for (const projectPath of registrationPaths) {
+    const projectId = await registerProjectWithDashboard(dashboardUrl, projectPath);
+    if (projectId) {
+      return projectId;
+    }
+  }
+
+  const refreshedProjects = await listDashboardProjects(dashboardUrl);
+  if (!refreshedProjects) {
+    return null;
+  }
+
+  const refreshedProject = findDashboardProjectByPath(refreshedProjects, validatedProjectPath, translatedProjectPath);
+  return refreshedProject?.projectId ?? null;
 }
 
 type ApprovalProgressState = 'awaiting_review' | 'approved' | 'rejected' | 'needs_revision';
