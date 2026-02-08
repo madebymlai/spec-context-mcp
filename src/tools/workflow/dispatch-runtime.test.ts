@@ -23,9 +23,45 @@ const ORIGINAL_IMPLEMENTER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_IMPLEMENTER_
 const ORIGINAL_REVIEWER_MODEL_SIMPLE = process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
 const ORIGINAL_REVIEWER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
 const ORIGINAL_REVIEWER_REASONING_EFFORT = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT;
+const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 let dispatchRuntimeHandler: (args: Record<string, unknown>, context: any) => Promise<any>;
+let standardDispatchRuntimeHandler: (args: Record<string, unknown>, context: any) => Promise<any>;
 let DispatchRuntimeManagerClass: typeof import('./dispatch-runtime.js').DispatchRuntimeManager;
 let createNodeDispatchRuntimeManagerDependencies: typeof import('./dispatch-runtime-node.js').createNodeDispatchRuntimeManagerDependencies;
+let createDispatchRuntimeHandler: typeof import('./dispatch-runtime.js').createDispatchRuntimeHandler;
+let runtimeManager: import('./dispatch-runtime.js').DispatchRuntimeManager;
+let dispatchOutputResolver: import('./dispatch-runtime.js').DispatchOutputResolver;
+
+function isDispatchRoleValue(value: string): value is 'implementer' | 'reviewer' {
+  return value === 'implementer' || value === 'reviewer';
+}
+
+function getErrorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) {
+    return null;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+function parseCompactionAutoArg(value: unknown): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['0', 'false', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+  }
+  throw new Error('compile_prompt compactionAuto must be boolean-like');
+}
 
 function restoreEnvVar(key: string, value: string | undefined): void {
   if (value === undefined) {
@@ -43,9 +79,157 @@ describe('dispatch-runtime tool', () => {
       import('./dispatch-runtime.js'),
       import('./dispatch-runtime-node.js'),
     ]);
-    dispatchRuntimeHandler = nodeModule.dispatchRuntimeHandler;
+    createDispatchRuntimeHandler = coreModule.createDispatchRuntimeHandler;
     DispatchRuntimeManagerClass = coreModule.DispatchRuntimeManager;
     createNodeDispatchRuntimeManagerDependencies = nodeModule.createNodeDispatchRuntimeManagerDependencies;
+    const dependencies = nodeModule.createNodeDispatchRuntimeHandlerDependencies();
+    runtimeManager = dependencies.runtimeManager;
+    dispatchOutputResolver = dependencies.outputResolver;
+    standardDispatchRuntimeHandler = createDispatchRuntimeHandler(dependencies);
+    dispatchRuntimeHandler = async (args, toolContext) => {
+      const action = String(args.action || '').trim();
+
+      if (action === 'compile_prompt') {
+        const runId = String(args.runId || '').trim();
+        const taskId = String(args.taskId || '').trim();
+        const roleRaw = String(args.role || '').trim();
+        if (!runId || !taskId || !isDispatchRoleValue(roleRaw)) {
+          return {
+            success: false,
+            message: 'compile_prompt requires runId, role (implementer|reviewer), and taskId',
+          };
+        }
+
+        const maxOutputTokens = Number(args.maxOutputTokens ?? 1200);
+        if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
+          return {
+            success: false,
+            message: 'compile_prompt requires positive maxOutputTokens',
+          };
+        }
+
+        try {
+          const compiled = await runtimeManager.compilePrompt({
+            runId,
+            role: roleRaw,
+            taskId,
+            projectPath: toolContext.projectPath,
+            taskPrompt: typeof args.taskPrompt === 'string' ? args.taskPrompt.trim() : undefined,
+            maxOutputTokens,
+            compactionContext: Array.isArray(args.compactionContext)
+              ? args.compactionContext
+                .filter(item => typeof item === 'string')
+                .map(item => item.trim())
+                .filter(Boolean)
+              : undefined,
+            compactionPromptOverride: typeof args.compactionPromptOverride === 'string'
+              ? args.compactionPromptOverride.trim()
+              : undefined,
+            compactionAuto: parseCompactionAutoArg(args.compactionAuto),
+          });
+          return {
+            success: true,
+            message: 'Dispatch prompt compiled',
+            data: compiled,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            success: false,
+            message,
+            data: {
+              runId,
+              role: roleRaw,
+              taskId,
+              errorCode: getErrorCode(error),
+            },
+          };
+        }
+      }
+
+      if (action === 'ingest_output') {
+        const runId = String(args.runId || '').trim();
+        const taskId = String(args.taskId || '').trim();
+        const roleRaw = String(args.role || '').trim();
+        if (!runId || !taskId || !isDispatchRoleValue(roleRaw)) {
+          return {
+            success: false,
+            message: 'ingest_output requires runId, role (implementer|reviewer), and taskId',
+          };
+        }
+
+        const maxOutputTokens = args.maxOutputTokens === undefined
+          ? undefined
+          : Number(args.maxOutputTokens);
+        if (maxOutputTokens !== undefined && (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0)) {
+          return {
+            success: false,
+            message: 'ingest_output requires positive maxOutputTokens when provided',
+          };
+        }
+
+        const outputContent = await dispatchOutputResolver.resolve({
+          outputContent: args.outputContent,
+          outputFilePath: args.outputFilePath,
+          projectPath: toolContext.projectPath,
+        });
+
+        try {
+          const ingested = await runtimeManager.ingestOutput({
+            runId,
+            role: roleRaw,
+            taskId,
+            outputContent,
+            maxOutputTokens,
+          });
+          return {
+            success: true,
+            message: 'Dispatch output ingested',
+            data: ingested,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const errorCode = getErrorCode(error);
+          if (
+            errorCode === 'marker_missing'
+            || errorCode === 'json_parse_failed'
+            || errorCode === 'schema_invalid'
+          ) {
+            const snapshot = await runtimeManager.recordTerminalContractFailure({
+              runId,
+              role: roleRaw,
+              taskId,
+              errorCode,
+              errorMessage: message,
+            });
+            return {
+              success: false,
+              message,
+              data: {
+                runId,
+                role: roleRaw,
+                taskId,
+                errorCode,
+                nextAction: 'halt_schema_invalid_terminal',
+                snapshot,
+              },
+            };
+          }
+          return {
+            success: false,
+            message,
+            data: {
+              runId,
+              role: roleRaw,
+              taskId,
+              errorCode,
+            },
+          };
+        }
+      }
+
+      return standardDispatchRuntimeHandler(args, toolContext);
+    };
 
     await mkdir(SPEC_DIR, { recursive: true });
     await writeFile(
@@ -111,6 +295,7 @@ describe('dispatch-runtime tool', () => {
     restoreEnvVar('SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE', ORIGINAL_REVIEWER_MODEL_SIMPLE);
     restoreEnvVar('SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX', ORIGINAL_REVIEWER_MODEL_COMPLEX);
     restoreEnvVar('SPEC_CONTEXT_REVIEWER_REASONING_EFFORT', ORIGINAL_REVIEWER_REASONING_EFFORT);
+    restoreEnvVar('NODE_ENV', ORIGINAL_NODE_ENV);
   });
 
   it('returns typed error when init_run cannot find tasks.md', async () => {
@@ -126,6 +311,34 @@ describe('dispatch-runtime tool', () => {
 
     expect(result.success).toBe(false);
     expect(result.data?.errorCode).toBe('progress_ledger_missing_tasks');
+  });
+
+  it('rejects removed split actions at parser boundary', async () => {
+    const compileResult = await standardDispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId: 'prod-mode-compile',
+        role: 'implementer',
+        taskId: '1.1',
+        maxOutputTokens: 400,
+      },
+      context
+    );
+    const ingestResult = await standardDispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId: 'prod-mode-ingest',
+        role: 'implementer',
+        taskId: '1.1',
+        outputContent: 'BEGIN_DISPATCH_RESULT\\n{}\\nEND_DISPATCH_RESULT',
+      },
+      context
+    );
+
+    expect(compileResult.success).toBe(false);
+    expect(String(compileResult.message)).toContain('action must be one of');
+    expect(ingestResult.success).toBe(false);
+    expect(String(ingestResult.message)).toContain('action must be one of');
   });
 
   it('rejects compile_prompt when run is not initialized', async () => {

@@ -56,6 +56,7 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
    - Omit \`taskPrompt\` to use the ledger/task prompt from runtime state (fail fast if missing).
    - Runtime compiles prompt, executes provider, ingests strict contract, and returns deterministic \`nextAction\`.
    - Use returned \`execution.contractOutputPath\` and \`execution.debugOutputPath\` for diagnostics only.
+   - Do NOT use split legacy actions (\`compile_prompt\` / \`ingest_output\`): single-path runtime only.
 `;
 
   const reviewerDispatchBlock = reviewsEnabled

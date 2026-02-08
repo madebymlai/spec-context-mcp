@@ -49,10 +49,8 @@ import {
 
 const DISPATCH_ACTIONS = [
   'init_run',
-  'ingest_output',
   'dispatch_and_ingest',
   'get_snapshot',
-  'compile_prompt',
   'get_telemetry',
 ] as const;
 type DispatchAction = typeof DISPATCH_ACTIONS[number];
@@ -1536,28 +1534,6 @@ type GetTelemetryCommand = {
   action: 'get_telemetry';
 };
 
-type CompilePromptCommand = {
-  action: 'compile_prompt';
-  runId: string;
-  role: DispatchRole;
-  taskId: string;
-  projectPath: string;
-  taskPrompt?: string;
-  maxOutputTokens: number;
-  compactionContext?: string[];
-  compactionPromptOverride?: string;
-  compactionAuto?: boolean;
-};
-
-type IngestOutputCommand = {
-  action: 'ingest_output';
-  runId: string;
-  role: DispatchRole;
-  taskId: string;
-  outputContent: string;
-  maxOutputTokens?: number;
-};
-
 type DispatchAndIngestCommand = {
   action: 'dispatch_and_ingest';
   runId: string;
@@ -1575,8 +1551,6 @@ type DispatchToolCommand =
   | InitRunCommand
   | GetSnapshotCommand
   | GetTelemetryCommand
-  | CompilePromptCommand
-  | IngestOutputCommand
   | DispatchAndIngestCommand;
 
 type DispatchCommandParseResult =
@@ -1616,7 +1590,7 @@ function parseCompactionAuto(value: unknown): { ok: true; value?: boolean } | { 
   if (typeof value !== 'string') {
     return {
       ok: false,
-      response: failure('compile_prompt compactionAuto must be boolean-like'),
+      response: failure('dispatch_and_ingest compactionAuto must be boolean-like'),
     };
   }
 
@@ -1629,7 +1603,7 @@ function parseCompactionAuto(value: unknown): { ok: true; value?: boolean } | { 
   }
   return {
     ok: false,
-    response: failure('compile_prompt compactionAuto must be boolean-like'),
+    response: failure('dispatch_and_ingest compactionAuto must be boolean-like'),
   };
 }
 
@@ -1667,54 +1641,6 @@ function parseGetSnapshotCommand(args: Record<string, unknown>): DispatchCommand
     command: {
       action: 'get_snapshot',
       runId,
-    },
-  };
-}
-
-async function parseCompilePromptCommand(
-  args: Record<string, unknown>,
-  context: ToolContext,
-): Promise<DispatchCommandParseResult> {
-  const runId = parseRunId(args);
-  if (!runId) {
-    return { ok: false, response: failure('compile_prompt requires runId') };
-  }
-
-  const roleTask = parseRoleTask('compile_prompt', args);
-  if (!roleTask.ok) {
-    return roleTask;
-  }
-
-  const maxOutputTokens = Number(args.maxOutputTokens ?? 1200);
-  if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
-    return { ok: false, response: failure('compile_prompt requires positive maxOutputTokens') };
-  }
-
-  const compactionAuto = parseCompactionAuto(args.compactionAuto);
-  if (!compactionAuto.ok) {
-    return compactionAuto;
-  }
-
-  return {
-    ok: true,
-    command: {
-      action: 'compile_prompt',
-      runId,
-      role: roleTask.role,
-      taskId: roleTask.taskId,
-      projectPath: context.projectPath,
-      taskPrompt: typeof args.taskPrompt === 'string' ? args.taskPrompt.trim() : undefined,
-      maxOutputTokens,
-      compactionContext: Array.isArray(args.compactionContext)
-        ? args.compactionContext
-          .filter(item => typeof item === 'string')
-          .map(item => item.trim())
-          .filter(Boolean)
-        : undefined,
-      compactionPromptOverride: typeof args.compactionPromptOverride === 'string'
-        ? args.compactionPromptOverride.trim()
-        : undefined,
-      compactionAuto: compactionAuto.value,
     },
   };
 }
@@ -1767,50 +1693,6 @@ async function parseDispatchAndIngestCommand(
   };
 }
 
-async function parseIngestOutputCommand(
-  args: Record<string, unknown>,
-  context: ToolContext,
-  dependencies: DispatchRuntimeHandlerDependencies,
-): Promise<DispatchCommandParseResult> {
-  const runId = parseRunId(args);
-  if (!runId) {
-    return { ok: false, response: failure('ingest_output requires runId') };
-  }
-
-  const roleTask = parseRoleTask('ingest_output', args);
-  if (!roleTask.ok) {
-    return roleTask;
-  }
-
-  const outputContent = await dependencies.outputResolver.resolve({
-    outputContent: args.outputContent,
-    outputFilePath: args.outputFilePath,
-    projectPath: context.projectPath,
-  });
-  if (!outputContent) {
-    return { ok: false, response: failure('ingest_output requires outputContent or outputFilePath') };
-  }
-
-  const maxOutputTokens = args.maxOutputTokens === undefined
-    ? undefined
-    : Number(args.maxOutputTokens);
-  if (args.maxOutputTokens !== undefined && (!Number.isFinite(maxOutputTokens) || (maxOutputTokens as number) <= 0)) {
-    return { ok: false, response: failure('ingest_output maxOutputTokens must be a positive number') };
-  }
-
-  return {
-    ok: true,
-    command: {
-      action: 'ingest_output',
-      runId,
-      role: roleTask.role,
-      taskId: roleTask.taskId,
-      outputContent,
-      maxOutputTokens,
-    },
-  };
-}
-
 type DispatchCommandParser = (
   args: Record<string, unknown>,
   context: ToolContext,
@@ -1824,9 +1706,7 @@ const DISPATCH_COMMAND_PARSERS: Record<DispatchAction, DispatchCommandParser> = 
     ok: true,
     command: { action: 'get_telemetry' },
   }),
-  compile_prompt: async (args, context) => parseCompilePromptCommand(args, context),
   dispatch_and_ingest: async (args, context) => parseDispatchAndIngestCommand(args, context),
-  ingest_output: parseIngestOutputCommand,
 };
 
 type DispatchCommandExecutor<K extends DispatchToolCommand['action']> = (
@@ -1899,111 +1779,6 @@ const DISPATCH_COMMAND_EXECUTORS: DispatchCommandExecutorMap = {
         file_content_cache: dependencies.fileContentCacheTelemetry(),
       },
     };
-  },
-
-  async compile_prompt(command, dependencies) {
-    try {
-      const compiled = await dependencies.runtimeManager.compilePrompt({
-        runId: command.runId,
-        role: command.role,
-        taskId: command.taskId,
-        projectPath: command.projectPath,
-        taskPrompt: command.taskPrompt,
-        maxOutputTokens: command.maxOutputTokens,
-        compactionContext: command.compactionContext,
-        compactionPromptOverride: command.compactionPromptOverride,
-        compactionAuto: command.compactionAuto,
-      });
-      return {
-        success: true,
-        message: 'Dispatch prompt compiled',
-        data: {
-          runId: command.runId,
-          role: command.role,
-          taskId: command.taskId,
-          ...compiled,
-        },
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const errorCode = toDispatchToolErrorCode(error);
-      return {
-        success: false,
-        message,
-        data: {
-          runId: command.runId,
-          role: command.role,
-          taskId: command.taskId,
-          errorCode,
-        },
-      };
-    }
-  },
-
-  async ingest_output(command, dependencies) {
-    try {
-      const result = await dependencies.runtimeManager.ingestOutput({
-        runId: command.runId,
-        role: command.role,
-        taskId: command.taskId,
-        outputContent: command.outputContent,
-        maxOutputTokens: command.maxOutputTokens,
-      });
-
-      return {
-        success: true,
-        message: 'Dispatch output ingested and validated',
-        data: {
-          runId: command.runId,
-          role: command.role,
-          nextAction: result.nextAction,
-          result: result.result,
-          snapshot: result.snapshot,
-          outputTokens: result.outputTokens,
-          telemetry: dependencies.runtimeManager.getTelemetrySnapshot(),
-        },
-        nextSteps: [
-          `Follow next action: ${result.nextAction}`,
-          'Use get_snapshot for latest runtime status before dispatching next agent call',
-        ],
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (error instanceof DispatchContractError) {
-        const snapshot = await dependencies.runtimeManager.recordTerminalContractFailure({
-          runId: command.runId,
-          role: command.role,
-          taskId: command.taskId,
-          errorCode: error.code,
-          errorMessage: message,
-        });
-        return {
-          success: false,
-          message,
-          data: {
-            runId: command.runId,
-            role: command.role,
-            taskId: command.taskId,
-            errorCode: error.code,
-            nextAction: 'halt_schema_invalid_terminal',
-            snapshot,
-            telemetry: dependencies.runtimeManager.getTelemetrySnapshot(),
-          },
-        };
-      }
-
-      const errorCode = toDispatchToolErrorCode(error);
-      return {
-        success: false,
-        message,
-        data: {
-          runId: command.runId,
-          role: command.role,
-          taskId: command.taskId,
-          errorCode,
-        },
-      };
-    }
   },
 
   async dispatch_and_ingest(command, dependencies) {
@@ -2157,7 +1932,7 @@ async function parseDispatchCommand(
   if (!isDispatchAction(actionRaw)) {
     return {
       ok: false,
-      response: failure('action must be one of: init_run, ingest_output, dispatch_and_ingest, get_snapshot, compile_prompt, get_telemetry'),
+      response: failure('action must be one of: init_run, dispatch_and_ingest, get_snapshot, get_telemetry'),
     };
   }
   const parser = DISPATCH_COMMAND_PARSERS[actionRaw];
@@ -2181,13 +1956,14 @@ export const dispatchRuntimeTool: Tool = {
 
 Use this tool instead of reading raw logs for orchestration decisions.
 It validates implementer/reviewer structured output, compiles delta prompts with stable prefix hashes,
-updates runtime events/snapshots, enforces output token budgets, and returns deterministic next actions.`,
+updates runtime events/snapshots, enforces output token budgets, and returns deterministic next actions.
+Use action:"dispatch_and_ingest" as the only execution path for orchestrator dispatch.`,
   inputSchema: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        enum: ['init_run', 'ingest_output', 'dispatch_and_ingest', 'get_snapshot', 'compile_prompt', 'get_telemetry'],
+        enum: ['init_run', 'dispatch_and_ingest', 'get_snapshot', 'get_telemetry'],
         description: 'Runtime action',
       },
       runId: {
@@ -2205,7 +1981,7 @@ updates runtime events/snapshots, enforces output token budgets, and returns det
       role: {
         type: 'string',
         enum: ['implementer', 'reviewer'],
-        description: 'Agent role for ingest_output/compile_prompt/dispatch_and_ingest',
+        description: 'Agent role for dispatch_and_ingest',
       },
       outputFilePath: {
         type: 'string',
@@ -2217,24 +1993,24 @@ updates runtime events/snapshots, enforces output token budgets, and returns det
       },
       taskPrompt: {
         type: 'string',
-        description: 'Optional compile_prompt override; defaults to ledger task prompt.',
+        description: 'Optional prompt override; defaults to ledger task prompt.',
       },
       maxOutputTokens: {
         type: 'number',
-        description: 'Maximum output token budget for compile_prompt/ingest_output/dispatch_and_ingest',
+        description: 'Maximum output token budget for dispatch_and_ingest',
       },
       compactionContext: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Optional compaction context lines used when compile_prompt needs aggressive prompt reduction',
+        description: 'Optional compaction context lines used when prompt compilation needs aggressive reduction',
       },
       compactionPromptOverride: {
         type: 'string',
-        description: 'Optional emergency compaction instruction override for compile_prompt stage C',
+        description: 'Optional emergency compaction instruction override for prompt-compaction stage C',
       },
       compactionAuto: {
         type: 'boolean',
-        description: 'Optional override for SPEC_CONTEXT_DISPATCH_COMPACTION_AUTO during compile_prompt',
+        description: 'Optional override for SPEC_CONTEXT_DISPATCH_COMPACTION_AUTO during prompt compilation',
       },
     },
     required: ['action'],
