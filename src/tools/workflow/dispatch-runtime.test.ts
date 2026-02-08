@@ -441,6 +441,56 @@ END_DISPATCH_RESULT`,
     expect(recoveredFacts.find(fact => fact.k === 'ledger.task.stalled_flagged')?.v).toBe('false');
   });
 
+  it('escalates when reviewer repeats identical needs_changes feedback', async () => {
+    const runId = 'test-run-review-loop-escalation';
+    const taskId = '3.1';
+    const reviewerPayload = `BEGIN_DISPATCH_RESULT
+{"task_id":"${taskId}","assessment":"needs_changes","strengths":[],"issues":[{"severity":"important","file":"src/tools/workflow/dispatch-runtime.ts","message":"Missing regression test","fix":"Add a regression test"}],"required_fixes":["Add a regression test"]}
+END_DISPATCH_RESULT`;
+
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId,
+        specName: SPEC_NAME,
+        taskId,
+      },
+      context
+    );
+
+    const first = await dispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId,
+        role: 'reviewer',
+        taskId,
+        outputContent: reviewerPayload,
+      },
+      context
+    );
+    expect(first.success).toBe(true);
+    expect(first.data?.nextAction).toBe('dispatch_implementer_fixes');
+    const firstFacts = (first.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
+    expect(firstFacts.find(fact => fact.k === 'ledger.task.review_loop_same_issue_count')?.v).toBe('1');
+    expect(firstFacts.find(fact => fact.k === 'ledger.task.review_loop_flagged')?.v).toBe('false');
+
+    const second = await dispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId,
+        role: 'reviewer',
+        taskId,
+        outputContent: reviewerPayload,
+      },
+      context
+    );
+    expect(second.success).toBe(true);
+    expect(second.data?.nextAction).toBe('halt_and_escalate');
+    const secondFacts = (second.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
+    expect(secondFacts.find(fact => fact.k === 'ledger.task.review_loop_same_issue_count')?.v).toBe('2');
+    expect(secondFacts.find(fact => fact.k === 'ledger.task.review_loop_flagged')?.v).toBe('true');
+  });
+
   it('rejects invalid reviewer schema', async () => {
     await dispatchRuntimeHandler(
       {

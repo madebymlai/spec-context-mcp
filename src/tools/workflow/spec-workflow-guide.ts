@@ -407,7 +407,7 @@ For EACH task:
 2. **Review**: Dispatch reviewer via reviewer compile_prompt -> dispatch_cli — check spec compliance, code quality, principles
 3. **Handle feedback:**
    - If issues found: dispatch implementer again to fix, re-verify, dispatch reviewer again
-   - If same issue appears twice: orchestrator takes over (implementer doesn't understand)
+   - If same issue appears twice: runtime returns \`halt_and_escalate\`; orchestrator takes over
    - If approved: START the next task (go back to step 1)
 
 **NEVER start the next task before the current task is reviewed and approved.**
