@@ -1,55 +1,48 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-
-const mocks = vi.hoisted(() => ({
-  validateProjectPath: vi.fn(async (value: string) => value),
-  translatePath: vi.fn((value: string) => value),
-  resolveDashboardUrl: vi.fn(async () => 'http://localhost:3000'),
-  buildApprovalDeeplink: vi.fn((dashboardUrl: string, approvalId: string, projectId?: string) => {
-    const base = (dashboardUrl || '').replace(/\/+$/, '');
-    const params = new URLSearchParams({ id: approvalId });
-    if (projectId) params.set('projectId', projectId);
-    return `${base}/#/approvals?${params.toString()}`;
-  }),
-}));
+import { describe, it, expect, vi } from 'vitest';
+import {
+  createWaitForApprovalHandler,
+  type WaitForApprovalDependencies
+} from '../wait-for-approval.js';
 
 type FetchResponse = {
   ok: boolean;
-  statusText?: string;
-  json: () => Promise<any>;
+  statusText: string;
+  json: () => Promise<unknown>;
 };
 
-const createResponse = (data: any, ok = true, statusText = 'OK'): FetchResponse => ({
-  ok,
-  statusText,
-  json: async () => data,
-});
+function createResponse(data: unknown, ok = true, statusText = 'OK'): FetchResponse {
+  return {
+    ok,
+    statusText,
+    json: async () => data,
+  };
+}
 
-vi.mock('../../../core/workflow/path-utils.js', () => ({
-  validateProjectPath: mocks.validateProjectPath,
-  PathUtils: { translatePath: mocks.translatePath },
-}));
-
-vi.mock('../../../core/workflow/dashboard-url.js', () => ({
-  resolveDashboardUrl: mocks.resolveDashboardUrl,
-  buildApprovalDeeplink: mocks.buildApprovalDeeplink,
-}));
-
-import { waitForApprovalHandler } from '../wait-for-approval.js';
+function createDependencies(fetchJson: WaitForApprovalDependencies['fetchJson']): WaitForApprovalDependencies {
+  return {
+    validateProjectPath: async (projectPath: string) => projectPath,
+    translateProjectPath: (projectPath: string) => projectPath,
+    resolveDashboardUrl: async () => 'http://localhost:3000',
+    fetchJson,
+    createAbortController: () => new AbortController(),
+    createTimeout: (callback: () => void, timeoutMs: number) => setTimeout(callback, timeoutMs),
+    clearTimeout: (timeout: ReturnType<typeof setTimeout>) => clearTimeout(timeout),
+    buildApprovalDeeplink: (dashboardUrl: string, approvalId: string, projectId?: string) => {
+      const base = dashboardUrl.replace(/\/+$/, '');
+      const params = new URLSearchParams({ id: approvalId });
+      if (projectId) {
+        params.set('projectId', projectId);
+      }
+      return `${base}/#/approvals?${params.toString()}`;
+    },
+  };
+}
 
 describe('waitForApprovalHandler', () => {
-  beforeEach(() => {
-    mocks.validateProjectPath.mockClear();
-    mocks.translatePath.mockClear();
-    mocks.resolveDashboardUrl.mockClear();
-    mocks.buildApprovalDeeplink.mockClear();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it('returns an error when approvalId is missing', async () => {
-    const result = await waitForApprovalHandler(
+    const handler = createWaitForApprovalHandler(createDependencies(async () => createResponse([])));
+
+    const result = await handler(
       { approvalId: '' },
       { projectPath: '/tmp/project' }
     );
@@ -59,29 +52,29 @@ describe('waitForApprovalHandler', () => {
   });
 
   it('returns an error when dashboard is unavailable', async () => {
-    const fetchMock = vi.fn(async () => createResponse({ error: 'nope' }, false, 'Bad'));
-    vi.stubGlobal('fetch', fetchMock as any);
+    const fetchJson = vi.fn(async () => createResponse({ error: 'nope' }, false, 'Bad'));
+    const handler = createWaitForApprovalHandler(createDependencies(fetchJson));
 
-    const result = await waitForApprovalHandler(
+    const result = await handler(
       { approvalId: 'abc', projectPath: '/tmp/project' },
       { projectPath: '/tmp/project' }
     );
 
     expect(result.success).toBe(false);
     expect(result.message).toMatch(/Dashboard not available/i);
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:3000/api/projects/list');
+    expect(fetchJson).toHaveBeenCalledWith('http://localhost:3000/api/projects/list');
   });
 
   it('returns timeout result when wait endpoint reports timeout', async () => {
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchJson = vi.fn(async (url: string) => {
       if (url.endsWith('/api/projects/list')) {
         return createResponse([{ projectId: 'p1', projectPath: '/tmp/project', projectName: 'Test' }]);
       }
       return createResponse({ timeout: true, status: 'pending' });
     });
-    vi.stubGlobal('fetch', fetchMock as any);
+    const handler = createWaitForApprovalHandler(createDependencies(fetchJson));
 
-    const result = await waitForApprovalHandler(
+    const result = await handler(
       { approvalId: 'abc', projectPath: '/tmp/project', timeoutMs: 1000 },
       { projectPath: '/tmp/project' }
     );
@@ -92,7 +85,7 @@ describe('waitForApprovalHandler', () => {
   });
 
   it('returns approved result when dashboard resolves approval', async () => {
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchJson = vi.fn(async (url: string) => {
       if (url.endsWith('/api/projects/list')) {
         return createResponse([{ projectId: 'p1', projectPath: '/tmp/project', projectName: 'Test' }]);
       }
@@ -104,9 +97,9 @@ describe('waitForApprovalHandler', () => {
         respondedAt: '2024-01-01T00:00:00.000Z',
       });
     });
-    vi.stubGlobal('fetch', fetchMock as any);
+    const handler = createWaitForApprovalHandler(createDependencies(fetchJson));
 
-    const result = await waitForApprovalHandler(
+    const result = await handler(
       { approvalId: 'abc', projectPath: '/tmp/project' },
       { projectPath: '/tmp/project' }
     );

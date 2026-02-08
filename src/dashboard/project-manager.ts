@@ -1,61 +1,130 @@
 import { EventEmitter } from 'events';
 import chokidar, { FSWatcher } from 'chokidar';
 import { SpecParser, type ISpecParser } from './parser.js';
-import { SpecWatcher } from './watcher.js';
-import { ApprovalStorage } from './approval-storage.js';
+import { SpecWatcher, type SpecChangeEvent } from './watcher.js';
+import {
+  ApprovalStorage,
+  type ApprovalRequest,
+  type ApprovalComment,
+  type DocumentSnapshot,
+  type DiffResult
+} from './approval-storage.js';
 import { SpecArchiveService } from '../core/workflow/archive-service.js';
-import { ProjectRegistry, ProjectRegistryEntry, ProjectInstance, generateProjectId } from '../core/workflow/project-registry.js';
+import {
+  ProjectRegistry,
+  type ProjectRegistryEntry,
+  type ProjectInstance
+} from '../core/workflow/project-registry.js';
 import { PathUtils } from '../core/workflow/path-utils.js';
+
+export interface ProjectRegistryPort {
+  cleanupStaleProjects(): Promise<number>;
+  getAllProjects(): Promise<ProjectRegistryEntry[]>;
+  getRegistryPath(): string;
+  getProject(projectPath: string): Promise<ProjectRegistryEntry | null>;
+  getProjectById(projectId: string): Promise<ProjectRegistryEntry | null>;
+  registerProject(projectPath: string, pid: number, persistent?: boolean): Promise<string>;
+  unregisterProjectById(projectId: string): Promise<void>;
+}
+
+export interface ProjectWatcherPort {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  on(event: 'change', listener: (event: SpecChangeEvent) => void): this;
+  on(event: 'task-update', listener: (event: Record<string, unknown>) => void): this;
+  on(event: 'steering-change', listener: (event: Record<string, unknown>) => void): this;
+  removeAllListeners(): this;
+}
+
+export interface ProjectApprovalStoragePort {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  on(event: 'approval-change', listener: () => void): this;
+  removeAllListeners(): this;
+  getAllPendingApprovals(): Promise<ApprovalRequest[]>;
+  getAllApprovals(): Promise<ApprovalRequest[]>;
+  getApproval(id: string): Promise<ApprovalRequest | null>;
+  updateApproval(
+    id: string,
+    status: 'approved' | 'rejected' | 'needs-revision',
+    response: string,
+    annotations?: string,
+    comments?: ApprovalComment[]
+  ): Promise<void>;
+  deleteApproval(id: string): Promise<boolean>;
+  getSnapshots(approvalId: string): Promise<DocumentSnapshot[]>;
+  getSnapshot(approvalId: string, version: number): Promise<DocumentSnapshot | null>;
+  compareSnapshots(approvalId: string, fromVersion: number, toVersion: number | 'current'): Promise<DiffResult>;
+  captureSnapshot(approvalId: string, trigger: 'initial' | 'revision_requested' | 'approved' | 'manual'): Promise<void>;
+}
+
+export interface ProjectArchiveServicePort {
+  archiveSpec(specName: string): Promise<void>;
+  unarchiveSpec(specName: string): Promise<void>;
+}
+
+export interface ProjectComponentFactory {
+  createParser(projectPath: string): ISpecParser;
+  createWatcher(projectPath: string, parser: ISpecParser): ProjectWatcherPort;
+  createApprovalStorage(translatedPath: string, originalPath: string): ProjectApprovalStoragePort;
+  createArchiveService(projectPath: string): ProjectArchiveServicePort;
+}
 
 export interface ProjectContext {
   projectId: string;
-  projectPath: string;           // Translated path for local file access
-  originalProjectPath: string;   // Original host path for display/registry
+  projectPath: string;
+  originalProjectPath: string;
   projectName: string;
-  instances: ProjectInstance[];  // Active MCP server instances for this project
+  instances: ProjectInstance[];
   parser: ISpecParser;
-  watcher: SpecWatcher;
-  approvalStorage: ApprovalStorage;
-  archiveService: SpecArchiveService;
-  autoApproveMode: boolean;      // Dashboard-only: auto-approve wait-for-approval requests
+  watcher: ProjectWatcherPort;
+  approvalStorage: ProjectApprovalStoragePort;
+  archiveService: ProjectArchiveServicePort;
+  autoApproveMode: boolean;
 }
 
+export interface ProjectManagerDependencies {
+  registry: ProjectRegistryPort;
+  componentFactory: ProjectComponentFactory;
+}
+
+export interface ProjectManagerErrorEvent {
+  stage: 'registry_sync' | 'registry_watcher';
+  error: unknown;
+}
+
+const defaultComponentFactory: ProjectComponentFactory = {
+  createParser: (projectPath) => new SpecParser(projectPath),
+  createWatcher: (projectPath, parser) => new SpecWatcher(projectPath, parser),
+  createApprovalStorage: (translatedPath, originalPath) => new ApprovalStorage(translatedPath, originalPath),
+  createArchiveService: (projectPath) => new SpecArchiveService(projectPath)
+};
+
+const defaultDependencies: ProjectManagerDependencies = {
+  registry: new ProjectRegistry(),
+  componentFactory: defaultComponentFactory
+};
+
 export class ProjectManager extends EventEmitter {
-  private registry: ProjectRegistry;
+  private readonly registry: ProjectRegistryPort;
+  private readonly componentFactory: ProjectComponentFactory;
   private projects: Map<string, ProjectContext> = new Map();
   private registryWatcher?: FSWatcher;
 
-  constructor() {
+  constructor(dependencies: Partial<ProjectManagerDependencies> = {}) {
     super();
-    this.registry = new ProjectRegistry();
+    this.registry = dependencies.registry ?? defaultDependencies.registry;
+    this.componentFactory = dependencies.componentFactory ?? defaultDependencies.componentFactory;
   }
 
-  /**
-   * Initialize the project manager
-   * Loads projects from registry and starts watching for changes
-   * Note: MCP servers handle their own lifecycle cleanup via stop()
-   */
   async initialize(): Promise<void> {
-    // Clean up stale instances once at startup (self-healing for crashes)
     await this.registry.cleanupStaleProjects();
-
-    // Load all projects from registry
     await this.loadProjectsFromRegistry();
-
-    // Watch registry file for changes
     this.startRegistryWatcher();
-
-    // Note: Removed periodic cleanup interval
-    // MCP servers are responsible for cleaning up their own instances on stop()
-    // The cleanup at startup handles any orphaned instances from crashes
   }
 
-  /**
-   * Load all projects from the registry
-   */
   private async loadProjectsFromRegistry(): Promise<void> {
     const entries = await this.registry.getAllProjects();
-
     for (const entry of entries) {
       if (!this.projects.has(entry.projectId)) {
         await this.addProject(entry);
@@ -63,171 +132,122 @@ export class ProjectManager extends EventEmitter {
     }
   }
 
-  /**
-   * Start watching the registry file for changes
-   */
   private startRegistryWatcher(): void {
     const registryPath = this.registry.getRegistryPath();
-
     this.registryWatcher = chokidar.watch(registryPath, {
       ignoreInitial: true,
       persistent: true,
       ignorePermissionErrors: true
     });
 
-    this.registryWatcher.on('change', async () => {
-      await this.syncWithRegistry();
-    });
+    const syncWithRegistry = () => {
+      void this.syncWithRegistry().catch((error) => {
+        this.emitProjectManagerError({ stage: 'registry_sync', error });
+      });
+    };
 
-    this.registryWatcher.on('add', async () => {
-      await this.syncWithRegistry();
-    });
-
-    // Add error handler to prevent watcher crashes
+    this.registryWatcher.on('change', syncWithRegistry);
+    this.registryWatcher.on('add', syncWithRegistry);
     this.registryWatcher.on('error', (error: unknown) => {
-      console.error('Registry watcher error:', error);
-      // Don't propagate error to prevent system crash
+      this.emitProjectManagerError({ stage: 'registry_watcher', error });
     });
   }
 
-  /**
-   * Sync current projects with registry
-   * Add new projects, remove deleted ones, update instances for existing projects
-   */
+  private emitProjectManagerError(event: ProjectManagerErrorEvent): void {
+    console.error(`Project manager error (${event.stage}):`, event.error);
+    this.emit('project-manager-error', event);
+  }
+
   private async syncWithRegistry(): Promise<void> {
-    try {
-      const entries = await this.registry.getAllProjects();
-      const registryIds = new Set(entries.map(e => e.projectId));
-      const currentIds = new Set(this.projects.keys());
+    const entries = await this.registry.getAllProjects();
+    const registryIds = new Set(entries.map((entry) => entry.projectId));
+    const currentIds = new Set(this.projects.keys());
 
-      // Add new projects or update instances for existing ones
-      for (const entry of entries) {
-        if (!currentIds.has(entry.projectId)) {
-          await this.addProject(entry);
-        } else {
-          // Update instances for existing project
-          const project = this.projects.get(entry.projectId);
-          if (project) {
-            project.instances = entry.instances || [];
-          }
-        }
+    for (const entry of entries) {
+      if (!currentIds.has(entry.projectId)) {
+        await this.addProject(entry);
+        continue;
       }
-
-      // Remove deleted projects
-      for (const projectId of currentIds) {
-        if (!registryIds.has(projectId)) {
-          await this.removeProject(projectId);
-        }
+      const project = this.projects.get(entry.projectId);
+      if (project) {
+        project.instances = entry.instances;
       }
-
-      // Emit projects update event
-      this.emit('projects-update', this.getProjectsList());
-    } catch (error) {
-      console.error('Error syncing with registry:', error);
     }
+
+    for (const projectId of currentIds) {
+      if (!registryIds.has(projectId)) {
+        await this.removeProject(projectId);
+      }
+    }
+
+    this.emit('projects-update', this.getProjectsList());
   }
 
-  /**
-   * Add a project context
-   */
   private async addProject(entry: ProjectRegistryEntry): Promise<void> {
-    try {
-      // Translate path once at entry point (components should not know about Docker)
-      const translatedPath = PathUtils.translatePath(entry.projectPath);
+    const translatedPath = PathUtils.translatePath(entry.projectPath);
+    const parser = this.componentFactory.createParser(translatedPath);
+    const watcher = this.componentFactory.createWatcher(translatedPath, parser);
+    const approvalStorage = this.componentFactory.createApprovalStorage(translatedPath, entry.projectPath);
+    const archiveService = this.componentFactory.createArchiveService(translatedPath);
 
-      const parser = new SpecParser(translatedPath);
-      const watcher = new SpecWatcher(translatedPath, parser);
-      const approvalStorage = new ApprovalStorage(translatedPath, entry.projectPath);
-      const archiveService = new SpecArchiveService(translatedPath);
+    await watcher.start();
+    await approvalStorage.start();
 
-      // Start watchers
-      await watcher.start();
-      await approvalStorage.start();
+    watcher.on('change', (event) => {
+      this.emit('spec-change', { projectId: entry.projectId, ...event });
+    });
+    watcher.on('task-update', (event) => {
+      this.emit('task-update', { projectId: entry.projectId, ...event });
+    });
+    watcher.on('steering-change', (event) => {
+      this.emit('steering-change', { projectId: entry.projectId, ...event });
+    });
+    approvalStorage.on('approval-change', () => {
+      this.emit('approval-change', { projectId: entry.projectId });
+    });
 
-      // Forward events with projectId
-      watcher.on('change', (event) => {
-        this.emit('spec-change', { projectId: entry.projectId, ...event });
-      });
+    const context: ProjectContext = {
+      projectId: entry.projectId,
+      projectPath: translatedPath,
+      originalProjectPath: entry.projectPath,
+      projectName: entry.projectName,
+      instances: entry.instances,
+      parser,
+      watcher,
+      approvalStorage,
+      archiveService,
+      autoApproveMode: false
+    };
 
-      watcher.on('task-update', (event) => {
-        this.emit('task-update', { projectId: entry.projectId, ...event });
-      });
-
-      watcher.on('steering-change', (event) => {
-        this.emit('steering-change', { projectId: entry.projectId, ...event });
-      });
-
-      approvalStorage.on('approval-change', () => {
-        this.emit('approval-change', { projectId: entry.projectId });
-      });
-
-      const context: ProjectContext = {
-        projectId: entry.projectId,
-        projectPath: translatedPath,            // Use translated path for file access
-        originalProjectPath: entry.projectPath, // Keep original for display/registry
-        projectName: entry.projectName,
-        instances: entry.instances || [],       // Track MCP server instances
-        parser,
-        watcher,
-        approvalStorage,
-        archiveService,
-        autoApproveMode: false
-      };
-
-      this.projects.set(entry.projectId, context);
-      console.error(`Project added: ${entry.projectName} (${entry.projectId})`);
-
-      // Emit project added event
-      this.emit('project-added', entry.projectId);
-    } catch (error) {
-      console.error(`Failed to add project ${entry.projectName}:`, error);
-    }
+    this.projects.set(entry.projectId, context);
+    console.error(`Project added: ${entry.projectName} (${entry.projectId})`);
+    this.emit('project-added', entry.projectId);
   }
 
-  /**
-   * Remove a project context
-   */
   private async removeProject(projectId: string): Promise<void> {
     const context = this.projects.get(projectId);
-    if (!context) return;
-
-    try {
-      // Stop watchers
-      await context.watcher.stop();
-      await context.approvalStorage.stop();
-
-      // Remove all listeners
-      context.watcher.removeAllListeners();
-      context.approvalStorage.removeAllListeners();
-
-      this.projects.delete(projectId);
-      console.error(`Project removed: ${context.projectName} (${projectId})`);
-
-      // Emit project removed event
-      this.emit('project-removed', projectId);
-    } catch (error) {
-      console.error(`Failed to remove project ${projectId}:`, error);
+    if (!context) {
+      return;
     }
+
+    await context.watcher.stop();
+    await context.approvalStorage.stop();
+    context.watcher.removeAllListeners();
+    context.approvalStorage.removeAllListeners();
+
+    this.projects.delete(projectId);
+    console.error(`Project removed: ${context.projectName} (${projectId})`);
+    this.emit('project-removed', projectId);
   }
 
-  /**
-   * Get a project context by ID
-   */
   getProject(projectId: string): ProjectContext | undefined {
     return this.projects.get(projectId);
   }
 
-  /**
-   * Get all project contexts
-   */
   getAllProjects(): ProjectContext[] {
     return Array.from(this.projects.values());
   }
 
-  /**
-   * Get projects list for API
-   * Returns all registered projects with active status
-   */
   getProjectsList(): Array<{
     projectId: string;
     projectName: string;
@@ -235,35 +255,25 @@ export class ProjectManager extends EventEmitter {
     instances: ProjectInstance[];
     isActive: boolean;
   }> {
-    return Array.from(this.projects.values()).map(p => ({
-      projectId: p.projectId,
-      projectName: p.projectName,
-      projectPath: p.originalProjectPath,  // Return original path for display
-      instances: p.instances,
-      // Active if has real MCP instances (PID 0 is placeholder for API-registered projects)
-      isActive: p.instances.some(i => i.pid > 0)
+    return Array.from(this.projects.values()).map((project) => ({
+      projectId: project.projectId,
+      projectName: project.projectName,
+      projectPath: project.originalProjectPath,
+      instances: project.instances,
+      isActive: project.instances.some((instance) => instance.pid > 0)
     }));
   }
 
-  /**
-   * Manually add a project by path (via API)
-   * These projects are marked as persistent so they survive dashboard restarts
-   */
   async addProjectByPath(projectPath: string): Promise<string> {
     const entry = await this.registry.getProject(projectPath);
     if (entry) {
-      // Already registered
       if (!this.projects.has(entry.projectId)) {
         await this.addProject(entry);
       }
       return entry.projectId;
     }
 
-    // Register new project as persistent (survives dashboard restarts)
-    // PID 0 is used as placeholder since this is API-registered, not a real MCP server
     const projectId = await this.registry.registerProject(projectPath, 0, true);
-
-    // Get the entry and add it
     const newEntry = await this.registry.getProjectById(projectId);
     if (newEntry) {
       await this.addProject(newEntry);
@@ -272,32 +282,23 @@ export class ProjectManager extends EventEmitter {
     return projectId;
   }
 
-  /**
-   * Manually remove a project
-   */
   async removeProjectById(projectId: string): Promise<void> {
     await this.removeProject(projectId);
     await this.registry.unregisterProjectById(projectId);
   }
 
-  /**
-   * Stop the project manager
-   */
   async stop(): Promise<void> {
-    // Stop registry watcher
     if (this.registryWatcher) {
       this.registryWatcher.removeAllListeners();
       await this.registryWatcher.close();
       this.registryWatcher = undefined;
     }
 
-    // Stop all projects
     const projectIds = Array.from(this.projects.keys());
     for (const projectId of projectIds) {
       await this.removeProject(projectId);
     }
 
-    // Remove all listeners
     this.removeAllListeners();
   }
 }

@@ -3,9 +3,16 @@ import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import { validateProjectPath, PathUtils } from '../../core/workflow/path-utils.js';
 import { resolveDashboardUrlForNode } from '../../core/workflow/node-dashboard-url.js';
 import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
+import { findDashboardProjectByPath, type DashboardProject } from './dashboard-project-resolver.js';
 
 type ApprovalResolutionStatus = 'approved' | 'rejected' | 'needs-revision';
 type AutoDeleteMode = 'enabled' | 'disabled';
+type WaitForApprovalArgs = {
+  approvalId: string;
+  projectPath?: string;
+  timeoutMs?: number;
+  autoDelete?: boolean;
+};
 
 type WaitApiComment = {
   type: string;
@@ -40,6 +47,23 @@ type WaitResolvedResult = {
 };
 
 type WaitResult = WaitTimeoutResult | WaitResolvedResult;
+
+type JsonResponse = {
+  ok: boolean;
+  statusText: string;
+  json(): Promise<unknown>;
+};
+
+export interface WaitForApprovalDependencies {
+  validateProjectPath(projectPath: string): Promise<string>;
+  translateProjectPath(projectPath: string): string;
+  resolveDashboardUrl(context: ToolContext): Promise<string>;
+  fetchJson(url: string, init?: RequestInit): Promise<JsonResponse>;
+  createAbortController(): AbortController;
+  createTimeout(callback: () => void, timeoutMs: number): ReturnType<typeof setTimeout>;
+  clearTimeout(timeout: ReturnType<typeof setTimeout>): void;
+  buildApprovalDeeplink(dashboardUrl: string, approvalId: string, projectId?: string): string;
+}
 
 const RESOLVED_APPROVAL_STATUSES: readonly ApprovalResolutionStatus[] = [
   'approved',
@@ -132,6 +156,31 @@ function normalizeWaitResult(payload: WaitApiPayload): WaitResult {
   };
 }
 
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === 'AbortError';
+  }
+  return typeof error === 'object'
+    && error !== null
+    && 'name' in error
+    && (error as { name?: unknown }).name === 'AbortError';
+}
+
+function parseDashboardProjectList(payload: unknown): DashboardProject[] {
+  if (!Array.isArray(payload)) {
+    throw new Error('Dashboard project list response is not an array');
+  }
+  return payload as DashboardProject[];
+}
+
+function getFailureMessageFromPayload(payload: unknown, statusText: string): string {
+  if (typeof payload !== 'object' || payload === null || !('error' in payload)) {
+    return statusText;
+  }
+  const maybeError = (payload as { error?: unknown }).error;
+  return typeof maybeError === 'string' && maybeError.trim().length > 0 ? maybeError : statusText;
+}
+
 export const waitForApprovalTool: Tool = {
   name: 'wait-for-approval',
   description: `Wait for an approval to be resolved. Blocks until user approves, rejects, or requests revision in the dashboard.
@@ -176,169 +225,169 @@ This replaces the need to manually poll with approvals action:"status" and manua
   }
 };
 
-export async function waitForApprovalHandler(
-  args: {
-    approvalId: string;
-    projectPath?: string;
-    timeoutMs?: number;
-    autoDelete?: boolean;
-  },
+export type WaitForApprovalHandler = (
+  args: WaitForApprovalArgs,
   context: ToolContext
-): Promise<ToolResponse> {
-  const projectPath = args.projectPath || context.projectPath;
+) => Promise<ToolResponse>;
 
-  if (!projectPath) {
-    return {
-      success: false,
-      message: 'Project path is required but not provided in context or arguments'
-    };
-  }
+export function createWaitForApprovalHandler(
+  dependencies: WaitForApprovalDependencies
+): WaitForApprovalHandler {
+  return async (
+    args: WaitForApprovalArgs,
+    context: ToolContext
+  ): Promise<ToolResponse> => {
+    const projectPath = args.projectPath ?? context.projectPath;
 
-  if (!args.approvalId) {
-    return {
-      success: false,
-      message: 'approvalId is required'
-    };
-  }
-
-  try {
-    // Validate and resolve project path
-    const validatedProjectPath = await validateProjectPath(projectPath);
-    const translatedPath = PathUtils.translatePath(validatedProjectPath);
-
-    // Get dashboard URL from context
-    const dashboardUrl = context.dashboardUrl || await resolveDashboardUrlForNode();
-
-    // We need to find the projectId for this project path
-    // First, get the project list from the dashboard
-    const projectsResponse = await fetch(`${dashboardUrl}/api/projects/list`);
-    if (!projectsResponse.ok) {
+    if (!projectPath) {
       return {
         success: false,
-        message: `Dashboard not available at ${dashboardUrl}. Please start dashboard with: spec-context-dashboard`
+        message: 'Project path is required but not provided in context or arguments'
       };
     }
 
-    const projects = await projectsResponse.json() as Array<{ projectId: string; projectPath?: string; projectName: string }>;
-
-    // Find project by path (check both translated and original paths)
-    const project = projects.find(p => {
-      if (!p.projectPath) return false;
-      return p.projectPath === translatedPath ||
-        p.projectPath === validatedProjectPath ||
-        p.projectPath.endsWith(validatedProjectPath.split('/').pop() || '');
-    });
-
-    if (!project) {
+    if (!args.approvalId) {
       return {
         success: false,
-        message: `Project not registered with dashboard. Path: ${validatedProjectPath}`,
+        message: 'approvalId is required'
+      };
+    }
+
+    try {
+      const validatedProjectPath = await dependencies.validateProjectPath(projectPath);
+      const translatedPath = dependencies.translateProjectPath(validatedProjectPath);
+      const dashboardUrl = await dependencies.resolveDashboardUrl(context);
+
+      const projectsResponse = await dependencies.fetchJson(`${dashboardUrl}/api/projects/list`);
+      if (!projectsResponse.ok) {
+        return {
+          success: false,
+          message: `Dashboard not available at ${dashboardUrl}. Please start dashboard with: spec-context-dashboard`
+        };
+      }
+
+      const projectsPayload = await projectsResponse.json();
+      const projects = parseDashboardProjectList(projectsPayload);
+      const project = findDashboardProjectByPath(projects, validatedProjectPath, translatedPath);
+      if (!project) {
+        return {
+          success: false,
+          message: `Project not registered with dashboard. Path: ${validatedProjectPath}`,
+          nextSteps: [
+            'Ensure dashboard is running: spec-context-dashboard',
+            'The MCP server should auto-register on startup'
+          ]
+        };
+      }
+
+      const timeoutMs = Math.min(args.timeoutMs ?? 600000, 1800000);
+      const autoDeleteMode = resolveAutoDeleteMode(args.autoDelete);
+      const waitUrl = `${dashboardUrl}/api/projects/${project.projectId}/approvals/${args.approvalId}/wait?timeout=${timeoutMs}&autoDelete=${isAutoDeleteEnabled(autoDeleteMode)}`;
+      const approvalUrl = dependencies.buildApprovalDeeplink(dashboardUrl, args.approvalId, project.projectId);
+
+      const controller = dependencies.createAbortController();
+      const fetchTimeout = dependencies.createTimeout(() => controller.abort(), timeoutMs + 5000);
+
+      try {
+        const waitResponse = await dependencies.fetchJson(waitUrl, { signal: controller.signal });
+        dependencies.clearTimeout(fetchTimeout);
+
+        if (!waitResponse.ok) {
+          const errorPayload = await waitResponse.json();
+          return {
+            success: false,
+            message: `Wait failed: ${getFailureMessageFromPayload(errorPayload, waitResponse.statusText)}`
+          };
+        }
+
+        const rawResult = await waitResponse.json() as WaitApiPayload;
+        const waitResult = normalizeWaitResult(rawResult);
+        if (waitResult.kind === 'timeout') {
+          return {
+            success: false,
+            message: waitResult.message ?? 'Timeout waiting for approval. User has not responded yet.',
+            data: {
+              approvalId: args.approvalId,
+              status: 'pending',
+              timeout: true,
+              approvalUrl,
+            },
+            nextSteps: [
+              'Call wait-for-approval again to continue waiting',
+              'Or check dashboard to see if user is available',
+              `Review in dashboard: ${approvalUrl}`
+            ]
+          };
+        }
+
+        const canProceed = waitResult.status === 'approved';
+        const nextSteps = STATUS_NEXT_STEP_BUILDERS[waitResult.status](waitResult);
+
+        return {
+          success: true,
+          message: `Approval resolved: ${waitResult.status}${waitResult.autoDeleted ? ' (auto-cleaned)' : ''}`,
+          data: {
+            approvalId: args.approvalId,
+            status: waitResult.status,
+            response: waitResult.response,
+            annotations: waitResult.annotations,
+            comments: waitResult.comments,
+            respondedAt: waitResult.respondedAt,
+            autoDeleted: waitResult.autoDeleted,
+            canProceed,
+            approvalUrl,
+          },
+          nextSteps,
+          projectContext: {
+            projectPath: validatedProjectPath,
+            workflowRoot: `${validatedProjectPath}/.spec-context`,
+            dashboardUrl
+          }
+        };
+      } catch (fetchError) {
+        dependencies.clearTimeout(fetchTimeout);
+        if (isAbortError(fetchError)) {
+          return {
+            success: false,
+            message: 'Request timed out waiting for approval',
+            data: {
+              approvalId: args.approvalId,
+              status: 'pending',
+              timeout: true,
+              approvalUrl
+            },
+            nextSteps: [
+              'Call wait-for-approval again to continue waiting',
+              `Review in dashboard: ${approvalUrl}`
+            ]
+          };
+        }
+        throw fetchError;
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        message: `Failed to wait for approval: ${errorMessage}`,
         nextSteps: [
-          'Ensure dashboard is running: spec-context-dashboard',
-          'The MCP server should auto-register on startup'
+          'Ensure dashboard is running',
+          'Check network connectivity',
+          'Verify approvalId is correct'
         ]
       };
     }
-
-    // Build wait endpoint URL
-    const timeoutMs = Math.min(args.timeoutMs || 600000, 1800000);
-    const autoDeleteMode = resolveAutoDeleteMode(args.autoDelete);
-    const waitUrl = `${dashboardUrl}/api/projects/${project.projectId}/approvals/${args.approvalId}/wait?timeout=${timeoutMs}&autoDelete=${isAutoDeleteEnabled(autoDeleteMode)}`;
-    const approvalUrl = buildApprovalDeeplink(dashboardUrl, args.approvalId, project.projectId);
-
-    // Call the wait endpoint (this will block)
-    const controller = new AbortController();
-    const fetchTimeout = setTimeout(() => controller.abort(), timeoutMs + 5000); // Extra buffer for network
-
-    try {
-      const response = await fetch(waitUrl, { signal: controller.signal });
-      clearTimeout(fetchTimeout);
-
-      if (!response.ok) {
-        const error = await response.json() as { error?: string };
-        return {
-          success: false,
-          message: `Wait failed: ${error.error || response.statusText}`
-        };
-      }
-
-      const rawResult = await response.json() as WaitApiPayload;
-      const waitResult = normalizeWaitResult(rawResult);
-
-      if (waitResult.kind === 'timeout') {
-        return {
-          success: false,
-          message: waitResult.message || 'Timeout waiting for approval. User has not responded yet.',
-          data: {
-            approvalId: args.approvalId,
-            status: 'pending',
-            timeout: true,
-            approvalUrl,
-          },
-          nextSteps: [
-            'Call wait-for-approval again to continue waiting',
-            'Or check dashboard to see if user is available',
-            `Review in dashboard: ${approvalUrl}`
-          ]
-        };
-      }
-
-      const canProceed = waitResult.status === 'approved';
-      const nextSteps = STATUS_NEXT_STEP_BUILDERS[waitResult.status](waitResult);
-
-      return {
-        success: true,
-        message: `Approval resolved: ${waitResult.status}${waitResult.autoDeleted ? ' (auto-cleaned)' : ''}`,
-        data: {
-          approvalId: args.approvalId,
-          status: waitResult.status,
-          response: waitResult.response,
-          annotations: waitResult.annotations,
-          comments: waitResult.comments,
-          respondedAt: waitResult.respondedAt,
-          autoDeleted: waitResult.autoDeleted,
-          canProceed,
-          approvalUrl,
-        },
-        nextSteps,
-        projectContext: {
-          projectPath: validatedProjectPath,
-          workflowRoot: `${validatedProjectPath}/.spec-context`,
-          dashboardUrl
-        }
-      };
-
-    } catch (fetchError: any) {
-      clearTimeout(fetchTimeout);
-      if (fetchError.name === 'AbortError') {
-        return {
-          success: false,
-          message: 'Request timed out waiting for approval',
-          data: {
-            approvalId: args.approvalId,
-            status: 'pending',
-            timeout: true,
-            approvalUrl
-          },
-          nextSteps: [
-            'Call wait-for-approval again to continue waiting',
-            `Review in dashboard: ${approvalUrl}`
-          ]
-        };
-      }
-      throw fetchError;
-    }
-
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return {
-      success: false,
-      message: `Failed to wait for approval: ${errorMessage}`,
-      nextSteps: [
-        'Ensure dashboard is running',
-        'Check network connectivity',
-        'Verify approvalId is correct'
-      ]
-    };
-  }
+  };
 }
+
+const defaultWaitForApprovalDependencies: WaitForApprovalDependencies = {
+  validateProjectPath,
+  translateProjectPath: (projectPath) => PathUtils.translatePath(projectPath),
+  resolveDashboardUrl: async (context) => context.dashboardUrl ?? resolveDashboardUrlForNode(),
+  fetchJson: (url, init) => fetch(url, init),
+  createAbortController: () => new AbortController(),
+  createTimeout: (callback, timeoutMs) => setTimeout(callback, timeoutMs),
+  clearTimeout: (timeout) => clearTimeout(timeout),
+  buildApprovalDeeplink,
+};
+
+export const waitForApprovalHandler = createWaitForApprovalHandler(defaultWaitForApprovalDependencies);
