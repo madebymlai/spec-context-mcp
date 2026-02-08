@@ -18,7 +18,6 @@ const activeSessions: ActiveSession[] = [];
 
 async function withSession(): Promise<ActiveSession> {
   resetRegistry();
-  delete process.env.SPEC_CONTEXT_DISPATCH_RUNTIME_V2;
 
   const server = new SpecContextServer({
     name: 'spec-context-mcp-test',

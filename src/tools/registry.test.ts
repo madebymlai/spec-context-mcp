@@ -26,7 +26,6 @@ const ALL_TOOLS = stubTools([...TOOL_CATALOG_ORDER]);
 describe('registry', () => {
   beforeEach(() => {
     resetRegistry();
-    delete process.env.SPEC_CONTEXT_DISPATCH_RUNTIME_V2;
   });
 
   describe('initial state', () => {
@@ -70,26 +69,16 @@ describe('registry', () => {
       expect(getSessionMode()).toBe('orchestrator');
     });
 
-    it('shows 8 orchestrator tools when dispatch runtime v2 is disabled', () => {
+    it('shows 9 orchestrator tools including dispatch-runtime', () => {
       processToolCall('spec-workflow-guide');
       const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
-      expect(visible).toHaveLength(8);
+      expect(visible).toHaveLength(9);
       expect(visible).toContain('spec-workflow-guide');
       expect(visible).toContain('steering-guide');
       expect(visible).toContain('get-brainstorm-guide');
       expect(visible).toContain('spec-status');
       expect(visible).toContain('approvals');
       expect(visible).toContain('wait-for-approval');
-      expect(visible).not.toContain('dispatch-runtime');
-      expect(visible).toContain('search');
-      expect(visible).toContain('code_research');
-    });
-
-    it('shows dispatch-runtime when v2 flag is enabled', () => {
-      process.env.SPEC_CONTEXT_DISPATCH_RUNTIME_V2 = '1';
-      processToolCall('spec-workflow-guide');
-      const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
-      expect(visible).toHaveLength(9);
       expect(visible).toContain('dispatch-runtime');
       expect(visible).toContain('search');
       expect(visible).toContain('code_research');
@@ -139,11 +128,11 @@ describe('registry', () => {
       escalateTier();
       expect(getVisibilityTier()).toBe(3);
       const visible = filterVisibleTools(ALL_TOOLS).map(t => t.name);
-      // L3 = all tools minus dispatch-runtime when v2 disabled
-      expect(visible).toHaveLength(10);
+      expect(visible).toHaveLength(11);
       expect(visible).toContain('code_research');
       expect(visible).toContain('approvals');
       expect(visible).toContain('get-reviewer-guide');
+      expect(visible).toContain('dispatch-runtime');
     });
   });
 

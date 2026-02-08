@@ -15,7 +15,6 @@
  *   - Pre-check gate: server rejects calls to non-visible tools (isToolVisible).
  */
 import type { Tool } from './index.js';
-import { isDispatchRuntimeV2Enabled } from '../config/dispatch-runtime.js';
 import { ENTRY_POINT_MODE_MAP, TOOL_TIERS_BY_MODE, type ToolName } from './catalog.js';
 
 export type SessionMode = 'undetermined' | 'orchestrator' | 'implementer' | 'reviewer';
@@ -61,13 +60,7 @@ export function getVisibilityTier(): VisibilityTier {
  */
 export function isToolVisible(name: string): boolean {
   const visible = MODE_TIERS[currentMode][currentTier - 1];
-  if (!visible.has(name)) {
-    return false;
-  }
-  if (name === 'dispatch-runtime' && !isDispatchRuntimeV2Enabled()) {
-    return false;
-  }
-  return true;
+  return visible.has(name);
 }
 
 /** Filter an array of tools to only those visible in the current mode and tier. */
