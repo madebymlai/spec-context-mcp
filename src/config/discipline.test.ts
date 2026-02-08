@@ -69,13 +69,13 @@ describe('discipline config', () => {
   describe('resolveAgentCli', () => {
     it('resolves claude implementer', () => {
       expect(resolveAgentCli('claude', 'implementer')).toBe(
-        'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__spec-status"'
+        'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__spec-status" --'
       );
     });
 
     it('resolves claude reviewer', () => {
       expect(resolveAgentCli('claude', 'reviewer')).toBe(
-        'claude -p --allowedTools "Bash Read Glob Grep mcp__*__get-reviewer-guide mcp__*__search"'
+        'claude -p --allowedTools "Bash Read Glob Grep mcp__*__get-reviewer-guide mcp__*__search" --'
       );
     });
 
@@ -105,7 +105,7 @@ describe('discipline config', () => {
 
     it('resolves known aliases', () => {
       expect(resolveAgentCli('claude-code', 'reviewer')).toBe(
-        'claude -p --allowedTools "Bash Read Glob Grep mcp__*__get-reviewer-guide mcp__*__search"'
+        'claude -p --allowedTools "Bash Read Glob Grep mcp__*__get-reviewer-guide mcp__*__search" --'
       );
       expect(resolveAgentCli('codex-cli', 'implementer')).toBe('codex exec --full-auto');
       expect(resolveAgentCli('gemini-cli', 'reviewer')).toBe('gemini --plan');
@@ -114,7 +114,7 @@ describe('discipline config', () => {
 
     it('is case-insensitive', () => {
       expect(resolveAgentCli('Claude', 'implementer')).toBe(
-        'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__spec-status"'
+        'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__spec-status" --'
       );
       expect(resolveAgentCli('CODEX', 'reviewer')).toBe('codex exec --sandbox read-only');
       expect(resolveAgentCli('OpEnCoDe', 'reviewer')).toBe('opencode run');
@@ -126,7 +126,7 @@ describe('discipline config', () => {
 
     it('trims whitespace', () => {
       expect(resolveAgentCli('  claude  ', 'reviewer')).toBe(
-        'claude -p --allowedTools "Bash Read Glob Grep mcp__*__get-reviewer-guide mcp__*__search"'
+        'claude -p --allowedTools "Bash Read Glob Grep mcp__*__get-reviewer-guide mcp__*__search" --'
       );
     });
   });
@@ -143,7 +143,7 @@ describe('discipline config', () => {
     it('resolves known agent for implementer', () => {
       process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
       expect(getDispatchCli('implementer')).toBe(
-        'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__spec-status"'
+        'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__spec-status" --'
       );
     });
 

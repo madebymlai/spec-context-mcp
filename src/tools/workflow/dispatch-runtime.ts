@@ -1,4 +1,6 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import type {
   RuntimeEventDraft,
   RuntimeEventEnvelope,
@@ -272,6 +274,35 @@ function normalizeLine(line: string): string {
 
 function normalizePromptText(value: string): string {
   return value.replace(/\r\n/g, '\n').trim();
+}
+
+function sanitizeDispatchPathToken(value: string, maxLen = 48): string {
+  const sanitized = value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!sanitized) {
+    return 'na';
+  }
+  return sanitized.slice(0, maxLen);
+}
+
+function buildDispatchOutputPaths(input: {
+  runId: string;
+  role: DispatchRole;
+  taskId: string;
+}): {
+  contractOutputPath: string;
+  debugOutputPath: string;
+} {
+  const runToken = sanitizeDispatchPathToken(input.runId);
+  const taskToken = sanitizeDispatchPathToken(input.taskId);
+  const roleToken = sanitizeDispatchPathToken(input.role, 16);
+  const fileStem = `spec-context-dispatch-${roleToken}-${runToken}-${taskToken}`;
+  return {
+    contractOutputPath: join(tmpdir(), `${fileStem}.contract.log`),
+    debugOutputPath: join(tmpdir(), `${fileStem}.debug.log`),
+  };
 }
 
 function uniqueNonEmptyLines(lines: string[]): string[] {
@@ -901,6 +932,8 @@ export class DispatchRuntimeManager {
     compactionStage: DispatchCompactionStage;
     compactionTrace: DispatchCompactionTrace[];
     dispatchCli: string;
+    contractOutputPath: string;
+    debugOutputPath: string;
   }> {
     let snapshot = await this.assertRunBinding(args.runId, args.taskId);
     this.bumpSchemaVersionTelemetry(DISPATCH_CONTRACT_SCHEMA_VERSION);
@@ -1146,6 +1179,11 @@ export class DispatchRuntimeManager {
     }
 
     this.bumpLedgerCompileTelemetry('ledger_only', promptTokensBefore, compiled.promptTokens);
+    const outputPaths = buildDispatchOutputPaths({
+      runId: args.runId,
+      role: args.role,
+      taskId: args.taskId,
+    });
 
     return {
       prompt: compiled.prompt,
@@ -1162,6 +1200,8 @@ export class DispatchRuntimeManager {
       compactionStage,
       compactionTrace,
       dispatchCli,
+      contractOutputPath: outputPaths.contractOutputPath,
+      debugOutputPath: outputPaths.debugOutputPath,
     };
   }
 
@@ -1909,7 +1949,7 @@ updates runtime events/snapshots, enforces output token budgets, and returns det
       },
       taskPrompt: {
         type: 'string',
-        description: 'Task prompt body for compile_prompt',
+        description: 'Optional compile_prompt override; defaults to ledger task prompt.',
       },
       maxOutputTokens: {
         type: 'number',

@@ -94,9 +94,28 @@ class DispatchPromptCompiler implements DispatchRuntimePromptCompiler {
         {
           kind: 'system',
           stable: true,
-          content: `You are an implementer agent. Output only the strict dispatch contract block:
+          content: `You are an implementer agent.
+Output MUST be exactly one strict dispatch contract block with no prose before or after:
 ${DISPATCH_RESULT_MARKERS.begin}
-{...valid JSON object...}
+<json>
+${DISPATCH_RESULT_MARKERS.end}
+
+JSON contract (exact keys, no extras):
+- task_id: string
+- status: "completed" | "blocked" | "failed"
+- summary: string
+- files_changed: string[]
+- tests: { command: string, passed: boolean, failures?: string[] }[]
+- follow_up_actions: string[]
+
+Rules:
+- task_id must be a string (not a number)
+- Include all required keys even when arrays are empty
+- Do not include any keys outside the contract
+
+Valid example:
+${DISPATCH_RESULT_MARKERS.begin}
+{"task_id":"1","status":"completed","summary":"Done","files_changed":[],"tests":[],"follow_up_actions":[]}
 ${DISPATCH_RESULT_MARKERS.end}`,
         },
       ],
@@ -109,9 +128,27 @@ ${DISPATCH_RESULT_MARKERS.end}`,
         {
           kind: 'system',
           stable: true,
-          content: `You are a reviewer agent. Output only the strict dispatch contract block:
+          content: `You are a reviewer agent.
+Output MUST be exactly one strict dispatch contract block with no prose before or after:
 ${DISPATCH_RESULT_MARKERS.begin}
-{...valid JSON object...}
+<json>
+${DISPATCH_RESULT_MARKERS.end}
+
+JSON contract (exact keys, no extras):
+- task_id: string
+- assessment: "approved" | "needs_changes" | "blocked"
+- strengths: string[]
+- issues: { severity: "critical" | "important" | "minor", file?: string, message: string, fix: string }[]
+- required_fixes: string[]
+
+Rules:
+- task_id must be a string (not a number)
+- Include all required keys even when arrays are empty
+- Do not include any keys outside the contract
+
+Valid example:
+${DISPATCH_RESULT_MARKERS.begin}
+{"task_id":"1","assessment":"approved","strengths":[],"issues":[],"required_fixes":[]}
 ${DISPATCH_RESULT_MARKERS.end}`,
         },
       ],

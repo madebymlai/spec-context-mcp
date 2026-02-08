@@ -116,8 +116,10 @@ describe('dispatch-runtime integration (no mocks)', () => {
       expect(compileImplementer.data?.guideMode).toBe('full');
       expect(compileImplementer.data?.prompt).toContain('"mode":"full"');
       expect(compileImplementer.data?.dispatch_cli).toBeTypeOf('string');
+      expect(compileImplementer.data?.contractOutputPath).toBeTypeOf('string');
+      expect(compileImplementer.data?.debugOutputPath).toBeTypeOf('string');
 
-      const implementerOutputPath = join(projectPath, 'impl.log');
+      const implementerOutputPath = String(compileImplementer.data?.contractOutputPath);
       await writeFile(
         implementerOutputPath,
         `BEGIN_DISPATCH_RESULT
@@ -131,7 +133,7 @@ END_DISPATCH_RESULT`,
         runId,
         role: 'implementer',
         taskId,
-        outputFilePath: 'impl.log',
+        outputFilePath: implementerOutputPath,
         maxOutputTokens: 500,
       });
       expect(implementerIngest.success).toBe(true);
@@ -151,8 +153,10 @@ END_DISPATCH_RESULT`,
       expect(compileReviewer.data?.deltaPacket?.ledger_summary).toBe('Parser implemented');
       expect(compileReviewer.data?.guideMode).toBe('full');
       expect(compileReviewer.data?.prompt).toContain('"mode":"full"');
+      expect(compileReviewer.data?.contractOutputPath).toBeTypeOf('string');
+      expect(compileReviewer.data?.debugOutputPath).toBeTypeOf('string');
 
-      const reviewerOutputPath = join(projectPath, 'review.log');
+      const reviewerOutputPath = String(compileReviewer.data?.contractOutputPath);
       await writeFile(
         reviewerOutputPath,
         `BEGIN_DISPATCH_RESULT
@@ -166,7 +170,7 @@ END_DISPATCH_RESULT`,
         runId,
         role: 'reviewer',
         taskId,
-        outputFilePath: 'review.log',
+        outputFilePath: reviewerOutputPath,
         maxOutputTokens: 500,
       });
       expect(reviewerIngest.success).toBe(true);

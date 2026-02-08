@@ -82,6 +82,8 @@ describe('dispatch-runtime tool', () => {
 - [ ] 9.1 Classifier fallback fixture
   - _Requirements: 1_
   - _Prompt: Role: TypeScript Developer | Task: Implement task 9.1_
+- [ ] 10.1 Missing prompt fixture
+  - _Requirements: 1_
 `,
       'utf8'
     );
@@ -189,6 +191,60 @@ END_DISPATCH_RESULT`,
     expect(result.success).toBe(false);
     expect(result.message).toContain('run_task_mismatch');
     expect(result.data?.errorCode).toBe('run_task_mismatch');
+  });
+
+  it('fails fast when compile_prompt relies on ledger and current task has no _Prompt', async () => {
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-missing-ledger-prompt',
+        specName: SPEC_NAME,
+        taskId: '10.1',
+      },
+      context
+    );
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId: 'test-run-missing-ledger-prompt',
+        role: 'implementer',
+        taskId: '10.1',
+        maxOutputTokens: 400,
+      },
+      context
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.data?.errorCode).toBe('progress_ledger_incomplete');
+    expect(result.message).toContain('missing_task_prompt');
+  });
+
+  it('dry run: compile_prompt loads _Prompt from ledger when taskPrompt is omitted', async () => {
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-ledger-prompt-load',
+        specName: SPEC_NAME,
+        taskId: '1.1',
+      },
+      context
+    );
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'compile_prompt',
+        runId: 'test-run-ledger-prompt-load',
+        role: 'implementer',
+        taskId: '1.1',
+        maxOutputTokens: 400,
+      },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(String(result.data?.prompt)).toContain('Task 1.1: Init task fixture');
+    expect(String(result.data?.prompt)).toContain('Role: TypeScript Developer | Task: Implement task 1.1');
   });
 
   it('rejects ingest_output when taskId does not match initialized run task', async () => {
@@ -547,6 +603,14 @@ END_DISPATCH_RESULT`,
     expect(result.data?.guideCacheKey).toBe('implementer:test-run-compile');
     expect(result.data?.deltaPacket?.guide_mode).toBe('full');
     expect(result.data?.dispatch_cli).toBeTypeOf('string');
+    expect(result.data?.contractOutputPath).toBeTypeOf('string');
+    expect(result.data?.contractOutputPath).toContain('spec-context-dispatch-implementer-test-run-compile-1.contract.log');
+    expect(result.data?.debugOutputPath).toBeTypeOf('string');
+    expect(result.data?.debugOutputPath).toContain('spec-context-dispatch-implementer-test-run-compile-1.debug.log');
+    const implementerPrompt = String(result.data?.prompt ?? '');
+    expect(implementerPrompt).toContain('"follow_up_actions"');
+    expect(implementerPrompt).toContain('"tests"');
+    expect(implementerPrompt).toContain('no extras');
 
     const second = await dispatchRuntimeHandler(
       {
@@ -594,6 +658,10 @@ END_DISPATCH_RESULT`,
     expect(compile.data?.dispatch_cli).toContain('codex exec --sandbox read-only');
     expect(compile.data?.dispatch_cli).toContain('--model codex-5.3');
     expect(compile.data?.dispatch_cli).toContain('model_reasoning_effort=medium');
+    const reviewerPrompt = String(compile.data?.prompt ?? '');
+    expect(reviewerPrompt).toContain('"required_fixes"');
+    expect(reviewerPrompt).toContain('"issues"');
+    expect(reviewerPrompt).toContain('"assessment"');
   });
 
   it('keeps stable prefix hash constant and preserves explicit task prompt override', async () => {
