@@ -143,16 +143,25 @@ export class ApprovalStorage extends EventEmitter {
     await fs.mkdir(this.approvalsDir, { recursive: true });
 
     // Set up file watcher for approval directory and all subdirectories
-    // This will catch new directories and files created dynamically
-    this.watcher = chokidar.watch(`${this.approvalsDir}/**/*.json`, {
-      ignoreInitial: false,
+    // Watch the directory itself (not glob pattern) to ensure events are detected
+    // on all platforms. Glob patterns may not work reliably with chokidar.
+    this.watcher = chokidar.watch(this.approvalsDir, {
+      ignoreInitial: true,
       persistent: true,
-      ignorePermissionErrors: true
+      ignorePermissionErrors: true,
+      depth: 99  // Watch all subdirectories
     });
 
-    this.watcher.on('add', () => this.scheduleApprovalChangeEmit());
-    this.watcher.on('change', () => this.scheduleApprovalChangeEmit());
-    this.watcher.on('unlink', () => this.scheduleApprovalChangeEmit());
+    // Filter to only handle .json files in the event handlers
+    const handleJsonChange = (filePath: string) => {
+      if (filePath.endsWith('.json')) {
+        this.scheduleApprovalChangeEmit();
+      }
+    };
+
+    this.watcher.on('add', handleJsonChange);
+    this.watcher.on('change', handleJsonChange);
+    this.watcher.on('unlink', handleJsonChange);
 
     // Add error handler to prevent watcher crashes
     this.watcher.on('error', (error: unknown) => {

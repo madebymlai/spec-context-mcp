@@ -123,7 +123,16 @@ export class ProjectRegistry {
       process.kill(pid, 0);
       return true;
     } catch (error) {
-      return false;
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: unknown }).code)
+        : undefined;
+      if (code === 'ESRCH') {
+        return false;
+      }
+      if (code === 'EPERM') {
+        return true;
+      }
+      throw error;
     }
   }
 

@@ -6,6 +6,7 @@ import { buildApprovalDeeplink } from '../../core/workflow/dashboard-url.js';
 import { readFile } from 'fs/promises';
 import { validateTasksMarkdown, formatValidationErrors } from '../../core/workflow/task-validator.js';
 import type { ApprovalStoreFactory, ApprovalRecord, ApprovalStatus } from './approval-store.js';
+import { findDashboardProjectByPath } from './dashboard-project-resolver.js';
 
 async function tryResolveDashboardProjectId(
   dashboardUrl: string | undefined,
@@ -22,16 +23,8 @@ async function tryResolveDashboardProjectId(
     if (!projectsResponse.ok) return null;
 
     const projects = await projectsResponse.json() as Array<{ projectId: string; projectPath?: string; projectName: string }>;
-    const projectBaseName = validatedProjectPath.split(/[/\\]/).pop() || '';
-
-    const project = projects.find((p) => {
-      if (!p.projectPath) return false;
-      return p.projectPath === translatedProjectPath ||
-        p.projectPath === validatedProjectPath ||
-        (projectBaseName && p.projectPath.endsWith(projectBaseName));
-    });
-
-    return project?.projectId || null;
+    const project = findDashboardProjectByPath(projects, validatedProjectPath, translatedProjectPath);
+    return project?.projectId ?? null;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       return null;
