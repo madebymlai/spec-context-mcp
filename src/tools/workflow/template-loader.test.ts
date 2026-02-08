@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildBundledTemplatePath,
+  collectSteeringTemplateFingerprints,
   collectTemplateFingerprints,
+  getSteeringTemplates,
   getSpecTemplates,
+  hasSteeringTemplateFingerprintMismatch,
   hasTemplateFingerprintMismatch,
 } from './template-loader.js';
 import { TestFileContentCache } from './test-file-content-cache.js';
@@ -30,6 +33,35 @@ describe('template-loader', () => {
 
       const first = await getSpecTemplates(['requirements'], cache);
       const second = await getSpecTemplates(['requirements'], cache);
+
+      expect(first).toEqual(second);
+      expect(cache.getTelemetry().namespaces['templates.server']?.hits).toBeGreaterThan(0);
+      expect(cache.getTelemetry().namespaces['templates.server']?.misses).toBeGreaterThan(0);
+    });
+  });
+
+  describe('getSteeringTemplates', () => {
+    it('loads server-bundled steering templates', async () => {
+      const result = await getSteeringTemplates(['product']);
+
+      expect(result?.product?.source).toBe('server');
+      expect(result?.product?.path).toBe(buildBundledTemplatePath('product'));
+      expect(result?.product?.content.length).toBeGreaterThan(0);
+    });
+
+    it('loads only requested steering template types', async () => {
+      const result = await getSteeringTemplates(['principles']);
+
+      expect(result?.principles).toBeDefined();
+      expect(result?.tech).toBeUndefined();
+      expect(result?.product).toBeUndefined();
+    });
+
+    it('uses file-content cache namespace for steering templates', async () => {
+      const cache = new TestFileContentCache();
+
+      const first = await getSteeringTemplates(['tech'], cache);
+      const second = await getSteeringTemplates(['tech'], cache);
 
       expect(first).toEqual(second);
       expect(cache.getTelemetry().namespaces['templates.server']?.hits).toBeGreaterThan(0);
@@ -73,6 +105,30 @@ describe('template-loader', () => {
       });
 
       expect(mismatch).toBe(true);
+    });
+
+    it('collects steering template fingerprints after templates are cached', async () => {
+      const cache = new TestFileContentCache();
+      await getSteeringTemplates(['product', 'tech'], cache);
+
+      const fingerprints = collectSteeringTemplateFingerprints(['product', 'tech'], cache);
+
+      expect(fingerprints.product).toBeDefined();
+      expect(fingerprints.tech).toBeDefined();
+    });
+
+    it('returns false when steering template fingerprints match', async () => {
+      const cache = new TestFileContentCache();
+      await getSteeringTemplates(['product', 'tech'], cache);
+      const fingerprints = collectSteeringTemplateFingerprints(['product', 'tech'], cache);
+
+      const mismatch = hasSteeringTemplateFingerprintMismatch({
+        templates: ['product', 'tech'],
+        previous: fingerprints,
+        fileContentCache: cache,
+      });
+
+      expect(mismatch).toBe(false);
     });
   });
 });

@@ -1,5 +1,6 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { ToolContext, ToolResponse } from '../../workflow-types.js';
+import { ToolContext, ToolResponse, requireFileContentCache } from '../../workflow-types.js';
+import { getSteeringTemplates, STEERING_WORKFLOW_TEMPLATES } from './template-loader.js';
 
 export const steeringGuideTool: Tool = {
   name: 'steering-guide',
@@ -15,11 +16,15 @@ Call ONLY when user explicitly requests steering document creation or asks about
 };
 
 export async function steeringGuideHandler(args: any, context: ToolContext): Promise<ToolResponse> {
+  const fileContentCache = requireFileContentCache(context);
+  const templates = await getSteeringTemplates(STEERING_WORKFLOW_TEMPLATES, fileContentCache);
+
   return {
     success: true,
     message: 'Steering workflow guide loaded - follow this workflow exactly to avoid errors',
     data: {
       guide: getSteeringGuide(),
+      templates,
       dashboardUrl: context.dashboardUrl
     },
     nextSteps: [
@@ -46,7 +51,7 @@ flowchart TD
     Start([Start: Setup steering docs]) --> Guide[steering-guide<br/>Load workflow instructions]
 
     %% Phase 1: Product
-    Guide --> P1_Template[Check user-templates first,<br/>then read template:<br/>product-template.md]
+    Guide --> P1_Template[Use injected server template:<br/>product-template.md]
     P1_Template --> P1_Generate[Generate vision & goals]
     P1_Generate --> P1_Create[Create file:<br/>.spec-context/steering/<br/>product.md]
     P1_Create --> P1_Approve[approvals<br/>action: request<br/>filePath only]
@@ -58,7 +63,7 @@ flowchart TD
     P1_Clean -->|failed| P1_Status
 
     %% Phase 2: Tech
-    P1_Clean -->|success| P2_Template[Check user-templates first,<br/>then read template:<br/>tech-template.md]
+    P1_Clean -->|success| P2_Template[Use injected server template:<br/>tech-template.md]
     P2_Template --> P2_Analyze[Analyze tech stack]
     P2_Analyze --> P2_Create[Create file:<br/>.spec-context/steering/<br/>tech.md]
     P2_Create --> P2_Approve[approvals<br/>action: request<br/>filePath only]
@@ -70,7 +75,7 @@ flowchart TD
     P2_Clean -->|failed| P2_Status
 
     %% Phase 3: Structure
-    P2_Clean -->|success| P3_Template[Check user-templates first,<br/>then read template:<br/>structure-template.md]
+    P2_Clean -->|success| P3_Template[Use injected server template:<br/>structure-template.md]
     P3_Template --> P3_Analyze[Analyze codebase structure]
     P3_Analyze --> P3_Create[Create file:<br/>.spec-context/steering/<br/>structure.md]
     P3_Create --> P3_Approve[approvals<br/>action: request<br/>filePath only]
@@ -82,7 +87,7 @@ flowchart TD
     P3_Clean -->|failed| P3_Status
 
     %% Phase 4: Principles
-    P3_Clean -->|success| P4_Template[Check user-templates first,<br/>then read template:<br/>principles-template.md]
+    P3_Clean -->|success| P4_Template[Use injected server template:<br/>principles-template.md]
     P4_Template --> P4_Generate[Generate coding principles]
     P4_Generate --> P4_Create[Create file:<br/>.spec-context/steering/<br/>principles.md]
     P4_Create --> P4_Approve[approvals<br/>action: request<br/>filePath only]
@@ -109,8 +114,8 @@ flowchart TD
 **Purpose**: Define vision, goals, and user outcomes.
 
 **File Operations**:
-- Check for custom template: \`.spec-context/user-templates/product-template.md\`
-- Read template: \`.spec-context/templates/product-template.md\` (if no custom template)
+- Use injected template payload from this tool response first: \`data.templates.product\`
+- Use server template: \`product-template.md\` from injected payload
 - Create document: \`.spec-context/steering/product.md\`
 
 **Tools**:
@@ -119,8 +124,8 @@ flowchart TD
 
 **Process**:
 1. Load steering guide for workflow overview
-2. Check for custom template at \`.spec-context/user-templates/product-template.md\`
-3. If no custom template, read from \`.spec-context/templates/product-template.md\`
+2. Use \`data.templates.product.content\` from this tool response when available (includes resolved source + path)
+3. If \`data.templates.product\` is missing, stop and ask user to retry tool loading (no local template fallback)
 4. Generate product vision and goals
 5. Create \`product.md\` at \`.spec-context/steering/product.md\`
 6. Request approval using approvals tool with action:'request' (filePath only)
@@ -133,16 +138,16 @@ flowchart TD
 **Purpose**: Document technology decisions and architecture.
 
 **File Operations**:
-- Check for custom template: \`.spec-context/user-templates/tech-template.md\`
-- Read template: \`.spec-context/templates/tech-template.md\` (if no custom template)
+- Use injected template payload from this tool response first: \`data.templates.tech\`
+- Use server template: \`tech-template.md\` from injected payload
 - Create document: \`.spec-context/steering/tech.md\`
 
 **Tools**:
 - approvals: Manage approval workflow (actions: request, status, delete)
 
 **Process**:
-1. Check for custom template at \`.spec-context/user-templates/tech-template.md\`
-2. If no custom template, read from \`.spec-context/templates/tech-template.md\`
+1. Use \`data.templates.tech.content\` from this tool response when available (includes resolved source + path)
+2. If \`data.templates.tech\` is missing, stop and ask user to retry tool loading (no local template fallback)
 3. Analyze existing technology stack
 4. Document architectural decisions and patterns
 5. Create \`tech.md\` at \`.spec-context/steering/tech.md\`
@@ -156,16 +161,16 @@ flowchart TD
 **Purpose**: Map codebase organization and patterns.
 
 **File Operations**:
-- Check for custom template: \`.spec-context/user-templates/structure-template.md\`
-- Read template: \`.spec-context/templates/structure-template.md\` (if no custom template)
+- Use injected template payload from this tool response first: \`data.templates.structure\`
+- Use server template: \`structure-template.md\` from injected payload
 - Create document: \`.spec-context/steering/structure.md\`
 
 **Tools**:
 - approvals: Manage approval workflow (actions: request, status, delete)
 
 **Process**:
-1. Check for custom template at \`.spec-context/user-templates/structure-template.md\`
-2. If no custom template, read from \`.spec-context/templates/structure-template.md\`
+1. Use \`data.templates.structure.content\` from this tool response when available (includes resolved source + path)
+2. If \`data.templates.structure\` is missing, stop and ask user to retry tool loading (no local template fallback)
 3. Analyze directory structure and file organization
 4. Document coding patterns and conventions
 5. Create \`structure.md\` at \`.spec-context/steering/structure.md\`
@@ -179,16 +184,16 @@ flowchart TD
 **Purpose**: Define coding standards and principles.
 
 **File Operations**:
-- Check for custom template: \`.spec-context/user-templates/principles-template.md\`
-- Read template: \`.spec-context/templates/principles-template.md\` (if no custom template)
+- Use injected template payload from this tool response first: \`data.templates.principles\`
+- Use server template: \`principles-template.md\` from injected payload
 - Create document: \`.spec-context/steering/principles.md\`
 
 **Tools**:
 - approvals: Manage approval workflow (actions: request, status, delete)
 
 **Process**:
-1. Check for custom template at \`.spec-context/user-templates/principles-template.md\`
-2. If no custom template, read from \`.spec-context/templates/principles-template.md\`
+1. Use \`data.templates.principles.content\` from this tool response when available (includes resolved source + path)
+2. If \`data.templates.principles\` is missing, stop and ask user to retry tool loading (no local template fallback)
 3. Document SOLID principles with "Ask yourself" questions
 4. Document architecture rules and design patterns
 5. Define quality gates and review checklist
@@ -203,8 +208,7 @@ flowchart TD
 ## Workflow Rules
 
 - Create documents directly at specified file paths
-- Check for custom templates in \`.spec-context/user-templates/\` first
-- Read templates from \`.spec-context/templates/\` directory if no custom template exists
+- Use injected template payloads in \`data.templates\` as canonical source
 - Follow exact template structures
 - Get explicit user approval between phases (using approvals tool with action:'request')
 - Complete phases in sequence (no skipping)
