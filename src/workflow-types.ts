@@ -32,8 +32,22 @@ export interface SecurityConfig {
   allowedOrigins: string[]; // List of allowed origins for CORS
 }
 
+export interface RuntimeSettings {
+  discipline?: 'full' | 'standard' | 'minimal';
+  implementer?: string;
+  reviewer?: string;
+  implementerModelSimple?: string;
+  implementerModelComplex?: string;
+  reviewerModelSimple?: string;
+  reviewerModelComplex?: string;
+  implementerReasoningEffort?: string;
+  reviewerReasoningEffort?: string;
+  dashboardUrl?: string;
+}
+
 export interface GlobalSettings {
   automationJobs: AutomationJob[];
+  runtimeSettings?: RuntimeSettings;
   security?: SecurityConfig; // Optional for backwards compatibility
   createdAt?: string;
   lastModified?: string;

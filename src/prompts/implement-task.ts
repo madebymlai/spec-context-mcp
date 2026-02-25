@@ -28,7 +28,7 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
     throw new Error('specName is a required argument');
   }
 
-  const disciplineMode = getDisciplineMode();
+  const disciplineMode = await getDisciplineMode();
   const modeDescription = disciplineMode === 'full'
     ? 'TDD required (Red-Green-Refactor), code reviews enabled'
     : disciplineMode === 'standard'

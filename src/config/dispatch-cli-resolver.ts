@@ -6,6 +6,7 @@ import {
   resolveDispatchProvider,
 } from './discipline.js';
 import type { ComplexityLevel } from '../core/routing/types.js';
+import { resolveRuntimeSettings } from './runtime-settings.js';
 
 type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -57,15 +58,48 @@ function renderDisplay(command: string, args: readonly string[]): string {
   return [command, ...args.map(renderToken)].join(' ');
 }
 
+function normalizeOptionalValue(value: string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed;
+}
+
+function getModelOverride(args: {
+  role: DispatchRole;
+  complexity: ComplexityLevel;
+  runtimeSettings: Awaited<ReturnType<typeof resolveRuntimeSettings>>;
+}): string | null {
+  if (args.role === 'implementer') {
+    return args.complexity === 'simple'
+      ? args.runtimeSettings.implementerModelSimple.value
+      : args.runtimeSettings.implementerModelComplex.value;
+  }
+  return args.complexity === 'simple'
+    ? args.runtimeSettings.reviewerModelSimple.value
+    : args.runtimeSettings.reviewerModelComplex.value;
+}
+
+function getReasoningEffort(role: DispatchRole, runtimeSettings: Awaited<ReturnType<typeof resolveRuntimeSettings>>): string | null {
+  return role === 'implementer'
+    ? runtimeSettings.implementerReasoningEffort.value
+    : runtimeSettings.reviewerReasoningEffort.value;
+}
+
 function appendModelArgs(args: {
   baseTemplate: DispatchCommandTemplate;
   provider: CanonicalProvider;
   role: DispatchRole;
-  complexity: ComplexityLevel;
+  modelOverride: string | null;
+  reasoningEffort: string | null;
 }): DispatchExecutionCommand {
   const commandArgs = [...args.baseTemplate.args];
-  const model = readOptionalEnvVar(modelEnvVarFor(args.role, args.complexity));
-  const reasoningRaw = readOptionalEnvVar(reasoningGlobalEnvVarFor(args.role))?.toLowerCase() ?? null;
+  const model = normalizeOptionalValue(args.modelOverride);
+  const reasoningRaw = normalizeOptionalValue(args.reasoningEffort)?.toLowerCase() ?? null;
   const codexReasoningEffort = reasoningRaw && CODEX_REASONING_EFFORT_VALUES.has(reasoningRaw as CodexReasoningEffort)
     ? (reasoningRaw as CodexReasoningEffort)
     : null;
@@ -93,26 +127,40 @@ export function resolveDispatchCommandForProvider(args: {
 }): DispatchExecutionCommand {
   return appendModelArgs({
     provider: args.provider,
+    modelOverride: normalizeOptionalValue(readOptionalEnvVar(modelEnvVarFor(args.role, args.complexity))),
+    reasoningEffort: normalizeOptionalValue(readOptionalEnvVar(reasoningGlobalEnvVarFor(args.role))),
     role: args.role,
-    complexity: args.complexity,
     baseTemplate: getProviderCommandTemplate(args.provider, args.role),
   });
 }
 
-export function getDispatchCommandForComplexity(role: DispatchRole, complexity: ComplexityLevel): DispatchExecutionCommand | null {
-  const configuredValue = process.env[ROLE_ENV_VAR[role]];
-  if (!configuredValue || !configuredValue.trim()) {
+export async function getDispatchCommandForComplexity(
+  role: DispatchRole,
+  complexity: ComplexityLevel
+): Promise<DispatchExecutionCommand | null> {
+  const runtimeSettings = await resolveRuntimeSettings();
+  const configuredValue = role === 'implementer'
+    ? runtimeSettings.implementer.value
+    : runtimeSettings.reviewer.value;
+  const normalizedProvider = normalizeOptionalValue(configuredValue);
+  if (!normalizedProvider) {
     return null;
   }
 
-  const provider = resolveDispatchProvider(configuredValue);
+  const provider = resolveDispatchProvider(normalizedProvider);
   if (!provider) {
-    throw new Error(`${ROLE_ENV_VAR[role]} must reference a known provider; received "${configuredValue}"`);
+    throw new Error(`${ROLE_ENV_VAR[role]} must reference a known provider; received "${normalizedProvider}"`);
   }
 
-  return resolveDispatchCommandForProvider({
+  return appendModelArgs({
     provider,
+    modelOverride: getModelOverride({
+      role,
+      complexity,
+      runtimeSettings,
+    }),
+    reasoningEffort: getReasoningEffort(role, runtimeSettings),
     role,
-    complexity,
+    baseTemplate: getProviderCommandTemplate(provider, role),
   });
 }

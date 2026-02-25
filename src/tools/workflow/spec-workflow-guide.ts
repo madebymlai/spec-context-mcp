@@ -24,7 +24,7 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
     'Please start the dashboard with: spec-context-dashboard';
 
   // Get discipline mode
-  const disciplineMode = getDisciplineMode();
+  const disciplineMode = await getDisciplineMode();
   const reviewsRequired = disciplineMode !== 'minimal';
 
   // Get dispatch CLIs

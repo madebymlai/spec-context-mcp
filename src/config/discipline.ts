@@ -3,6 +3,8 @@
  * Reads SPEC_CONTEXT_DISCIPLINE and CLI dispatch env vars
  */
 
+import { resolveRuntimeSettings } from './runtime-settings.js';
+
 export type DisciplineMode = 'full' | 'standard' | 'minimal';
 export type DispatchRole = 'implementer' | 'reviewer';
 
@@ -130,25 +132,25 @@ export function resolveDispatchProvider(value: string): CanonicalProvider | null
 }
 
 /**
- * Get the current discipline mode from environment.
+ * Get the current discipline mode from resolved runtime settings.
  * Defaults to 'full' if not set or invalid.
  */
-export function getDisciplineMode(): DisciplineMode {
-  const value = process.env.SPEC_CONTEXT_DISCIPLINE?.toLowerCase();
+export async function getDisciplineMode(): Promise<DisciplineMode> {
+  const resolved = await resolveRuntimeSettings();
+  const mode = resolved.discipline.value;
 
-  if (!value) {
-    return DEFAULT_MODE;
+  // Keep existing warning behavior when env var is present but invalid.
+  if (resolved.discipline.source === 'default') {
+    const envValue = process.env.SPEC_CONTEXT_DISCIPLINE?.trim().toLowerCase();
+    if (envValue && !VALID_MODES.includes(envValue as DisciplineMode)) {
+      console.error(
+        `[discipline] Invalid SPEC_CONTEXT_DISCIPLINE value: "${envValue}". ` +
+        `Valid options: ${VALID_MODES.join(', ')}. Defaulting to "${DEFAULT_MODE}".`
+      );
+    }
   }
 
-  if (VALID_MODES.includes(value as DisciplineMode)) {
-    return value as DisciplineMode;
-  }
-
-  console.error(
-    `[discipline] Invalid SPEC_CONTEXT_DISCIPLINE value: "${value}". ` +
-    `Valid options: ${VALID_MODES.join(', ')}. Defaulting to "${DEFAULT_MODE}".`
-  );
-  return DEFAULT_MODE;
+  return mode;
 }
 
 /**

@@ -122,7 +122,7 @@ export async function getImplementerGuideHandler(
 
   }
 
-  const disciplineMode = getDisciplineMode();
+  const disciplineMode = await getDisciplineMode();
 
   // Check for required steering docs
   const missing = await getMissingSteeringDocs(context.projectPath, [...GUIDE_STEERING_DOCS]);

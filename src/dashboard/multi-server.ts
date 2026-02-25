@@ -34,6 +34,10 @@ import {
   SteeringContext,
 } from './services/ai-review-service.js';
 import { BudgetExceededError, BudgetGuard, createOpenRouterChat, TelemetryMeter } from '../core/llm/index.js';
+import { SettingsManager } from './settings-manager.js';
+import { resolveRuntimeSettings } from '../config/runtime-settings.js';
+import { KNOWN_AGENTS } from '../config/discipline.js';
+import type { RuntimeSettings } from '../workflow-types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -48,6 +52,67 @@ function isNotFoundError(error: unknown): boolean {
     && error !== null
     && 'code' in error
     && (error as { code?: unknown }).code === 'ENOENT';
+}
+
+const VALID_DISCIPLINES = ['full', 'standard', 'minimal'] as const;
+const VALID_DISCIPLINE_SET = new Set<string>(VALID_DISCIPLINES);
+const KNOWN_AGENT_SET = new Set<string>(KNOWN_AGENTS.map(agent => agent.trim().toLowerCase()));
+const RUNTIME_SETTINGS_KEYS = [
+  'discipline',
+  'implementer',
+  'reviewer',
+  'implementerModelSimple',
+  'implementerModelComplex',
+  'reviewerModelSimple',
+  'reviewerModelComplex',
+  'implementerReasoningEffort',
+  'reviewerReasoningEffort',
+  'dashboardUrl',
+] as const satisfies ReadonlyArray<keyof RuntimeSettings>;
+
+function sanitizeRuntimeSettingsUpdatePayload(
+  body: unknown
+): { updates: Record<string, unknown>; error?: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { updates: {}, error: 'Body must be an object' };
+  }
+
+  const payload = body as Record<string, unknown>;
+  const updates: Record<string, unknown> = {};
+
+  for (const key of RUNTIME_SETTINGS_KEYS) {
+    if (!(key in payload)) {
+      continue;
+    }
+
+    const value = payload[key];
+    if (value === null) {
+      updates[key] = null;
+      continue;
+    }
+
+    if (typeof value !== 'string') {
+      return { updates: {}, error: `Invalid ${key} value. Expected a string or null` };
+    }
+
+    if (key === 'discipline' && !VALID_DISCIPLINE_SET.has(value)) {
+      return {
+        updates: {},
+        error: `Invalid discipline value. Expected one of: ${VALID_DISCIPLINES.join(', ')}`,
+      };
+    }
+
+    if ((key === 'implementer' || key === 'reviewer') && !KNOWN_AGENT_SET.has(value.trim().toLowerCase())) {
+      return {
+        updates: {},
+        error: `Invalid ${key} provider. Expected one of: ${KNOWN_AGENTS.join(', ')}`,
+      };
+    }
+
+    updates[key] = value;
+  }
+
+  return { updates };
 }
 
 export interface MultiDashboardOptions {
@@ -1521,6 +1586,25 @@ export class MultiProjectDashboardServer {
     });
 
     // Global settings endpoints
+
+    this.app.get('/api/settings/runtime', async () => {
+      return await resolveRuntimeSettings();
+    });
+
+    this.app.put('/api/settings/runtime', async (request, reply) => {
+      const { updates, error } = sanitizeRuntimeSettingsUpdatePayload(request.body);
+      if (error) {
+        return reply.code(400).send({ error });
+      }
+
+      try {
+        const settingsManager = new SettingsManager();
+        await settingsManager.updateRuntimeSettings(updates as Partial<RuntimeSettings>);
+        return await resolveRuntimeSettings();
+      } catch (updateError: any) {
+        return reply.code(500).send({ error: updateError.message });
+      }
+    });
 
     // Get all automation jobs
     this.app.get('/api/jobs', async () => {

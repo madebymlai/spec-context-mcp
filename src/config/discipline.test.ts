@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { promises as fs } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import {
   getDisciplineMode,
   getDispatchCli,
@@ -7,62 +10,79 @@ import {
   resolveAgentCli,
   resolveDispatchProvider,
 } from './discipline.js';
+import { SettingsManager } from '../dashboard/settings-manager.js';
+import { SPEC_WORKFLOW_HOME_ENV } from '../core/workflow/global-dir.js';
 
 describe('discipline config', () => {
   const originalEnv = process.env;
+  let workflowHomeDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env = { ...originalEnv };
     delete process.env.SPEC_CONTEXT_DISCIPLINE;
     delete process.env.SPEC_CONTEXT_IMPLEMENTER;
     delete process.env.SPEC_CONTEXT_REVIEWER;
+    workflowHomeDir = join(tmpdir(), `spec-context-discipline-config-${Date.now()}-${Math.random()}`);
+    process.env[SPEC_WORKFLOW_HOME_ENV] = workflowHomeDir;
+    await fs.mkdir(workflowHomeDir, { recursive: true });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     process.env = originalEnv;
+    await fs.rm(workflowHomeDir, { recursive: true, force: true });
   });
 
   describe('getDisciplineMode', () => {
-    it('returns "full" by default when not set', () => {
-      expect(getDisciplineMode()).toBe('full');
+    it('returns "full" by default when not set', async () => {
+      await expect(getDisciplineMode()).resolves.toBe('full');
     });
 
-    it('returns "full" when set to "full"', () => {
+    it('returns "full" when set to "full"', async () => {
       process.env.SPEC_CONTEXT_DISCIPLINE = 'full';
-      expect(getDisciplineMode()).toBe('full');
+      await expect(getDisciplineMode()).resolves.toBe('full');
     });
 
-    it('returns "standard" when set to "standard"', () => {
+    it('returns "standard" when set to "standard"', async () => {
       process.env.SPEC_CONTEXT_DISCIPLINE = 'standard';
-      expect(getDisciplineMode()).toBe('standard');
+      await expect(getDisciplineMode()).resolves.toBe('standard');
     });
 
-    it('returns "minimal" when set to "minimal"', () => {
+    it('returns "minimal" when set to "minimal"', async () => {
       process.env.SPEC_CONTEXT_DISCIPLINE = 'minimal';
-      expect(getDisciplineMode()).toBe('minimal');
+      await expect(getDisciplineMode()).resolves.toBe('minimal');
     });
 
-    it('handles case insensitivity', () => {
+    it('handles case insensitivity', async () => {
       process.env.SPEC_CONTEXT_DISCIPLINE = 'FULL';
-      expect(getDisciplineMode()).toBe('full');
+      await expect(getDisciplineMode()).resolves.toBe('full');
 
       process.env.SPEC_CONTEXT_DISCIPLINE = 'Standard';
-      expect(getDisciplineMode()).toBe('standard');
+      await expect(getDisciplineMode()).resolves.toBe('standard');
 
       process.env.SPEC_CONTEXT_DISCIPLINE = 'MINIMAL';
-      expect(getDisciplineMode()).toBe('minimal');
+      await expect(getDisciplineMode()).resolves.toBe('minimal');
     });
 
-    it('returns "full" and logs warning for invalid value', () => {
+    it('returns "full" and logs warning for invalid value', async () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       process.env.SPEC_CONTEXT_DISCIPLINE = 'invalid';
-      expect(getDisciplineMode()).toBe('full');
+      await expect(getDisciplineMode()).resolves.toBe('full');
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('Invalid SPEC_CONTEXT_DISCIPLINE value')
       );
 
       consoleSpy.mockRestore();
+    });
+
+    it('uses settings.json value before env fallback', async () => {
+      process.env.SPEC_CONTEXT_DISCIPLINE = 'minimal';
+      const manager = new SettingsManager();
+      await manager.updateRuntimeSettings({
+        discipline: 'standard',
+      });
+
+      await expect(getDisciplineMode()).resolves.toBe('standard');
     });
   });
 

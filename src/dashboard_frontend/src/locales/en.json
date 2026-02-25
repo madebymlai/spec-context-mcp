@@ -501,8 +501,41 @@
     "close": "Close",
     "jobDescription": "Delete records older than {{days}} days on schedule: {{schedule}}",
     "section": {
+      "runtimeConfiguration": "Runtime Configuration",
+      "runtimeConfigurationDesc": "Override runtime dispatch settings. Empty values fall back to environment variables or defaults.",
       "automatedCleanup": "Automated Cleanup",
       "automatedCleanupDesc": "Automatically delete old approval records, specifications, and archived specifications based on a schedule. Configure cleanup jobs to run on a recurring basis across all connected projects."
+    },
+    "runtime": {
+      "loading": "Loading runtime settings...",
+      "discipline": "Discipline mode",
+      "disciplineFull": "full",
+      "disciplineStandard": "standard",
+      "disciplineMinimal": "minimal",
+      "implementerProvider": "Implementer provider",
+      "reviewerProvider": "Reviewer provider",
+      "implementerModelSimple": "Implementer model (simple)",
+      "implementerModelComplex": "Implementer model (complex)",
+      "reviewerModelSimple": "Reviewer model (simple)",
+      "reviewerModelComplex": "Reviewer model (complex)",
+      "implementerReasoningEffort": "Implementer reasoning effort",
+      "reviewerReasoningEffort": "Reviewer reasoning effort",
+      "reasoningMinimal": "minimal",
+      "reasoningLow": "low",
+      "reasoningMedium": "medium",
+      "reasoningHigh": "high",
+      "reasoningXhigh": "xhigh",
+      "fallbackOption": "Use fallback",
+      "noneOption": "empty",
+      "fallbackTemplate": "{{value}} (from {{source}})",
+      "save": "Save Runtime Settings",
+      "saving": "Saving...",
+      "clear": "Clear",
+      "source": {
+        "env": ".env",
+        "default": "default",
+        "none": "none"
+      }
     }
   },
   "changelog": {

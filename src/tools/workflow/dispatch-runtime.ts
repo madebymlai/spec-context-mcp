@@ -688,7 +688,7 @@ export class DispatchRuntimeManager {
       specName,
     });
     const routingEntry = this.routingTable.resolve(classification.level, 'implementer');
-    const dispatchCommand = getDispatchCommandForComplexity('implementer', classification.level)
+    const dispatchCommand = (await getDispatchCommandForComplexity('implementer', classification.level))
       ?? resolveDispatchCommandForProvider({
         provider: routingEntry.provider,
         role: 'implementer',
@@ -977,7 +977,7 @@ export class DispatchRuntimeManager {
       snapshotFactMap.get(DISPATCH_CLASSIFICATION_FACT_KEYS.level)
     );
     const routingEntry = this.routingTable.resolve(dispatchComplexity, args.role);
-    const dispatchCommand = getDispatchCommandForComplexity(args.role, dispatchComplexity)
+    const dispatchCommand = (await getDispatchCommandForComplexity(args.role, dispatchComplexity))
       ?? resolveDispatchCommandForProvider({
         provider: routingEntry.provider,
         role: args.role,

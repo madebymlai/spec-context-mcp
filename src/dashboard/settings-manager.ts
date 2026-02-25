@@ -1,6 +1,6 @@
 import { join } from 'path';
 import { promises as fs } from 'fs';
-import { GlobalSettings, AutomationJob } from '../workflow-types.js';
+import { GlobalSettings, AutomationJob, RuntimeSettings } from '../workflow-types.js';
 import { getGlobalDir, getPermissionErrorHelp } from '../core/workflow/global-dir.js';
 
 export class SettingsManager {
@@ -84,6 +84,34 @@ export class SettingsManager {
     const tempPath = `${this.settingsPath}.tmp`;
     await fs.writeFile(tempPath, content, 'utf-8');
     await fs.rename(tempPath, this.settingsPath);
+  }
+
+  /**
+   * Get runtime settings from global settings
+   */
+  async getRuntimeSettings(): Promise<RuntimeSettings> {
+    const settings = await this.loadSettings();
+    return settings.runtimeSettings ?? {};
+  }
+
+  /**
+   * Update runtime settings in global settings
+   */
+  async updateRuntimeSettings(updates: Partial<RuntimeSettings>): Promise<void> {
+    const settings = await this.loadSettings();
+    const nextRuntimeSettings: Record<string, unknown> = {
+      ...(settings.runtimeSettings ?? {}),
+      ...updates,
+    };
+
+    for (const [key, value] of Object.entries(nextRuntimeSettings)) {
+      if (value === null) {
+        delete nextRuntimeSettings[key];
+      }
+    }
+
+    settings.runtimeSettings = nextRuntimeSettings as RuntimeSettings;
+    await this.saveSettings(settings);
   }
 
   /**

@@ -80,7 +80,7 @@ export async function getReviewerGuideHandler(
     };
   }
 
-  const mode = getDisciplineMode();
+  const mode = await getDisciplineMode();
   const cacheKey = runId ? buildGuideCacheKey(runId) : '';
 
   if (guideMode === 'compact') {
