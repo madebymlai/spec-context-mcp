@@ -129,41 +129,39 @@ describe('discipline config', () => {
   });
 
   describe('getDispatchCli', () => {
-    it('returns null when implementer CLI not set', () => {
-      expect(getDispatchCli('implementer')).toBeNull();
+    it('returns null when implementer not configured', async () => {
+      await expect(getDispatchCli('implementer')).resolves.toBeNull();
     });
 
-    it('returns null when reviewer CLI not set', () => {
-      expect(getDispatchCli('reviewer')).toBeNull();
+    it('returns null when reviewer not configured', async () => {
+      await expect(getDispatchCli('reviewer')).resolves.toBeNull();
     });
 
-    it('resolves known agent for implementer', () => {
-      process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-      expect(getDispatchCli('implementer')).toBe(
+    it('resolves known agent for implementer from settings.json', async () => {
+      const manager = new SettingsManager();
+      await manager.updateRuntimeSettings({ implementer: 'claude' });
+      await expect(getDispatchCli('implementer')).resolves.toBe(
         'claude -p --dangerously-skip-permissions --allowedTools "Bash Read Write Edit Glob Grep mcp__*__get-implementer-guide mcp__*__search mcp__*__spec-status" --'
       );
     });
 
-    it('resolves known agent for reviewer', () => {
-      process.env.SPEC_CONTEXT_REVIEWER = 'codex';
-      expect(getDispatchCli('reviewer')).toBe('codex exec --sandbox read-only');
+    it('resolves known agent for reviewer from settings.json', async () => {
+      const manager = new SettingsManager();
+      await manager.updateRuntimeSettings({ reviewer: 'codex' });
+      await expect(getDispatchCli('reviewer')).resolves.toBe('codex exec --sandbox read-only');
     });
 
-    it('fails loud for custom commands', () => {
-      process.env.SPEC_CONTEXT_IMPLEMENTER = 'my-agent --headless';
-      expect(() => getDispatchCli('implementer')).toThrow(
+    it('fails loud for unknown provider in settings.json', async () => {
+      const manager = new SettingsManager();
+      await manager.updateRuntimeSettings({ implementer: 'my-agent --headless' });
+      await expect(getDispatchCli('implementer')).rejects.toThrow(
         'Unknown provider "my-agent --headless" for role implementer'
       );
     });
 
-    it('returns null for empty string', () => {
-      process.env.SPEC_CONTEXT_IMPLEMENTER = '';
-      expect(getDispatchCli('implementer')).toBeNull();
-    });
-
-    it('returns null for whitespace-only string', () => {
-      process.env.SPEC_CONTEXT_IMPLEMENTER = '   ';
-      expect(getDispatchCli('implementer')).toBeNull();
+    it('ignores env vars', async () => {
+      process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
+      await expect(getDispatchCli('implementer')).resolves.toBeNull();
     });
   });
 

@@ -243,25 +243,6 @@ function Content() {
     return date.toLocaleString();
   };
 
-  const getRuntimeFallbackPlaceholder = (field: RuntimeSettingsFieldKey) => {
-    if (!runtimeSettings) {
-      return '';
-    }
-
-    const setting = runtimeSettings[field];
-    if (setting.source === 'json') {
-      return '';
-    }
-
-    const sourceLabel = setting.source === 'env'
-      ? t('settings.runtime.source.env', '.env')
-      : t('settings.runtime.source.default', 'default');
-    const fallbackValue = setting.value || t('settings.runtime.source.none', 'none');
-    return t('settings.runtime.fallbackTemplate', '{{value}} (from {{source}})', {
-      value: fallbackValue,
-      source: sourceLabel,
-    });
-  };
 
   const handleRuntimeFieldChange = (field: RuntimeSettingsFieldKey, value: string) => {
     setRuntimeDraft((currentDraft) => ({
@@ -369,7 +350,7 @@ function Content() {
         {expandedSections.has('runtimeConfiguration') && (
           <div className="border-t border-gray-200 dark:border-gray-700 p-6 space-y-6">
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              {t('settings.section.runtimeConfigurationDesc', 'Override runtime dispatch settings. Empty values fall back to environment variables or defaults.')}
+              {t('settings.section.runtimeConfigurationDesc', 'Configure runtime dispatch settings. Empty values use defaults.')}
             </p>
 
             {runtimeLoading ? (
@@ -407,7 +388,7 @@ function Content() {
                         onChange={(event) => handleRuntimeFieldChange('implementer', event.target.value)}
                         className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
                       >
-                        <option value="">{getRuntimeFallbackPlaceholder('implementer') || t('settings.runtime.noneOption', 'empty')}</option>
+                        <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
                         <option value="claude">claude</option>
                         <option value="codex">codex</option>
                         <option value="gemini">gemini</option>
@@ -434,7 +415,7 @@ function Content() {
                         onChange={(event) => handleRuntimeFieldChange('reviewer', event.target.value)}
                         className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
                       >
-                        <option value="">{getRuntimeFallbackPlaceholder('reviewer') || t('settings.runtime.noneOption', 'empty')}</option>
+                        <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
                         <option value="claude">claude</option>
                         <option value="codex">codex</option>
                         <option value="gemini">gemini</option>
@@ -461,7 +442,7 @@ function Content() {
                         onChange={(event) => handleRuntimeFieldChange('implementerReasoningEffort', event.target.value)}
                         className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
                       >
-                        <option value="">{getRuntimeFallbackPlaceholder('implementerReasoningEffort') || t('settings.runtime.noneOption', 'empty')}</option>
+                        <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
                         <option value="minimal">{t('settings.runtime.reasoningMinimal', 'minimal')}</option>
                         <option value="low">{t('settings.runtime.reasoningLow', 'low')}</option>
                         <option value="medium">{t('settings.runtime.reasoningMedium', 'medium')}</option>
@@ -489,7 +470,7 @@ function Content() {
                         onChange={(event) => handleRuntimeFieldChange('reviewerReasoningEffort', event.target.value)}
                         className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
                       >
-                        <option value="">{getRuntimeFallbackPlaceholder('reviewerReasoningEffort') || t('settings.runtime.noneOption', 'empty')}</option>
+                        <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
                         <option value="minimal">{t('settings.runtime.reasoningMinimal', 'minimal')}</option>
                         <option value="low">{t('settings.runtime.reasoningLow', 'low')}</option>
                         <option value="medium">{t('settings.runtime.reasoningMedium', 'medium')}</option>
@@ -516,7 +497,7 @@ function Content() {
                         type="text"
                         value={runtimeDraft.implementerModelSimple ?? ''}
                         onChange={(event) => handleRuntimeFieldChange('implementerModelSimple', event.target.value)}
-                        placeholder={getRuntimeFallbackPlaceholder('implementerModelSimple')}
+                        placeholder=""
                         className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                       />
                       <button
@@ -539,7 +520,7 @@ function Content() {
                         type="text"
                         value={runtimeDraft.implementerModelComplex ?? ''}
                         onChange={(event) => handleRuntimeFieldChange('implementerModelComplex', event.target.value)}
-                        placeholder={getRuntimeFallbackPlaceholder('implementerModelComplex')}
+                        placeholder=""
                         className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                       />
                       <button
@@ -562,7 +543,7 @@ function Content() {
                         type="text"
                         value={runtimeDraft.reviewerModelSimple ?? ''}
                         onChange={(event) => handleRuntimeFieldChange('reviewerModelSimple', event.target.value)}
-                        placeholder={getRuntimeFallbackPlaceholder('reviewerModelSimple')}
+                        placeholder=""
                         className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                       />
                       <button
@@ -585,7 +566,7 @@ function Content() {
                         type="text"
                         value={runtimeDraft.reviewerModelComplex ?? ''}
                         onChange={(event) => handleRuntimeFieldChange('reviewerModelComplex', event.target.value)}
-                        placeholder={getRuntimeFallbackPlaceholder('reviewerModelComplex')}
+                        placeholder=""
                         className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                       />
                       <button

@@ -28,8 +28,8 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
   const reviewsRequired = disciplineMode !== 'minimal';
 
   // Get dispatch CLIs
-  const implementerCli = getDispatchCli('implementer');
-  const reviewerCli = getDispatchCli('reviewer');
+  const implementerCli = await getDispatchCli('implementer');
+  const reviewerCli = await getDispatchCli('reviewer');
 
   // Read steering docs if they exist
   const fileContentCache = requireFileContentCache(context);

@@ -1,5 +1,7 @@
 import { mkdir, rm, writeFile } from 'fs/promises';
+import { promises as fs } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RoutingTable, type ITaskComplexityClassifier } from '../../core/routing/index.js';
 import {
@@ -7,6 +9,8 @@ import {
   KeywordFactRetriever,
   RuleBasedFactExtractor,
 } from '../../core/session/index.js';
+import { SettingsManager } from '../../dashboard/settings-manager.js';
+import { SPEC_WORKFLOW_HOME_ENV } from '../../core/workflow/global-dir.js';
 
 const SPEC_NAME = 'dispatch-task-progress-ledgers';
 const SPEC_DIR = join(process.cwd(), '.spec-context', 'specs', SPEC_NAME);
@@ -16,14 +20,8 @@ const context = {
   dashboardUrl: undefined,
 };
 
-const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
-const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
-const ORIGINAL_IMPLEMENTER_MODEL_SIMPLE = process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE;
-const ORIGINAL_IMPLEMENTER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX;
-const ORIGINAL_REVIEWER_MODEL_SIMPLE = process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
-const ORIGINAL_REVIEWER_MODEL_COMPLEX = process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
-const ORIGINAL_REVIEWER_REASONING_EFFORT = process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT;
-const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+const originalEnv = process.env;
+let workflowHomeDir: string;
 let dispatchRuntimeHandler: (args: Record<string, unknown>, context: any) => Promise<any>;
 let standardDispatchRuntimeHandler: (args: Record<string, unknown>, context: any) => Promise<any>;
 let DispatchRuntimeManagerClass: typeof import('./dispatch-runtime.js').DispatchRuntimeManager;
@@ -63,18 +61,20 @@ function parseCompactionAutoArg(value: unknown): boolean | undefined {
   throw new Error('compile_prompt compactionAuto must be boolean-like');
 }
 
-function restoreEnvVar(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[key];
-    return;
-  }
-  process.env[key] = value;
-}
-
 describe('dispatch-runtime tool', () => {
   beforeAll(async () => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER || 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER || 'codex';
+    process.env = { ...originalEnv };
+    workflowHomeDir = join(tmpdir(), `dispatch-runtime-test-wfhome-${Date.now()}-${Math.random()}`);
+    await fs.mkdir(workflowHomeDir, { recursive: true });
+    process.env[SPEC_WORKFLOW_HOME_ENV] = workflowHomeDir;
+
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ implementer: 'claude', reviewer: 'codex' });
+
+    // RoutingTable.fromEnvOrDefault() still reads env vars for classification routing
+    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+
     const [coreModule, nodeModule] = await Promise.all([
       import('./dispatch-runtime.js'),
       import('./dispatch-runtime-node.js'),
@@ -275,27 +275,24 @@ describe('dispatch-runtime tool', () => {
 
   afterAll(async () => {
     await rm(SPEC_DIR, { recursive: true, force: true });
+    process.env = originalEnv;
+    await fs.rm(workflowHomeDir, { recursive: true, force: true });
   });
 
-  beforeEach(() => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
-    delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE;
-    delete process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX;
-    delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE;
-    delete process.env.SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX;
-    delete process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT;
+  beforeEach(async () => {
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({
+      implementer: 'claude',
+      reviewer: 'codex',
+      implementerModelSimple: null as any,
+      implementerModelComplex: null as any,
+      reviewerModelSimple: null as any,
+      reviewerModelComplex: null as any,
+      reviewerReasoningEffort: null as any,
+    });
   });
 
-  afterEach(() => {
-    restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER', ORIGINAL_IMPLEMENTER);
-    restoreEnvVar('SPEC_CONTEXT_REVIEWER', ORIGINAL_REVIEWER);
-    restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE', ORIGINAL_IMPLEMENTER_MODEL_SIMPLE);
-    restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX', ORIGINAL_IMPLEMENTER_MODEL_COMPLEX);
-    restoreEnvVar('SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE', ORIGINAL_REVIEWER_MODEL_SIMPLE);
-    restoreEnvVar('SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX', ORIGINAL_REVIEWER_MODEL_COMPLEX);
-    restoreEnvVar('SPEC_CONTEXT_REVIEWER_REASONING_EFFORT', ORIGINAL_REVIEWER_REASONING_EFFORT);
-    restoreEnvVar('NODE_ENV', ORIGINAL_NODE_ENV);
+  afterEach(async () => {
   });
 
   it('returns typed error when init_run cannot find tasks.md', async () => {
@@ -510,7 +507,8 @@ END_DISPATCH_RESULT`,
   });
 
   it('classifies simple tasks and selects the mapped provider during init_run', async () => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE = 'sonnet-4.5';
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ implementerModelSimple: 'sonnet-4.5' });
 
     const result = await dispatchRuntimeHandler(
       {
@@ -779,7 +777,8 @@ END_DISPATCH_RESULT`;
   });
 
   it('fails loud when implementer provider command is not canonical', async () => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'custom-provider --json';
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ implementer: 'custom-provider --json' });
 
     const result = await dispatchRuntimeHandler(
       {
@@ -792,7 +791,7 @@ END_DISPATCH_RESULT`;
     );
 
     expect(result.success).toBe(false);
-    expect(result.message).toContain('SPEC_CONTEXT_IMPLEMENTER must reference a known provider');
+    expect(result.message).toContain('must reference a known provider');
   });
 
   it('rejects extra prose outside dispatch contract markers', async () => {
@@ -883,8 +882,8 @@ END_DISPATCH_RESULT`,
   });
 
   it('returns role-specific dispatchCommand with complexity model flags', async () => {
-    process.env.SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE = 'codex-5.3';
-    process.env.SPEC_CONTEXT_REVIEWER_REASONING_EFFORT = 'medium';
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ reviewerModelSimple: 'codex-5.3', reviewerReasoningEffort: 'medium' });
 
     await dispatchRuntimeHandler(
       {

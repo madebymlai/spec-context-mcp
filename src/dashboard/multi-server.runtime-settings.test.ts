@@ -119,8 +119,6 @@ describe('MultiProjectDashboardServer runtime settings routes', () => {
   });
 
   it('PUT /api/settings/runtime accepts null values to clear stored keys', async () => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-
     const { app } = createTestServer();
     activeApps.push(app);
     const manager = new SettingsManager();
@@ -144,7 +142,7 @@ describe('MultiProjectDashboardServer runtime settings routes', () => {
 
     expect(clearResponse.statusCode).toBe(200);
     expect(clearResponse.json()).toMatchObject({
-      implementer: { value: 'claude', source: 'env' },
+      implementer: { value: null, source: 'default' },
     });
     await expect(manager.getRuntimeSettings()).resolves.toEqual({});
   });

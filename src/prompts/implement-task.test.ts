@@ -6,17 +6,6 @@ import { implementTaskPrompt } from './implement-task.js';
 import { SettingsManager } from '../dashboard/settings-manager.js';
 import { SPEC_WORKFLOW_HOME_ENV } from '../core/workflow/global-dir.js';
 
-const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
-const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
-
-function restoreEnvVar(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[key];
-    return;
-  }
-  process.env[key] = value;
-}
-
 describe('implement-task prompt', () => {
   let workflowHomeDir: string;
   const originalEnv = process.env;
@@ -32,14 +21,15 @@ describe('implement-task prompt', () => {
     await fs.mkdir(workflowHomeDir, { recursive: true });
     process.env[SPEC_WORKFLOW_HOME_ENV] = workflowHomeDir;
 
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = 'gemini';
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({
+      implementer: 'claude',
+      reviewer: 'gemini',
+    });
   });
 
   afterEach(async () => {
     process.env = originalEnv;
-    restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER', ORIGINAL_IMPLEMENTER);
-    restoreEnvVar('SPEC_CONTEXT_REVIEWER', ORIGINAL_REVIEWER);
     await fs.rm(workflowHomeDir, { recursive: true, force: true });
   });
 
@@ -62,8 +52,9 @@ describe('implement-task prompt', () => {
     expect(text).not.toContain('{dispatch_cli from reviewer compile_prompt}');
   });
 
-  it('uses runtime dispatch_and_ingest for reviewer even when SPEC_CONTEXT_REVIEWER is unset', async () => {
-    delete process.env.SPEC_CONTEXT_REVIEWER;
+  it('uses runtime dispatch_and_ingest for reviewer even when reviewer is not configured', async () => {
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ reviewer: null as any });
 
     const messages = await implementTaskPrompt.handler(
       { specName: 'sample-spec', taskId: '1.1' },

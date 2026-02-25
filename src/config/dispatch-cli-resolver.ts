@@ -10,11 +10,6 @@ import { resolveRuntimeSettings } from './runtime-settings.js';
 
 type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
-const ROLE_ENV_VAR: Record<DispatchRole, string> = {
-  implementer: 'SPEC_CONTEXT_IMPLEMENTER',
-  reviewer: 'SPEC_CONTEXT_REVIEWER',
-};
-
 const CODEX_REASONING_EFFORT_VALUES = new Set<CodexReasoningEffort>([
   'minimal',
   'low',
@@ -29,22 +24,6 @@ export interface DispatchExecutionCommand {
   command: string;
   args: string[];
   display: string;
-}
-
-function modelEnvVarFor(role: DispatchRole, complexity: ComplexityLevel): string {
-  return `${ROLE_ENV_VAR[role]}_MODEL_${complexity.toUpperCase()}`;
-}
-
-function reasoningGlobalEnvVarFor(role: DispatchRole): string {
-  return `${ROLE_ENV_VAR[role]}_REASONING_EFFORT`;
-}
-
-function readOptionalEnvVar(name: string): string | null {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    return null;
-  }
-  return value;
 }
 
 function renderToken(value: string): string {
@@ -120,15 +99,16 @@ function appendModelArgs(args: {
   };
 }
 
-export function resolveDispatchCommandForProvider(args: {
+export async function resolveDispatchCommandForProvider(args: {
   provider: CanonicalProvider;
   role: DispatchRole;
   complexity: ComplexityLevel;
-}): DispatchExecutionCommand {
+}): Promise<DispatchExecutionCommand> {
+  const runtimeSettings = await resolveRuntimeSettings();
   return appendModelArgs({
     provider: args.provider,
-    modelOverride: normalizeOptionalValue(readOptionalEnvVar(modelEnvVarFor(args.role, args.complexity))),
-    reasoningEffort: normalizeOptionalValue(readOptionalEnvVar(reasoningGlobalEnvVarFor(args.role))),
+    modelOverride: getModelOverride({ role: args.role, complexity: args.complexity, runtimeSettings }),
+    reasoningEffort: getReasoningEffort(args.role, runtimeSettings),
     role: args.role,
     baseTemplate: getProviderCommandTemplate(args.provider, args.role),
   });
@@ -149,16 +129,12 @@ export async function getDispatchCommandForComplexity(
 
   const provider = resolveDispatchProvider(normalizedProvider);
   if (!provider) {
-    throw new Error(`${ROLE_ENV_VAR[role]} must reference a known provider; received "${normalizedProvider}"`);
+    throw new Error(`${role} provider must reference a known provider; received "${normalizedProvider}"`);
   }
 
   return appendModelArgs({
     provider,
-    modelOverride: getModelOverride({
-      role,
-      complexity,
-      runtimeSettings,
-    }),
+    modelOverride: getModelOverride({ role, complexity, runtimeSettings }),
     reasoningEffort: getReasoningEffort(role, runtimeSettings),
     role,
     baseTemplate: getProviderCommandTemplate(provider, role),

@@ -1,7 +1,7 @@
 import { SettingsManager } from '../dashboard/settings-manager.js';
 import type { RuntimeSettings } from '../workflow-types.js';
 
-export type SettingSource = 'json' | 'env' | 'default';
+export type SettingSource = 'json' | 'default';
 
 export interface ResolvedSetting<T> {
   value: T;
@@ -27,14 +27,6 @@ const DISCIPLINE_VALUES: readonly DisciplineMode[] = ['full', 'standard', 'minim
 const DEFAULT_DISCIPLINE: DisciplineMode = 'full';
 const DEFAULT_DASHBOARD_URL = 'http://localhost:3000';
 
-function readOptionalEnv(name: string): string | null {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    return null;
-  }
-  return value;
-}
-
 function toOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
@@ -55,18 +47,10 @@ function toDisciplineMode(value: unknown): DisciplineMode | null {
   return normalized as DisciplineMode;
 }
 
-function resolveNullableSetting(args: {
-  jsonValue: unknown;
-  envVar: string;
-}): ResolvedSetting<string | null> {
-  const jsonValue = toOptionalString(args.jsonValue);
-  if (jsonValue !== undefined) {
-    return { value: jsonValue, source: 'json' };
-  }
-
-  const envValue = readOptionalEnv(args.envVar);
-  if (envValue !== null) {
-    return { value: envValue, source: 'env' };
+function resolveNullableSetting(jsonValue: unknown): ResolvedSetting<string | null> {
+  const value = toOptionalString(jsonValue);
+  if (value !== undefined) {
+    return { value, source: 'json' };
   }
 
   return { value: null, source: 'default' };
@@ -94,11 +78,6 @@ function resolveDashboardUrl(runtimeSettings: RuntimeSettings): ResolvedSetting<
     return { value: jsonValue, source: 'json' };
   }
 
-  const envValue = readOptionalEnv('DASHBOARD_URL');
-  if (envValue !== null) {
-    return { value: envValue, source: 'env' };
-  }
-
   return { value: DEFAULT_DASHBOARD_URL, source: 'default' };
 }
 
@@ -108,38 +87,14 @@ export async function resolveRuntimeSettings(): Promise<ResolvedRuntimeSettings>
 
   return {
     discipline: resolveDiscipline(runtimeSettings),
-    implementer: resolveNullableSetting({
-      jsonValue: runtimeSettings.implementer,
-      envVar: 'SPEC_CONTEXT_IMPLEMENTER',
-    }),
-    reviewer: resolveNullableSetting({
-      jsonValue: runtimeSettings.reviewer,
-      envVar: 'SPEC_CONTEXT_REVIEWER',
-    }),
-    implementerModelSimple: resolveNullableSetting({
-      jsonValue: runtimeSettings.implementerModelSimple,
-      envVar: 'SPEC_CONTEXT_IMPLEMENTER_MODEL_SIMPLE',
-    }),
-    implementerModelComplex: resolveNullableSetting({
-      jsonValue: runtimeSettings.implementerModelComplex,
-      envVar: 'SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX',
-    }),
-    reviewerModelSimple: resolveNullableSetting({
-      jsonValue: runtimeSettings.reviewerModelSimple,
-      envVar: 'SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE',
-    }),
-    reviewerModelComplex: resolveNullableSetting({
-      jsonValue: runtimeSettings.reviewerModelComplex,
-      envVar: 'SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX',
-    }),
-    implementerReasoningEffort: resolveNullableSetting({
-      jsonValue: runtimeSettings.implementerReasoningEffort,
-      envVar: 'SPEC_CONTEXT_IMPLEMENTER_REASONING_EFFORT',
-    }),
-    reviewerReasoningEffort: resolveNullableSetting({
-      jsonValue: runtimeSettings.reviewerReasoningEffort,
-      envVar: 'SPEC_CONTEXT_REVIEWER_REASONING_EFFORT',
-    }),
+    implementer: resolveNullableSetting(runtimeSettings.implementer),
+    reviewer: resolveNullableSetting(runtimeSettings.reviewer),
+    implementerModelSimple: resolveNullableSetting(runtimeSettings.implementerModelSimple),
+    implementerModelComplex: resolveNullableSetting(runtimeSettings.implementerModelComplex),
+    reviewerModelSimple: resolveNullableSetting(runtimeSettings.reviewerModelSimple),
+    reviewerModelComplex: resolveNullableSetting(runtimeSettings.reviewerModelComplex),
+    implementerReasoningEffort: resolveNullableSetting(runtimeSettings.implementerReasoningEffort),
+    reviewerReasoningEffort: resolveNullableSetting(runtimeSettings.reviewerReasoningEffort),
     dashboardUrl: resolveDashboardUrl(runtimeSettings),
   };
 }

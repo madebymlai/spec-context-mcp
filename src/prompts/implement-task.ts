@@ -35,7 +35,7 @@ async function handler(args: Record<string, any>, context: ToolContext): Promise
       ? 'Code reviews enabled (no TDD requirement)'
       : 'Verification only (no reviews)';
 
-  const implementerCli = getDispatchCli('implementer');
+  const implementerCli = await getDispatchCli('implementer');
   const reviewsEnabled = disciplineMode !== 'minimal';
 
   const runtimeSteps = `

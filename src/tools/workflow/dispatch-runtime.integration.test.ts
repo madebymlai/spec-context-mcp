@@ -1,9 +1,12 @@
 import { randomUUID } from 'crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolResponse } from '../../workflow-types.js';
+import { SettingsManager } from '../../dashboard/settings-manager.js';
+import { SPEC_WORKFLOW_HOME_ENV } from '../../core/workflow/global-dir.js';
 
 let handleToolCall: typeof import('../node-runtime.js').handleToolCall;
 
@@ -42,39 +45,38 @@ function findFact(response: ToolResponse, key: string): string | undefined {
   return facts?.find(fact => fact.k === key)?.v;
 }
 
-const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
-const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
+const originalEnv = process.env;
+let workflowHomeDir: string;
 
 describe('dispatch-runtime integration (no mocks)', () => {
   beforeAll(async () => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER || 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER || 'codex';
+    process.env = { ...originalEnv };
+    workflowHomeDir = join(tmpdir(), `dispatch-int-wfhome-${Date.now()}-${Math.random()}`);
+    await fs.mkdir(workflowHomeDir, { recursive: true });
+    process.env[SPEC_WORKFLOW_HOME_ENV] = workflowHomeDir;
+
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ implementer: 'claude', reviewer: 'codex' });
+
+    // RoutingTable.fromEnvOrDefault() still reads env vars for classification routing
+    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+
     const module = await import('../node-runtime.js');
     handleToolCall = module.handleToolCall;
   });
 
-  afterAll(() => {
-    if (ORIGINAL_IMPLEMENTER === undefined) {
-      delete process.env.SPEC_CONTEXT_IMPLEMENTER;
-    } else {
-      process.env.SPEC_CONTEXT_IMPLEMENTER = ORIGINAL_IMPLEMENTER;
-    }
-
-    if (ORIGINAL_REVIEWER === undefined) {
-      delete process.env.SPEC_CONTEXT_REVIEWER;
-    } else {
-      process.env.SPEC_CONTEXT_REVIEWER = ORIGINAL_REVIEWER;
-    }
+  afterAll(async () => {
+    process.env = originalEnv;
+    await fs.rm(workflowHomeDir, { recursive: true, force: true });
   });
 
-  beforeEach(() => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+  beforeEach(async () => {
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ implementer: 'claude', reviewer: 'codex' });
   });
 
-  afterEach(() => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
+  afterEach(async () => {
   });
 
   it('rejects unknown actions with fail-fast error', async () => {
@@ -95,7 +97,8 @@ describe('dispatch-runtime integration (no mocks)', () => {
   it('fails loud for unknown custom provider command', async () => {
     const projectPath = await createTempProject();
     try {
-      process.env.SPEC_CONTEXT_IMPLEMENTER = 'custom-provider --json';
+      const manager = new SettingsManager();
+      await manager.updateRuntimeSettings({ implementer: 'custom-provider --json' });
       const runId = `int-provider-${randomUUID()}`;
       const taskId = '3.2';
       await ensureSpecTasks(projectPath, 'feature-provider-gate', taskId);
@@ -107,7 +110,7 @@ describe('dispatch-runtime integration (no mocks)', () => {
         taskId,
       });
       expect(init.success).toBe(false);
-      expect(init.message).toContain('SPEC_CONTEXT_IMPLEMENTER must reference a known provider');
+      expect(init.message).toContain('must reference a known provider');
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }

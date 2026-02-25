@@ -13,10 +13,6 @@ export interface DispatchCommandTemplate {
   args: readonly string[];
 }
 
-const ENV_VARS: Record<DispatchRole, string> = {
-  implementer: 'SPEC_CONTEXT_IMPLEMENTER',
-  reviewer: 'SPEC_CONTEXT_REVIEWER',
-};
 
 /**
  * MCP tools each role is allowed to call.
@@ -156,11 +152,13 @@ export function getProviderCommandTemplate(provider: CanonicalProvider, role: Di
 
 /**
  * Get the CLI display command for a dispatch role.
- * Returns null if not configured.
+ * Reads from settings.json only. Returns null if not configured.
  */
-export function getDispatchCli(role: DispatchRole): string | null {
-  const envVar = ENV_VARS[role];
-  const value = process.env[envVar];
+export async function getDispatchCli(role: DispatchRole): Promise<string | null> {
+  const resolved = await resolveRuntimeSettings();
+  const value = role === 'implementer'
+    ? resolved.implementer.value
+    : resolved.reviewer.value;
 
   if (!value || value.trim() === '') {
     return null;

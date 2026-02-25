@@ -689,7 +689,7 @@ export class DispatchRuntimeManager {
     });
     const routingEntry = this.routingTable.resolve(classification.level, 'implementer');
     const dispatchCommand = (await getDispatchCommandForComplexity('implementer', classification.level))
-      ?? resolveDispatchCommandForProvider({
+      ?? await resolveDispatchCommandForProvider({
         provider: routingEntry.provider,
         role: 'implementer',
         complexity: classification.level,
@@ -978,7 +978,7 @@ export class DispatchRuntimeManager {
     );
     const routingEntry = this.routingTable.resolve(dispatchComplexity, args.role);
     const dispatchCommand = (await getDispatchCommandForComplexity(args.role, dispatchComplexity))
-      ?? resolveDispatchCommandForProvider({
+      ?? await resolveDispatchCommandForProvider({
         provider: routingEntry.provider,
         role: args.role,
         complexity: dispatchComplexity,

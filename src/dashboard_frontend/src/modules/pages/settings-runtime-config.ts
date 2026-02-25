@@ -1,4 +1,4 @@
-export type RuntimeSettingSource = 'json' | 'env' | 'default';
+export type RuntimeSettingSource = 'json' | 'default';
 
 export interface ResolvedRuntimeSetting<T> {
   value: T;

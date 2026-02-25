@@ -5,6 +5,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import type { ToolResponse } from '../workflow-types.js';
 import { SPEC_WORKFLOW_HOME_ENV } from '../core/workflow/global-dir.js';
+import { SettingsManager } from '../dashboard/settings-manager.js';
 
 let handleToolCall: typeof import('./node-runtime.js').handleToolCall;
 
@@ -14,8 +15,6 @@ describe('handleToolCall tool-result offloading', () => {
   const originalEnv = process.env;
 
   beforeAll(async () => {
-    process.env.SPEC_CONTEXT_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER || 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER || 'codex';
     const module = await import('./node-runtime.js');
     handleToolCall = module.handleToolCall;
   });
@@ -26,6 +25,13 @@ describe('handleToolCall tool-result offloading', () => {
     workflowHomeDir = join(tmpdir(), `tool-offload-wfhome-${Date.now()}-${Math.random()}`);
     await fs.mkdir(workflowHomeDir, { recursive: true });
     process.env[SPEC_WORKFLOW_HOME_ENV] = workflowHomeDir;
+
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ implementer: 'claude', reviewer: 'codex' });
+
+    // RoutingTable.fromEnvOrDefault() still reads env vars for classification routing
+    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
+    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
 
     testDir = join(tmpdir(), `tool-offload-test-${Date.now()}`);
     mkdirSync(join(testDir, '.spec-context', 'steering'), { recursive: true });
