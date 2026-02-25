@@ -362,7 +362,8 @@ function Content() {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-4">
+                  {/* Discipline — full width */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       {t('settings.runtime.discipline', 'Discipline mode')}
@@ -370,7 +371,7 @@ function Content() {
                     <select
                       value={runtimeDraft.discipline ?? 'full'}
                       onChange={(event) => handleRuntimeFieldChange('discipline', event.target.value)}
-                      className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
+                      className="w-full md:w-1/2 px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
                     >
                       <option value="full">{t('settings.runtime.disciplineFull', 'full')}</option>
                       <option value="standard">{t('settings.runtime.disciplineStandard', 'standard')}</option>
@@ -378,149 +379,158 @@ function Content() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {t('settings.runtime.implementerProvider', 'Implementer provider')}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={runtimeDraft.implementer ?? ''}
-                        onChange={(event) => handleRuntimeFieldChange('implementer', event.target.value)}
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
-                      >
-                        <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
-                        <option value="claude">claude</option>
-                        <option value="codex">codex</option>
-                        <option value="gemini">gemini</option>
-                        <option value="opencode">opencode</option>
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => handleRuntimeFieldClear('implementer')}
-                        className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={t('settings.runtime.clear', 'Clear')}
-                      >
-                        X
-                      </button>
+                  {/* Provider — implementer | reviewer */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        {t('settings.runtime.implementerProvider', 'Implementer provider')}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={runtimeDraft.implementer ?? ''}
+                          onChange={(event) => handleRuntimeFieldChange('implementer', event.target.value)}
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
+                        >
+                          <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
+                          <option value="claude">claude</option>
+                          <option value="codex">codex</option>
+                          <option value="gemini">gemini</option>
+                          <option value="opencode">opencode</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => handleRuntimeFieldClear('implementer')}
+                          className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                          title={t('settings.runtime.clear', 'Clear')}
+                        >
+                          X
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        {t('settings.runtime.reviewerProvider', 'Reviewer provider')}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={runtimeDraft.reviewer ?? ''}
+                          onChange={(event) => handleRuntimeFieldChange('reviewer', event.target.value)}
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
+                        >
+                          <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
+                          <option value="claude">claude</option>
+                          <option value="codex">codex</option>
+                          <option value="gemini">gemini</option>
+                          <option value="opencode">opencode</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => handleRuntimeFieldClear('reviewer')}
+                          className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                          title={t('settings.runtime.clear', 'Clear')}
+                        >
+                          X
+                        </button>
+                      </div>
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {t('settings.runtime.reviewerProvider', 'Reviewer provider')}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={runtimeDraft.reviewer ?? ''}
-                        onChange={(event) => handleRuntimeFieldChange('reviewer', event.target.value)}
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
-                      >
-                        <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
-                        <option value="claude">claude</option>
-                        <option value="codex">codex</option>
-                        <option value="gemini">gemini</option>
-                        <option value="opencode">opencode</option>
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => handleRuntimeFieldClear('reviewer')}
-                        className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={t('settings.runtime.clear', 'Clear')}
-                      >
-                        X
-                      </button>
+                  {/* Model (simple) — implementer | reviewer */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        {t('settings.runtime.implementerModelSimple', 'Implementer model (simple)')}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={runtimeDraft.implementerModelSimple ?? ''}
+                          onChange={(event) => handleRuntimeFieldChange('implementerModelSimple', event.target.value)}
+                          placeholder=""
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRuntimeFieldClear('implementerModelSimple')}
+                          className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                          title={t('settings.runtime.clear', 'Clear')}
+                        >
+                          X
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        {t('settings.runtime.reviewerModelSimple', 'Reviewer model (simple)')}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={runtimeDraft.reviewerModelSimple ?? ''}
+                          onChange={(event) => handleRuntimeFieldChange('reviewerModelSimple', event.target.value)}
+                          placeholder=""
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRuntimeFieldClear('reviewerModelSimple')}
+                          className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                          title={t('settings.runtime.clear', 'Clear')}
+                        >
+                          X
+                        </button>
+                      </div>
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {t('settings.runtime.implementerModelSimple', 'Implementer model (simple)')}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={runtimeDraft.implementerModelSimple ?? ''}
-                        onChange={(event) => handleRuntimeFieldChange('implementerModelSimple', event.target.value)}
-                        placeholder=""
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRuntimeFieldClear('implementerModelSimple')}
-                        className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={t('settings.runtime.clear', 'Clear')}
-                      >
-                        X
-                      </button>
+                  {/* Model (complex) — implementer | reviewer */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        {t('settings.runtime.implementerModelComplex', 'Implementer model (complex)')}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={runtimeDraft.implementerModelComplex ?? ''}
+                          onChange={(event) => handleRuntimeFieldChange('implementerModelComplex', event.target.value)}
+                          placeholder=""
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRuntimeFieldClear('implementerModelComplex')}
+                          className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                          title={t('settings.runtime.clear', 'Clear')}
+                        >
+                          X
+                        </button>
+                      </div>
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {t('settings.runtime.implementerModelComplex', 'Implementer model (complex)')}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={runtimeDraft.implementerModelComplex ?? ''}
-                        onChange={(event) => handleRuntimeFieldChange('implementerModelComplex', event.target.value)}
-                        placeholder=""
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRuntimeFieldClear('implementerModelComplex')}
-                        className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={t('settings.runtime.clear', 'Clear')}
-                      >
-                        X
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {t('settings.runtime.reviewerModelSimple', 'Reviewer model (simple)')}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={runtimeDraft.reviewerModelSimple ?? ''}
-                        onChange={(event) => handleRuntimeFieldChange('reviewerModelSimple', event.target.value)}
-                        placeholder=""
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRuntimeFieldClear('reviewerModelSimple')}
-                        className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={t('settings.runtime.clear', 'Clear')}
-                      >
-                        X
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {t('settings.runtime.reviewerModelComplex', 'Reviewer model (complex)')}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={runtimeDraft.reviewerModelComplex ?? ''}
-                        onChange={(event) => handleRuntimeFieldChange('reviewerModelComplex', event.target.value)}
-                        placeholder=""
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRuntimeFieldClear('reviewerModelComplex')}
-                        className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={t('settings.runtime.clear', 'Clear')}
-                      >
-                        X
-                      </button>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        {t('settings.runtime.reviewerModelComplex', 'Reviewer model (complex)')}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={runtimeDraft.reviewerModelComplex ?? ''}
+                          onChange={(event) => handleRuntimeFieldChange('reviewerModelComplex', event.target.value)}
+                          placeholder=""
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRuntimeFieldClear('reviewerModelComplex')}
+                          className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                          title={t('settings.runtime.clear', 'Clear')}
+                        >
+                          X
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
