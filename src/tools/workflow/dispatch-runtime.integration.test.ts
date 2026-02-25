@@ -77,223 +77,16 @@ describe('dispatch-runtime integration (no mocks)', () => {
     process.env.SPEC_CONTEXT_REVIEWER = 'codex';
   });
 
-  it('runs init -> compile -> ingest implementer/reviewer using real output files', async () => {
+  it('rejects unknown actions with fail-fast error', async () => {
     const projectPath = await createTempProject();
     try {
-      const runId = `int-${randomUUID()}`;
-      const taskId = '1.1';
-
-      const telemetryBefore = await callDispatch(projectPath, {
-        action: 'get_telemetry',
-        runId,
-      });
-      const dispatchBefore = Number(telemetryBefore.data?.dispatch_count ?? 0);
-      const loopsBefore = Number(telemetryBefore.data?.approval_loops ?? 0);
-
-      await ensureSpecTasks(projectPath, 'feature-integration', taskId);
-      const init = await callDispatch(projectPath, {
-        action: 'init_run',
-        runId,
-        specName: 'feature-integration',
-        taskId,
-      });
-      expect(init.success).toBe(true);
-      expect(findFact(init, 'ledger.progress.active_task_id')).toBe(taskId);
-      expect(init.data?.selected_provider).toBeTypeOf('string');
-      expect(init.data?.classification_level).toBeTypeOf('string');
-      expect(findFact(init, 'dispatch_cli')).toBeTypeOf('string');
-
-      const compileImplementer = await callDispatch(projectPath, {
+      const result = await callDispatch(projectPath, {
         action: 'compile_prompt',
-        runId,
-        role: 'implementer',
-        taskId,
-        taskPrompt: 'Implement parser behavior',
-        maxOutputTokens: 500,
+        runId: `int-${randomUUID()}`,
       });
-      expect(compileImplementer.success).toBe(true);
-      expect(compileImplementer.data?.stablePrefixHash).toHaveLength(64);
-      expect(compileImplementer.data?.guideMode).toBe('full');
-      expect(compileImplementer.data?.prompt).toContain('"mode":"full"');
-      expect(compileImplementer.data?.dispatchCommand?.command).toBeTypeOf('string');
-      expect(Array.isArray(compileImplementer.data?.dispatchCommand?.args)).toBe(true);
-      expect(compileImplementer.data?.contractOutputPath).toBeTypeOf('string');
-      expect(compileImplementer.data?.debugOutputPath).toBeTypeOf('string');
-
-      const implementerOutputPath = String(compileImplementer.data?.contractOutputPath);
-      await writeFile(
-        implementerOutputPath,
-        `BEGIN_DISPATCH_RESULT
-{"task_id":"${taskId}","status":"completed","summary":"Parser implemented","files_changed":["src/parser.ts"],"tests":[{"command":"npm test --run","passed":true}],"follow_up_actions":[]}
-END_DISPATCH_RESULT`,
-        'utf8'
-      );
-
-      const implementerIngest = await callDispatch(projectPath, {
-        action: 'ingest_output',
-        runId,
-        role: 'implementer',
-        taskId,
-        outputFilePath: implementerOutputPath,
-        maxOutputTokens: 500,
-      });
-      expect(implementerIngest.success).toBe(true);
-      expect(implementerIngest.data?.nextAction).toBe('dispatch_reviewer');
-      expect(implementerIngest.data?.snapshot?.status).toBe('running');
-      expect(findFact(implementerIngest, 'implementer_status')).toBe('completed');
-
-      const compileReviewer = await callDispatch(projectPath, {
-        action: 'compile_prompt',
-        runId,
-        role: 'reviewer',
-        taskId,
-        taskPrompt: 'Review parser behavior',
-        maxOutputTokens: 500,
-      });
-      expect(compileReviewer.success).toBe(true);
-      expect(compileReviewer.data?.deltaPacket?.ledger_summary).toBe('Parser implemented');
-      expect(compileReviewer.data?.guideMode).toBe('full');
-      expect(compileReviewer.data?.prompt).toContain('"mode":"full"');
-      expect(compileReviewer.data?.contractOutputPath).toBeTypeOf('string');
-      expect(compileReviewer.data?.debugOutputPath).toBeTypeOf('string');
-
-      const reviewerOutputPath = String(compileReviewer.data?.contractOutputPath);
-      await writeFile(
-        reviewerOutputPath,
-        `BEGIN_DISPATCH_RESULT
-{"task_id":"${taskId}","assessment":"needs_changes","strengths":["Good coverage"],"issues":[{"severity":"important","file":"src/parser.ts","message":"Edge case missing","fix":"Add branch for empty token"}],"required_fixes":["Handle empty token input"]}
-END_DISPATCH_RESULT`,
-        'utf8'
-      );
-
-      const reviewerIngest = await callDispatch(projectPath, {
-        action: 'ingest_output',
-        runId,
-        role: 'reviewer',
-        taskId,
-        outputFilePath: reviewerOutputPath,
-        maxOutputTokens: 500,
-      });
-      expect(reviewerIngest.success).toBe(true);
-      expect(reviewerIngest.data?.nextAction).toBe('dispatch_implementer_fixes');
-      expect(reviewerIngest.data?.snapshot?.status).toBe('blocked');
-      expect(findFact(reviewerIngest, 'reviewer_assessment')).toBe('needs_changes');
-
-      const telemetryAfter = await callDispatch(projectPath, {
-        action: 'get_telemetry',
-        runId,
-      });
-      expect(Number(telemetryAfter.data?.dispatch_count)).toBeGreaterThanOrEqual(dispatchBefore + 2);
-      expect(Number(telemetryAfter.data?.approval_loops)).toBeGreaterThanOrEqual(loopsBefore + 1);
-      expect(Number(telemetryAfter.data?.ledger_mode_usage?.ledger_only ?? 0)).toBeGreaterThanOrEqual(2);
-
-      const compileImplementerAgain = await callDispatch(projectPath, {
-        action: 'compile_prompt',
-        runId,
-        role: 'implementer',
-        taskId,
-        taskPrompt: 'Implement parser follow-up',
-        maxOutputTokens: 500,
-      });
-      expect(compileImplementerAgain.success).toBe(true);
-      expect(compileImplementerAgain.data?.guideMode).toBe('compact');
-      expect(compileImplementerAgain.data?.prompt).toContain('"mode":"compact"');
-    } finally {
-      await rm(projectPath, { recursive: true, force: true });
-    }
-  });
-
-  it('enforces maxOutputTokens without recording contract schema failure', async () => {
-    const projectPath = await createTempProject();
-    try {
-      const runId = `int-budget-${randomUUID()}`;
-      const taskId = '2.1';
-      await ensureSpecTasks(projectPath, 'feature-budget', taskId);
-      await callDispatch(projectPath, {
-        action: 'init_run',
-        runId,
-        specName: 'feature-budget',
-        taskId,
-      });
-
-      const oversizedSummary = 'A'.repeat(2000);
-      await writeFile(
-        join(projectPath, 'oversized.log'),
-        `BEGIN_DISPATCH_RESULT
-{"task_id":"${taskId}","status":"completed","summary":"${oversizedSummary}","files_changed":[],"tests":[{"command":"npm test --run","passed":true}],"follow_up_actions":[]}
-END_DISPATCH_RESULT`,
-        'utf8'
-      );
-
-      const ingest = await callDispatch(projectPath, {
-        action: 'ingest_output',
-        runId,
-        role: 'implementer',
-        taskId,
-        outputFilePath: 'oversized.log',
-        maxOutputTokens: 20,
-      });
-
-      expect(ingest.success).toBe(false);
-      expect(ingest.message).toContain('output_token_budget_exceeded');
-
-      const snapshot = await callDispatch(projectPath, {
-        action: 'get_snapshot',
-        runId,
-      });
-      expect(snapshot.success).toBe(true);
-      expect(snapshot.data?.snapshot?.status).toBe('running');
-      expect(findFact(snapshot, 'schema_contract_failure:last')).toBeUndefined();
-    } finally {
-      await rm(projectPath, { recursive: true, force: true });
-    }
-  });
-
-  it('treats schema-invalid output as immediate terminal failure', async () => {
-    const projectPath = await createTempProject();
-    try {
-      const runId = `int-schema-${randomUUID()}`;
-      const taskId = '3.1';
-      await ensureSpecTasks(projectPath, 'feature-schema', taskId);
-      await callDispatch(projectPath, {
-        action: 'init_run',
-        runId,
-        specName: 'feature-schema',
-        taskId,
-      });
-
-      await writeFile(
-        join(projectPath, 'invalid-review.log'),
-        `BEGIN_DISPATCH_RESULT
-{"task_id":"${taskId}","assessment":"approved"}
-END_DISPATCH_RESULT`,
-        'utf8'
-      );
-
-      const first = await callDispatch(projectPath, {
-        action: 'ingest_output',
-        runId,
-        role: 'reviewer',
-        taskId,
-        outputFilePath: 'invalid-review.log',
-      });
-      expect(first.success).toBe(false);
-      expect(first.data?.errorCode).toBe('schema_invalid');
-      expect(first.data?.nextAction).toBe('halt_schema_invalid_terminal');
-      expect(first.data?.snapshot?.status).toBe('failed');
-
-      const second = await callDispatch(projectPath, {
-        action: 'ingest_output',
-        runId,
-        role: 'reviewer',
-        taskId,
-        outputFilePath: 'invalid-review.log',
-      });
-      expect(second.success).toBe(false);
-      expect(second.data?.errorCode).toBe('schema_invalid');
-      expect(second.data?.nextAction).toBe('halt_schema_invalid_terminal');
-      expect(second.data?.snapshot?.status).toBe('failed');
-      expect(findFact(second, 'schema_contract_failure:last')).toBe('schema_invalid');
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('action must be one of');
+      expect(result.message).toContain('dispatch_and_ingest');
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }
@@ -320,147 +113,103 @@ END_DISPATCH_RESULT`,
     }
   });
 
-  it('persists blocked and failed statuses from implementer contract payload', async () => {
+  it('init_run succeeds and populates snapshot with dispatch metadata', async () => {
     const projectPath = await createTempProject();
     try {
-      const blockedRunId = `int-blocked-${randomUUID()}`;
-      const taskId = '4.1';
-      await ensureSpecTasks(projectPath, 'feature-status', taskId);
-      await callDispatch(projectPath, {
-        action: 'init_run',
-        runId: blockedRunId,
-        specName: 'feature-status',
-        taskId,
-      });
-      const blocked = await callDispatch(projectPath, {
-        action: 'ingest_output',
-        runId: blockedRunId,
-        role: 'implementer',
-        taskId,
-        outputContent: `BEGIN_DISPATCH_RESULT
-{"task_id":"${taskId}","status":"blocked","summary":"Cannot proceed without API key","files_changed":[],"tests":[{"command":"npm test --run","passed":false,"failures":["missing key"]}],"follow_up_actions":["ask user for key"]}
-END_DISPATCH_RESULT`,
-      });
-      expect(blocked.success).toBe(true);
-      expect(blocked.data?.nextAction).toBe('retry_implementer_with_constraints');
-      expect(blocked.data?.snapshot?.status).toBe('blocked');
-      expect(findFact(blocked, 'implementer_status')).toBe('blocked');
+      const runId = `int-init-${randomUUID()}`;
+      const taskId = '1.1';
+      await ensureSpecTasks(projectPath, 'feature-init', taskId);
 
-      const failedRunId = `int-failed-${randomUUID()}`;
-      await ensureSpecTasks(projectPath, 'feature-status', taskId);
-      await callDispatch(projectPath, {
+      const init = await callDispatch(projectPath, {
         action: 'init_run',
-        runId: failedRunId,
-        specName: 'feature-status',
+        runId,
+        specName: 'feature-init',
         taskId,
       });
-      const failed = await callDispatch(projectPath, {
-        action: 'ingest_output',
-        runId: failedRunId,
-        role: 'implementer',
-        taskId,
-        outputContent: `BEGIN_DISPATCH_RESULT
-{"task_id":"${taskId}","status":"failed","summary":"Build failed","files_changed":["src/a.ts"],"tests":[{"command":"npm test --run","passed":false,"failures":["compile error"]}],"follow_up_actions":["fix type errors"]}
-END_DISPATCH_RESULT`,
-      });
-      expect(failed.success).toBe(true);
-      expect(failed.data?.nextAction).toBe('retry_implementer');
-      expect(failed.data?.snapshot?.status).toBe('failed');
-      expect(findFact(failed, 'implementer_status')).toBe('failed');
+      expect(init.success).toBe(true);
+      expect(findFact(init, 'ledger.progress.active_task_id')).toBe(taskId);
+      expect(init.data?.selected_provider).toBeTypeOf('string');
+      expect(init.data?.classification_level).toBeTypeOf('string');
+      expect(findFact(init, 'dispatch_cli')).toBeTypeOf('string');
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }
   });
 
-  it('preserves stable prefix hash across compaction variants for same role/template', async () => {
+  it('get_snapshot and get_telemetry work after init_run', async () => {
     const projectPath = await createTempProject();
     try {
-      const runId = `int-prefix-${randomUUID()}`;
-      const taskId = '5.1';
-      await ensureSpecTasks(projectPath, 'feature-prefix-stability', taskId);
+      const runId = `int-snap-${randomUUID()}`;
+      const taskId = '2.1';
+      await ensureSpecTasks(projectPath, 'feature-snapshot', taskId);
+
       await callDispatch(projectPath, {
         action: 'init_run',
         runId,
-        specName: 'feature-prefix-stability',
+        specName: 'feature-snapshot',
         taskId,
       });
-
-      const baseline = await callDispatch(projectPath, {
-        action: 'compile_prompt',
-        runId,
-        role: 'implementer',
-        taskId,
-        taskPrompt: 'Implement baseline behavior',
-        maxOutputTokens: 700,
-        compactionAuto: true,
-      });
-      expect(baseline.success).toBe(true);
-      expect(baseline.data?.compactionStage).toBe('none');
-
-      const oversizedPrompt = `Implement task ${taskId}\n${'MUST preserve branch-critical constraints and strict JSON output.\n'.repeat(1200)}`;
-      const compacted = await callDispatch(projectPath, {
-        action: 'compile_prompt',
-        runId,
-        role: 'implementer',
-        taskId,
-        taskPrompt: oversizedPrompt,
-        maxOutputTokens: 700,
-        compactionAuto: true,
-      });
-      expect(compacted.success).toBe(true);
-      expect(compacted.data?.compactionApplied).toBe(true);
-      expect(compacted.data?.compactionStage).not.toBe('none');
-
-      expect(compacted.data?.stablePrefixHash).toBe(baseline.data?.stablePrefixHash);
-      expect(compacted.data?.fullPromptHash).not.toBe(baseline.data?.fullPromptHash);
-      expect(Number(compacted.data?.promptTokensAfter)).toBeLessThanOrEqual(Number(compacted.data?.promptTokenBudget));
-    } finally {
-      await rm(projectPath, { recursive: true, force: true });
-    }
-  });
-
-  it('applies compile-time compaction and records telemetry for oversized prompts', async () => {
-    const projectPath = await createTempProject();
-    try {
-      const runId = `int-compaction-${randomUUID()}`;
-      const taskId = '5.1';
-      await ensureSpecTasks(projectPath, 'feature-compaction', taskId);
-      await callDispatch(projectPath, {
-        action: 'init_run',
-        runId,
-        specName: 'feature-compaction',
-        taskId,
-      });
-
-      const oversizedPrompt = `Implement task ${taskId}\n${'MUST preserve branch-critical constraints and strict JSON output.\n'.repeat(1200)}`;
-      const compiled = await callDispatch(projectPath, {
-        action: 'compile_prompt',
-        runId,
-        role: 'implementer',
-        taskId,
-        taskPrompt: oversizedPrompt,
-        maxOutputTokens: 700,
-        compactionAuto: true,
-      });
-
-      expect(compiled.success).toBe(true);
-      expect(compiled.data?.compactionApplied).toBe(true);
-      expect(Number(compiled.data?.promptTokensAfter)).toBeLessThanOrEqual(Number(compiled.data?.promptTokenBudget));
 
       const snapshot = await callDispatch(projectPath, {
         action: 'get_snapshot',
         runId,
       });
-      expect(findFact(snapshot, 'dispatch_compacted:implementer')).toBe('true');
+      expect(snapshot.success).toBe(true);
+      expect(snapshot.data?.snapshot?.status).toBe('running');
+      expect(findFact(snapshot, 'ledger.progress.active_task_id')).toBe(taskId);
 
       const telemetry = await callDispatch(projectPath, {
         action: 'get_telemetry',
         runId,
       });
-      expect(Number(telemetry.data?.compaction_count ?? 0)).toBeGreaterThan(0);
-      expect(Number(telemetry.data?.compaction_prompt_tokens_before ?? 0)).toBeGreaterThanOrEqual(
-        Number(telemetry.data?.compaction_prompt_tokens_after ?? 0)
-      );
+      expect(telemetry.success).toBe(true);
+      expect(telemetry.data?.dispatch_count).toBeDefined();
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('dispatch_and_ingest rejects missing runId', async () => {
+    const projectPath = await createTempProject();
+    try {
+      const result = await callDispatch(projectPath, {
+        action: 'dispatch_and_ingest',
+        role: 'implementer',
+        taskId: '1.1',
+      });
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('requires runId');
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('dispatch_and_ingest rejects missing role/taskId', async () => {
+    const projectPath = await createTempProject();
+    try {
+      const result = await callDispatch(projectPath, {
+        action: 'dispatch_and_ingest',
+        runId: `int-${randomUUID()}`,
+        maxOutputTokens: 500,
+      });
+      expect(result.success).toBe(false);
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('dispatch_and_ingest rejects invalid maxOutputTokens', async () => {
+    const projectPath = await createTempProject();
+    try {
+      const result = await callDispatch(projectPath, {
+        action: 'dispatch_and_ingest',
+        runId: `int-${randomUUID()}`,
+        role: 'implementer',
+        taskId: '1.1',
+        maxOutputTokens: -5,
+      });
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('maxOutputTokens');
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }

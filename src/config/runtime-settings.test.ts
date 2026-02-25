@@ -54,7 +54,7 @@ describe('runtime settings resolution', () => {
     });
   });
 
-  it('uses env settings when json values are unset', async () => {
+  it('uses env settings when json values are unset (discipline excluded — no env fallback)', async () => {
     process.env.SPEC_CONTEXT_DISCIPLINE = 'standard';
     process.env.SPEC_CONTEXT_IMPLEMENTER = 'codex';
     process.env.SPEC_CONTEXT_REVIEWER = 'claude';
@@ -67,7 +67,7 @@ describe('runtime settings resolution', () => {
     process.env.DASHBOARD_URL = 'http://env.localhost:3210';
 
     await expect(resolveRuntimeSettings()).resolves.toEqual({
-      discipline: { value: 'standard', source: 'env' },
+      discipline: { value: 'full', source: 'default' },
       implementer: { value: 'codex', source: 'env' },
       reviewer: { value: 'claude', source: 'env' },
       implementerModelSimple: { value: 'model-simple-1', source: 'env' },
@@ -78,6 +78,12 @@ describe('runtime settings resolution', () => {
       reviewerReasoningEffort: { value: 'high', source: 'env' },
       dashboardUrl: { value: 'http://env.localhost:3210', source: 'env' },
     });
+  });
+
+  it('throws on invalid discipline in settings.json', async () => {
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ discipline: 'invalid' as any });
+    await expect(resolveRuntimeSettings()).rejects.toThrow('Invalid discipline value in settings.json');
   });
 
   it('resolves values in json > env > default priority order', async () => {

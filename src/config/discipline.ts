@@ -1,6 +1,6 @@
 /**
  * Discipline configuration module
- * Reads SPEC_CONTEXT_DISCIPLINE and CLI dispatch env vars
+ * Discipline is read from settings.json only (no env var fallback).
  */
 
 import { resolveRuntimeSettings } from './runtime-settings.js';
@@ -12,9 +12,6 @@ export interface DispatchCommandTemplate {
   command: string;
   args: readonly string[];
 }
-
-const VALID_MODES: DisciplineMode[] = ['full', 'standard', 'minimal'];
-const DEFAULT_MODE: DisciplineMode = 'full';
 
 const ENV_VARS: Record<DispatchRole, string> = {
   implementer: 'SPEC_CONTEXT_IMPLEMENTER',
@@ -133,24 +130,12 @@ export function resolveDispatchProvider(value: string): CanonicalProvider | null
 
 /**
  * Get the current discipline mode from resolved runtime settings.
- * Defaults to 'full' if not set or invalid.
+ * Reads from settings.json only (no env var fallback). Defaults to 'full'.
+ * Throws on invalid values in settings.json.
  */
 export async function getDisciplineMode(): Promise<DisciplineMode> {
   const resolved = await resolveRuntimeSettings();
-  const mode = resolved.discipline.value;
-
-  // Keep existing warning behavior when env var is present but invalid.
-  if (resolved.discipline.source === 'default') {
-    const envValue = process.env.SPEC_CONTEXT_DISCIPLINE?.trim().toLowerCase();
-    if (envValue && !VALID_MODES.includes(envValue as DisciplineMode)) {
-      console.error(
-        `[discipline] Invalid SPEC_CONTEXT_DISCIPLINE value: "${envValue}". ` +
-        `Valid options: ${VALID_MODES.join(', ')}. Defaulting to "${DEFAULT_MODE}".`
-      );
-    }
-  }
-
-  return mode;
+  return resolved.discipline.value;
 }
 
 /**

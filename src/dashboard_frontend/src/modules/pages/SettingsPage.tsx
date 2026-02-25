@@ -386,26 +386,15 @@ function Content() {
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       {t('settings.runtime.discipline', 'Discipline mode')}
                     </label>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={runtimeDraft.discipline ?? ''}
-                        onChange={(event) => handleRuntimeFieldChange('discipline', event.target.value)}
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
-                      >
-                        <option value="">{getRuntimeFallbackPlaceholder('discipline') || t('settings.runtime.fallbackOption', 'Use fallback')}</option>
-                        <option value="full">{t('settings.runtime.disciplineFull', 'full')}</option>
-                        <option value="standard">{t('settings.runtime.disciplineStandard', 'standard')}</option>
-                        <option value="minimal">{t('settings.runtime.disciplineMinimal', 'minimal')}</option>
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => handleRuntimeFieldClear('discipline')}
-                        className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={t('settings.runtime.clear', 'Clear')}
-                      >
-                        X
-                      </button>
-                    </div>
+                    <select
+                      value={runtimeDraft.discipline ?? 'full'}
+                      onChange={(event) => handleRuntimeFieldChange('discipline', event.target.value)}
+                      className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
+                    >
+                      <option value="full">{t('settings.runtime.disciplineFull', 'full')}</option>
+                      <option value="standard">{t('settings.runtime.disciplineStandard', 'standard')}</option>
+                      <option value="minimal">{t('settings.runtime.disciplineMinimal', 'minimal')}</option>
+                    </select>
                   </div>
 
                   <div>

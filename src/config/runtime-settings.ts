@@ -73,17 +73,19 @@ function resolveNullableSetting(args: {
 }
 
 function resolveDiscipline(runtimeSettings: RuntimeSettings): ResolvedSetting<DisciplineMode> {
+  if (runtimeSettings.discipline === undefined || runtimeSettings.discipline === null) {
+    return { value: DEFAULT_DISCIPLINE, source: 'default' };
+  }
+
   const jsonValue = toDisciplineMode(runtimeSettings.discipline);
-  if (jsonValue !== null) {
-    return { value: jsonValue, source: 'json' };
+  if (jsonValue === null) {
+    throw new Error(
+      `Invalid discipline value in settings.json: "${String(runtimeSettings.discipline)}". ` +
+      `Valid options: ${DISCIPLINE_VALUES.join(', ')}`
+    );
   }
 
-  const envValue = toDisciplineMode(readOptionalEnv('SPEC_CONTEXT_DISCIPLINE'));
-  if (envValue !== null) {
-    return { value: envValue, source: 'env' };
-  }
-
-  return { value: DEFAULT_DISCIPLINE, source: 'default' };
+  return { value: jsonValue, source: 'json' };
 }
 
 function resolveDashboardUrl(runtimeSettings: RuntimeSettings): ResolvedSetting<string> {

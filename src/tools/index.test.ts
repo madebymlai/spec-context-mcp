@@ -1,13 +1,16 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import { promises as fs } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { ToolResponse } from '../workflow-types.js';
+import { SPEC_WORKFLOW_HOME_ENV } from '../core/workflow/global-dir.js';
 
 let handleToolCall: typeof import('./node-runtime.js').handleToolCall;
 
 describe('handleToolCall tool-result offloading', () => {
   let testDir: string;
+  let workflowHomeDir: string;
   const originalEnv = process.env;
 
   beforeAll(async () => {
@@ -17,20 +20,25 @@ describe('handleToolCall tool-result offloading', () => {
     handleToolCall = module.handleToolCall;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env = { ...originalEnv };
+
+    workflowHomeDir = join(tmpdir(), `tool-offload-wfhome-${Date.now()}-${Math.random()}`);
+    await fs.mkdir(workflowHomeDir, { recursive: true });
+    process.env[SPEC_WORKFLOW_HOME_ENV] = workflowHomeDir;
+
     testDir = join(tmpdir(), `tool-offload-test-${Date.now()}`);
     mkdirSync(join(testDir, '.spec-context', 'steering'), { recursive: true });
     writeFileSync(join(testDir, '.spec-context', 'steering', 'tech.md'), '# Tech\nTypeScript');
     writeFileSync(join(testDir, '.spec-context', 'steering', 'principles.md'), '# Principles\nSOLID');
-    process.env.SPEC_CONTEXT_DISCIPLINE = 'full';
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     process.env = originalEnv;
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true });
     }
+    await fs.rm(workflowHomeDir, { recursive: true, force: true });
   });
 
   it('offloads large tool responses to filesystem and returns pointer + preview', async () => {

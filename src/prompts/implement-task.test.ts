@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { promises as fs } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { implementTaskPrompt } from './implement-task.js';
+import { SettingsManager } from '../dashboard/settings-manager.js';
+import { SPEC_WORKFLOW_HOME_ENV } from '../core/workflow/global-dir.js';
 
 const ORIGINAL_IMPLEMENTER = process.env.SPEC_CONTEXT_IMPLEMENTER;
 const ORIGINAL_REVIEWER = process.env.SPEC_CONTEXT_REVIEWER;
-const ORIGINAL_DISCIPLINE = process.env.SPEC_CONTEXT_DISCIPLINE;
 
 function restoreEnvVar(key: string, value: string | undefined): void {
   if (value === undefined) {
@@ -14,21 +18,29 @@ function restoreEnvVar(key: string, value: string | undefined): void {
 }
 
 describe('implement-task prompt', () => {
+  let workflowHomeDir: string;
+  const originalEnv = process.env;
+
   const context = {
     projectPath: '/tmp/test-project',
     dashboardUrl: 'http://localhost:3000',
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    process.env = { ...originalEnv };
+    workflowHomeDir = join(tmpdir(), `implement-task-wfhome-${Date.now()}-${Math.random()}`);
+    await fs.mkdir(workflowHomeDir, { recursive: true });
+    process.env[SPEC_WORKFLOW_HOME_ENV] = workflowHomeDir;
+
     process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
     process.env.SPEC_CONTEXT_REVIEWER = 'gemini';
-    process.env.SPEC_CONTEXT_DISCIPLINE = 'full';
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    process.env = originalEnv;
     restoreEnvVar('SPEC_CONTEXT_IMPLEMENTER', ORIGINAL_IMPLEMENTER);
     restoreEnvVar('SPEC_CONTEXT_REVIEWER', ORIGINAL_REVIEWER);
-    restoreEnvVar('SPEC_CONTEXT_DISCIPLINE', ORIGINAL_DISCIPLINE);
+    await fs.rm(workflowHomeDir, { recursive: true, force: true });
   });
 
   it('uses ledger-backed compile_prompt flow and keeps explicit reviewer diff guidance', async () => {
@@ -66,7 +78,8 @@ describe('implement-task prompt', () => {
   });
 
   it('shows minimal-mode review-disabled copy only in minimal mode', async () => {
-    process.env.SPEC_CONTEXT_DISCIPLINE = 'minimal';
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ discipline: 'minimal' });
 
     const messages = await implementTaskPrompt.handler(
       { specName: 'sample-spec', taskId: '1.1' },

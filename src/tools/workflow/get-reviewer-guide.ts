@@ -128,7 +128,7 @@ export async function getReviewerGuideHandler(
   if (mode === 'minimal') {
     return {
       success: false,
-      message: 'Code reviews are not active in minimal discipline mode. Change SPEC_CONTEXT_DISCIPLINE to "full" or "standard" to enable reviews.',
+      message: 'Code reviews are not active in minimal discipline mode. Change discipline to "full" or "standard" in dashboard settings to enable reviews.',
     };
   }
 

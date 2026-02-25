@@ -1,19 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getImplementerGuideHandler } from './get-implementer-guide.js';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { promises as fs } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { TestFileContentCache } from './test-file-content-cache.js';
+import { SettingsManager } from '../../dashboard/settings-manager.js';
+import { SPEC_WORKFLOW_HOME_ENV } from '../../core/workflow/global-dir.js';
 
 describe('get-implementer-guide', () => {
   let testDir: string;
   let steeringDir: string;
+  let workflowHomeDir: string;
   let fileContentCache: TestFileContentCache;
   const originalEnv = process.env;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env = { ...originalEnv };
-    delete process.env.SPEC_CONTEXT_DISCIPLINE;
+
+    workflowHomeDir = join(tmpdir(), `implementer-guide-wfhome-${Date.now()}-${Math.random()}`);
+    await fs.mkdir(workflowHomeDir, { recursive: true });
+    process.env[SPEC_WORKFLOW_HOME_ENV] = workflowHomeDir;
 
     testDir = join(tmpdir(), `implementer-guide-test-${Date.now()}`);
     steeringDir = join(testDir, '.spec-context', 'steering');
@@ -21,11 +28,12 @@ describe('get-implementer-guide', () => {
     fileContentCache = new TestFileContentCache();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     process.env = originalEnv;
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true });
     }
+    await fs.rm(workflowHomeDir, { recursive: true, force: true });
   });
 
   const createContext = () => ({
@@ -38,6 +46,11 @@ describe('get-implementer-guide', () => {
     writeFileSync(join(steeringDir, 'tech.md'), '# Tech Stack\nTypeScript');
     writeFileSync(join(steeringDir, 'principles.md'), '# Principles\nSOLID');
   };
+
+  async function setDiscipline(mode: string): Promise<void> {
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({ discipline: mode as any });
+  }
 
   describe('missing steering docs', () => {
     it('fails when tech.md is missing', async () => {
@@ -69,7 +82,6 @@ describe('get-implementer-guide', () => {
 
   describe('full mode', () => {
     beforeEach(() => {
-      process.env.SPEC_CONTEXT_DISCIPLINE = 'full';
       createSteeringDocs();
     });
 
@@ -158,8 +170,8 @@ describe('get-implementer-guide', () => {
   });
 
   describe('standard mode', () => {
-    beforeEach(() => {
-      process.env.SPEC_CONTEXT_DISCIPLINE = 'standard';
+    beforeEach(async () => {
+      await setDiscipline('standard');
       createSteeringDocs();
     });
 
@@ -190,8 +202,8 @@ describe('get-implementer-guide', () => {
   });
 
   describe('minimal mode', () => {
-    beforeEach(() => {
-      process.env.SPEC_CONTEXT_DISCIPLINE = 'minimal';
+    beforeEach(async () => {
+      await setDiscipline('minimal');
       createSteeringDocs();
     });
 
@@ -217,7 +229,6 @@ describe('get-implementer-guide', () => {
 
   describe('default mode', () => {
     beforeEach(() => {
-      delete process.env.SPEC_CONTEXT_DISCIPLINE;
       createSteeringDocs();
     });
 
@@ -231,7 +242,6 @@ describe('get-implementer-guide', () => {
 
   describe('visibility hints', () => {
     beforeEach(() => {
-      process.env.SPEC_CONTEXT_DISCIPLINE = 'full';
       createSteeringDocs();
     });
 
