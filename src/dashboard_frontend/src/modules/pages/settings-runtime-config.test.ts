@@ -16,8 +16,6 @@ function createDraft(overrides: Partial<RuntimeSettingsDraft> = {}): RuntimeSett
     implementerModelComplex: null,
     reviewerModelSimple: null,
     reviewerModelComplex: null,
-    implementerReasoningEffort: null,
-    reviewerReasoningEffort: null,
     ...overrides,
   };
 }
@@ -32,8 +30,6 @@ describe('settings-runtime-config', () => {
       implementerModelComplex: { value: null, source: 'default' },
       reviewerModelSimple: { value: 'review-simple', source: 'json' },
       reviewerModelComplex: { value: 'review-complex-fallback', source: 'env' },
-      implementerReasoningEffort: { value: 'medium', source: 'json' },
-      reviewerReasoningEffort: { value: 'low', source: 'default' },
     };
 
     expect(deriveRuntimeSettingsDraft(resolved)).toEqual({
@@ -44,8 +40,6 @@ describe('settings-runtime-config', () => {
       implementerModelComplex: null,
       reviewerModelSimple: 'review-simple',
       reviewerModelComplex: null,
-      implementerReasoningEffort: 'medium',
-      reviewerReasoningEffort: null,
     });
   });
 
@@ -60,13 +54,11 @@ describe('settings-runtime-config', () => {
       discipline: 'full',
       implementer: null,
       reviewerModelSimple: 'reviewer-simple',
-      reviewerReasoningEffort: 'high',
     });
 
     expect(buildRuntimeSettingsUpdatePayload(initial, current)).toEqual({
       discipline: 'full',
       implementer: null,
-      reviewerReasoningEffort: 'high',
     });
   });
 

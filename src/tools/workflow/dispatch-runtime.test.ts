@@ -284,7 +284,6 @@ describe('dispatch-runtime tool', () => {
       implementerModelComplex: null as any,
       reviewerModelSimple: null as any,
       reviewerModelComplex: null as any,
-      reviewerReasoningEffort: null as any,
     });
   });
 
@@ -879,7 +878,7 @@ END_DISPATCH_RESULT`,
 
   it('returns role-specific dispatchCommand with complexity model flags', async () => {
     const manager = new SettingsManager();
-    await manager.updateRuntimeSettings({ reviewerModelSimple: 'codex-5.3', reviewerReasoningEffort: 'medium' });
+    await manager.updateRuntimeSettings({ reviewerModelSimple: 'codex-5.3' });
 
     await dispatchRuntimeHandler(
       {
@@ -907,7 +906,6 @@ END_DISPATCH_RESULT`,
     expect(compile.data?.dispatchCommand?.command).toBe('codex');
     expect(compile.data?.dispatchCommand?.args).toEqual(expect.arrayContaining(['exec', '--sandbox', 'read-only']));
     expect(compile.data?.dispatchCommand?.args).toContain('codex-5.3');
-    expect(compile.data?.dispatchCommand?.args).toContain('model_reasoning_effort=medium');
     const reviewerPrompt = String(compile.data?.prompt ?? '');
     expect(reviewerPrompt).toContain('"required_fixes"');
     expect(reviewerPrompt).toContain('"issues"');

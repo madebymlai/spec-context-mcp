@@ -434,62 +434,6 @@ function Content() {
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {t('settings.runtime.implementerReasoningEffort', 'Implementer reasoning effort')}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={runtimeDraft.implementerReasoningEffort ?? ''}
-                        onChange={(event) => handleRuntimeFieldChange('implementerReasoningEffort', event.target.value)}
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
-                      >
-                        <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
-                        <option value="minimal">{t('settings.runtime.reasoningMinimal', 'minimal')}</option>
-                        <option value="low">{t('settings.runtime.reasoningLow', 'low')}</option>
-                        <option value="medium">{t('settings.runtime.reasoningMedium', 'medium')}</option>
-                        <option value="high">{t('settings.runtime.reasoningHigh', 'high')}</option>
-                        <option value="xhigh">{t('settings.runtime.reasoningXhigh', 'xhigh')}</option>
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => handleRuntimeFieldClear('implementerReasoningEffort')}
-                        className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={t('settings.runtime.clear', 'Clear')}
-                      >
-                        X
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {t('settings.runtime.reviewerReasoningEffort', 'Reviewer reasoning effort')}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={runtimeDraft.reviewerReasoningEffort ?? ''}
-                        onChange={(event) => handleRuntimeFieldChange('reviewerReasoningEffort', event.target.value)}
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
-                      >
-                        <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
-                        <option value="minimal">{t('settings.runtime.reasoningMinimal', 'minimal')}</option>
-                        <option value="low">{t('settings.runtime.reasoningLow', 'low')}</option>
-                        <option value="medium">{t('settings.runtime.reasoningMedium', 'medium')}</option>
-                        <option value="high">{t('settings.runtime.reasoningHigh', 'high')}</option>
-                        <option value="xhigh">{t('settings.runtime.reasoningXhigh', 'xhigh')}</option>
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => handleRuntimeFieldClear('reviewerReasoningEffort')}
-                        className="w-8 h-8 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={t('settings.runtime.clear', 'Clear')}
-                      >
-                        X
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       {t('settings.runtime.implementerModelSimple', 'Implementer model (simple)')}
                     </label>
                     <div className="flex items-center gap-2">

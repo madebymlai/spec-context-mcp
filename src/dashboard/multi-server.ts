@@ -65,8 +65,6 @@ const RUNTIME_SETTINGS_KEYS = [
   'implementerModelComplex',
   'reviewerModelSimple',
   'reviewerModelComplex',
-  'implementerReasoningEffort',
-  'reviewerReasoningEffort',
   'dashboardUrl',
 ] as const satisfies ReadonlyArray<keyof RuntimeSettings>;
 

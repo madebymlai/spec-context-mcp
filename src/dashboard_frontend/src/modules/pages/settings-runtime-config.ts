@@ -13,8 +13,6 @@ export interface RuntimeSettingsResponse {
   implementerModelComplex: ResolvedRuntimeSetting<string | null>;
   reviewerModelSimple: ResolvedRuntimeSetting<string | null>;
   reviewerModelComplex: ResolvedRuntimeSetting<string | null>;
-  implementerReasoningEffort: ResolvedRuntimeSetting<string | null>;
-  reviewerReasoningEffort: ResolvedRuntimeSetting<string | null>;
 }
 
 export const RUNTIME_SETTINGS_FIELD_KEYS = [
@@ -25,8 +23,6 @@ export const RUNTIME_SETTINGS_FIELD_KEYS = [
   'implementerModelComplex',
   'reviewerModelSimple',
   'reviewerModelComplex',
-  'implementerReasoningEffort',
-  'reviewerReasoningEffort',
 ] as const;
 
 export type RuntimeSettingsFieldKey = (typeof RUNTIME_SETTINGS_FIELD_KEYS)[number];
@@ -42,8 +38,6 @@ export function createEmptyRuntimeSettingsDraft(): RuntimeSettingsDraft {
     implementerModelComplex: null,
     reviewerModelSimple: null,
     reviewerModelComplex: null,
-    implementerReasoningEffort: null,
-    reviewerReasoningEffort: null,
   };
 }
 
@@ -67,8 +61,6 @@ export function deriveRuntimeSettingsDraft(
     implementerModelComplex: resolveEditableValue(settings.implementerModelComplex),
     reviewerModelSimple: resolveEditableValue(settings.reviewerModelSimple),
     reviewerModelComplex: resolveEditableValue(settings.reviewerModelComplex),
-    implementerReasoningEffort: resolveEditableValue(settings.implementerReasoningEffort),
-    reviewerReasoningEffort: resolveEditableValue(settings.reviewerReasoningEffort),
   };
 }
 

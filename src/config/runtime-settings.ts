@@ -18,8 +18,6 @@ export interface ResolvedRuntimeSettings {
   implementerModelComplex: ResolvedSetting<string | null>;
   reviewerModelSimple: ResolvedSetting<string | null>;
   reviewerModelComplex: ResolvedSetting<string | null>;
-  implementerReasoningEffort: ResolvedSetting<string | null>;
-  reviewerReasoningEffort: ResolvedSetting<string | null>;
   dashboardUrl: ResolvedSetting<string>;
 }
 
@@ -93,8 +91,6 @@ export async function resolveRuntimeSettings(): Promise<ResolvedRuntimeSettings>
     implementerModelComplex: resolveNullableSetting(runtimeSettings.implementerModelComplex),
     reviewerModelSimple: resolveNullableSetting(runtimeSettings.reviewerModelSimple),
     reviewerModelComplex: resolveNullableSetting(runtimeSettings.reviewerModelComplex),
-    implementerReasoningEffort: resolveNullableSetting(runtimeSettings.implementerReasoningEffort),
-    reviewerReasoningEffort: resolveNullableSetting(runtimeSettings.reviewerReasoningEffort),
     dashboardUrl: resolveDashboardUrl(runtimeSettings),
   };
 }

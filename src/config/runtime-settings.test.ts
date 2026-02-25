@@ -31,8 +31,6 @@ describe('runtime settings resolution', () => {
       implementerModelComplex: { value: null, source: 'default' },
       reviewerModelSimple: { value: null, source: 'default' },
       reviewerModelComplex: { value: null, source: 'default' },
-      implementerReasoningEffort: { value: null, source: 'default' },
-      reviewerReasoningEffort: { value: null, source: 'default' },
       dashboardUrl: { value: 'http://localhost:3000', source: 'default' },
     });
   });
@@ -52,8 +50,6 @@ describe('runtime settings resolution', () => {
       implementerModelComplex: { value: null, source: 'default' },
       reviewerModelSimple: { value: null, source: 'default' },
       reviewerModelComplex: { value: null, source: 'default' },
-      implementerReasoningEffort: { value: null, source: 'default' },
-      reviewerReasoningEffort: { value: null, source: 'default' },
       dashboardUrl: { value: 'http://localhost:3000', source: 'default' },
     });
   });
@@ -68,8 +64,6 @@ describe('runtime settings resolution', () => {
       implementerModelComplex: 'json-complex',
       reviewerModelSimple: 'json-rev-simple',
       reviewerModelComplex: 'json-rev-complex',
-      implementerReasoningEffort: 'medium',
-      reviewerReasoningEffort: 'high',
       dashboardUrl: 'http://json.localhost:3002',
     });
 
@@ -81,8 +75,6 @@ describe('runtime settings resolution', () => {
       implementerModelComplex: { value: 'json-complex', source: 'json' },
       reviewerModelSimple: { value: 'json-rev-simple', source: 'json' },
       reviewerModelComplex: { value: 'json-rev-complex', source: 'json' },
-      implementerReasoningEffort: { value: 'medium', source: 'json' },
-      reviewerReasoningEffort: { value: 'high', source: 'json' },
       dashboardUrl: { value: 'http://json.localhost:3002', source: 'json' },
     });
   });

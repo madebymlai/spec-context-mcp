@@ -11,8 +11,6 @@ describe('workflow runtime settings types', () => {
       implementerModelComplex: 'gpt-5',
       reviewerModelSimple: 'claude-sonnet',
       reviewerModelComplex: 'claude-opus',
-      implementerReasoningEffort: 'low',
-      reviewerReasoningEffort: 'medium',
       dashboardUrl: 'http://localhost:3000',
     };
 

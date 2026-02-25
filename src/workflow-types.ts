@@ -40,8 +40,6 @@ export interface RuntimeSettings {
   implementerModelComplex?: string;
   reviewerModelSimple?: string;
   reviewerModelComplex?: string;
-  implementerReasoningEffort?: string;
-  reviewerReasoningEffort?: string;
   dashboardUrl?: string;
 }
 

@@ -8,16 +8,6 @@ import {
 import type { ComplexityLevel } from '../core/routing/types.js';
 import { resolveRuntimeSettings } from './runtime-settings.js';
 
-type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-
-const CODEX_REASONING_EFFORT_VALUES = new Set<CodexReasoningEffort>([
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-]);
-
 export interface DispatchExecutionCommand {
   provider: CanonicalProvider;
   role: DispatchRole;
@@ -63,31 +53,17 @@ function getModelOverride(args: {
     : args.runtimeSettings.reviewerModelComplex.value;
 }
 
-function getReasoningEffort(role: DispatchRole, runtimeSettings: Awaited<ReturnType<typeof resolveRuntimeSettings>>): string | null {
-  return role === 'implementer'
-    ? runtimeSettings.implementerReasoningEffort.value
-    : runtimeSettings.reviewerReasoningEffort.value;
-}
-
 function appendModelArgs(args: {
   baseTemplate: DispatchCommandTemplate;
   provider: CanonicalProvider;
   role: DispatchRole;
   modelOverride: string | null;
-  reasoningEffort: string | null;
 }): DispatchExecutionCommand {
   const commandArgs = [...args.baseTemplate.args];
   const model = normalizeOptionalValue(args.modelOverride);
-  const reasoningRaw = normalizeOptionalValue(args.reasoningEffort)?.toLowerCase() ?? null;
-  const codexReasoningEffort = reasoningRaw && CODEX_REASONING_EFFORT_VALUES.has(reasoningRaw as CodexReasoningEffort)
-    ? (reasoningRaw as CodexReasoningEffort)
-    : null;
 
   if (model) {
     commandArgs.push('--model', model);
-  }
-  if (args.provider === 'codex' && codexReasoningEffort) {
-    commandArgs.push('-c', `model_reasoning_effort=${codexReasoningEffort}`);
   }
 
   return {
@@ -108,7 +84,6 @@ export async function resolveDispatchCommandForProvider(args: {
   return appendModelArgs({
     provider: args.provider,
     modelOverride: getModelOverride({ role: args.role, complexity: args.complexity, runtimeSettings }),
-    reasoningEffort: getReasoningEffort(args.role, runtimeSettings),
     role: args.role,
     baseTemplate: getProviderCommandTemplate(args.provider, args.role),
   });
@@ -135,7 +110,6 @@ export async function getDispatchCommandForComplexity(
   return appendModelArgs({
     provider,
     modelOverride: getModelOverride({ role, complexity, runtimeSettings }),
-    reasoningEffort: getReasoningEffort(role, runtimeSettings),
     role,
     baseTemplate: getProviderCommandTemplate(provider, role),
   });

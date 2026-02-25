@@ -41,32 +41,6 @@ describe('dispatch-cli-resolver', () => {
     expect(complex?.args).toContain('opus-4.6');
   });
 
-  it('appends model and reasoning effort for codex tiers', async () => {
-    const manager = new SettingsManager();
-    await manager.updateRuntimeSettings({
-      reviewer: 'codex',
-      reviewerModelSimple: 'codex-5.3',
-      reviewerReasoningEffort: 'medium',
-    });
-
-    const command = await getDispatchCommandForComplexity('reviewer', 'simple');
-    expect(command?.args).toContain('codex-5.3');
-    expect(command?.args).toContain('model_reasoning_effort=medium');
-  });
-
-  it('uses non-tiered reasoning effort when set', async () => {
-    const manager = new SettingsManager();
-    await manager.updateRuntimeSettings({
-      reviewer: 'codex',
-      reviewerModelComplex: 'codex-5.3',
-      reviewerReasoningEffort: 'xhigh',
-    });
-
-    const command = await getDispatchCommandForComplexity('reviewer', 'complex');
-    expect(command?.args).toContain('codex-5.3');
-    expect(command?.args).toContain('model_reasoning_effort=xhigh');
-  });
-
   it('fails loud when provider is not a known agent', async () => {
     const manager = new SettingsManager();
     await manager.updateRuntimeSettings({ implementer: 'my-agent --headless' });

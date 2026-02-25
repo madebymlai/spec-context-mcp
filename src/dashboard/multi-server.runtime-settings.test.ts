@@ -15,8 +15,6 @@ const RUNTIME_ENV_KEYS = [
   'SPEC_CONTEXT_IMPLEMENTER_MODEL_COMPLEX',
   'SPEC_CONTEXT_REVIEWER_MODEL_SIMPLE',
   'SPEC_CONTEXT_REVIEWER_MODEL_COMPLEX',
-  'SPEC_CONTEXT_IMPLEMENTER_REASONING_EFFORT',
-  'SPEC_CONTEXT_REVIEWER_REASONING_EFFORT',
   'DASHBOARD_URL',
 ] as const;
 
@@ -79,8 +77,6 @@ describe('MultiProjectDashboardServer runtime settings routes', () => {
       implementerModelComplex: { value: null, source: 'default' },
       reviewerModelSimple: { value: null, source: 'default' },
       reviewerModelComplex: { value: null, source: 'default' },
-      implementerReasoningEffort: { value: null, source: 'default' },
-      reviewerReasoningEffort: { value: null, source: 'default' },
       dashboardUrl: { value: 'http://localhost:3000', source: 'default' },
     });
   });
