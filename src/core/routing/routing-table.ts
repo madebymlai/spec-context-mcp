@@ -4,27 +4,16 @@ import {
   type DispatchRole,
   resolveDispatchProvider,
 } from '../../config/discipline.js';
+import { resolveRuntimeSettings } from '../../config/runtime-settings.js';
 import type { ComplexityLevel, IRoutingTable, RoutingTableConfig, RoutingTableEntry } from './types.js';
 
-const IMPLEMENTER_ENV_VAR = 'SPEC_CONTEXT_IMPLEMENTER';
-const REVIEWER_ENV_VAR = 'SPEC_CONTEXT_REVIEWER';
-
-function parseConfiguredProvider(value: string, envVarName: string): CanonicalProvider {
-  const resolvedProvider = resolveDispatchProvider(value);
-  if (!resolvedProvider) {
-    throw new Error(`${envVarName} must reference a known provider; received "${value}"`);
-  }
-  return resolvedProvider;
-}
-
-function defaultProviderFromRoleEnv(envVarName: string): CanonicalProvider | null {
-  const configuredValue = process.env[envVarName]?.trim();
-  if (!configuredValue) {
+function resolveProvider(value: string | null, label: string): CanonicalProvider | null {
+  if (!value || !value.trim()) {
     return null;
   }
-  const provider = resolveDispatchProvider(configuredValue);
+  const provider = resolveDispatchProvider(value);
   if (!provider) {
-    throw new Error(`${envVarName} must reference a known provider; received "${configuredValue}"`);
+    throw new Error(`${label} must reference a known provider; received "${value}"`);
   }
   return provider;
 }
@@ -38,34 +27,26 @@ export class RoutingTable implements IRoutingTable {
     this.config = config;
   }
 
-  static fromEnvOrDefault(): RoutingTable {
-    const simple = process.env.SPEC_CONTEXT_ROUTE_SIMPLE?.trim();
-    const complex = process.env.SPEC_CONTEXT_ROUTE_COMPLEX?.trim();
-    const explicitSimple = simple
-      ? parseConfiguredProvider(simple, 'SPEC_CONTEXT_ROUTE_SIMPLE')
-      : null;
-    const explicitComplex = complex
-      ? parseConfiguredProvider(complex, 'SPEC_CONTEXT_ROUTE_COMPLEX')
-      : null;
-    // In role-driven orchestration, reviewer is the lower-cost lane and implementer is the higher-capability lane.
-    // Route defaults inherit that policy unless explicit SPEC_CONTEXT_ROUTE_* overrides are provided.
-    const inheritedSimple = defaultProviderFromRoleEnv(REVIEWER_ENV_VAR);
-    const inheritedComplex = defaultProviderFromRoleEnv(IMPLEMENTER_ENV_VAR);
+  static async fromSettings(): Promise<RoutingTable> {
+    const settings = await resolveRuntimeSettings();
 
-    if (!explicitSimple && !inheritedSimple) {
+    const simpleProvider = resolveProvider(settings.reviewer.value, 'reviewer');
+    const complexProvider = resolveProvider(settings.implementer.value, 'implementer');
+
+    if (!simpleProvider) {
       throw new Error(
-        'Routing for simple complexity is not configured; set SPEC_CONTEXT_ROUTE_SIMPLE or SPEC_CONTEXT_REVIEWER'
+        'Routing for simple complexity is not configured; set reviewer in dashboard settings'
       );
     }
-    if (!explicitComplex && !inheritedComplex) {
+    if (!complexProvider) {
       throw new Error(
-        'Routing for complex complexity is not configured; set SPEC_CONTEXT_ROUTE_COMPLEX or SPEC_CONTEXT_IMPLEMENTER'
+        'Routing for complex complexity is not configured; set implementer in dashboard settings'
       );
     }
 
     return new RoutingTable({
-      simple: explicitSimple ?? inheritedSimple as CanonicalProvider,
-      complex: explicitComplex ?? inheritedComplex as CanonicalProvider,
+      simple: simpleProvider,
+      complex: complexProvider,
     });
   }
 

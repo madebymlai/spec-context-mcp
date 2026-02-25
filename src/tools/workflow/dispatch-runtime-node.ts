@@ -239,13 +239,13 @@ export function createNodeDispatchRuntimeManagerDependencies(): DispatchRuntimeM
   };
 }
 
-export function createNodeDispatchRuntimeHandlerDependencies(): DispatchRuntimeHandlerDependencies {
+export async function createNodeDispatchRuntimeHandlerDependencies(): Promise<DispatchRuntimeHandlerDependencies> {
   const factStore = new InMemorySessionFactStore();
   const dispatchExecutor: IDispatchExecutor = new NodeDispatchExecutor();
   return {
     runtimeManager: new DispatchRuntimeManager(
       new HeuristicComplexityClassifier(),
-      RoutingTable.fromEnvOrDefault(),
+      await RoutingTable.fromSettings(),
       factStore,
       new RuleBasedFactExtractor(),
       new KeywordFactRetriever(factStore),
@@ -260,18 +260,26 @@ export function createNodeDispatchRuntimeHandlerDependencies(): DispatchRuntimeH
 
 let nodeDispatchRuntimeDependencies: DispatchRuntimeHandlerDependencies | null = null;
 let runtimeHandler: ((args: Record<string, unknown>, context: ToolContext) => Promise<ToolResponse>) | null = null;
+let runtimeHandlerPromise: Promise<(args: Record<string, unknown>, context: ToolContext) => Promise<ToolResponse>> | null = null;
 
-function getRuntimeHandler(): (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResponse> {
-  if (!runtimeHandler) {
-    nodeDispatchRuntimeDependencies = createNodeDispatchRuntimeHandlerDependencies();
-    runtimeHandler = createDispatchRuntimeHandler(nodeDispatchRuntimeDependencies);
+async function getRuntimeHandler(): Promise<(args: Record<string, unknown>, context: ToolContext) => Promise<ToolResponse>> {
+  if (runtimeHandler) {
+    return runtimeHandler;
   }
-  return runtimeHandler;
+  if (!runtimeHandlerPromise) {
+    runtimeHandlerPromise = (async () => {
+      nodeDispatchRuntimeDependencies = await createNodeDispatchRuntimeHandlerDependencies();
+      runtimeHandler = createDispatchRuntimeHandler(nodeDispatchRuntimeDependencies);
+      return runtimeHandler;
+    })();
+  }
+  return runtimeHandlerPromise;
 }
 
 export async function dispatchRuntimeHandler(
   args: Record<string, unknown>,
   context: ToolContext,
 ): Promise<ToolResponse> {
-  return getRuntimeHandler()(args, context);
+  const handler = await getRuntimeHandler();
+  return handler(args, context);
 }

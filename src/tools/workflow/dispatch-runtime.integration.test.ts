@@ -58,10 +58,6 @@ describe('dispatch-runtime integration (no mocks)', () => {
     const manager = new SettingsManager();
     await manager.updateRuntimeSettings({ implementer: 'claude', reviewer: 'codex' });
 
-    // RoutingTable.fromEnvOrDefault() still reads env vars for classification routing
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
-
     const module = await import('../node-runtime.js');
     handleToolCall = module.handleToolCall;
   });

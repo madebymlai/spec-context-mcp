@@ -71,10 +71,6 @@ describe('dispatch-runtime tool', () => {
     const manager = new SettingsManager();
     await manager.updateRuntimeSettings({ implementer: 'claude', reviewer: 'codex' });
 
-    // RoutingTable.fromEnvOrDefault() still reads env vars for classification routing
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
-
     const [coreModule, nodeModule] = await Promise.all([
       import('./dispatch-runtime.js'),
       import('./dispatch-runtime-node.js'),
@@ -82,7 +78,7 @@ describe('dispatch-runtime tool', () => {
     createDispatchRuntimeHandler = coreModule.createDispatchRuntimeHandler;
     DispatchRuntimeManagerClass = coreModule.DispatchRuntimeManager;
     createNodeDispatchRuntimeManagerDependencies = nodeModule.createNodeDispatchRuntimeManagerDependencies;
-    const dependencies = nodeModule.createNodeDispatchRuntimeHandlerDependencies();
+    const dependencies = await nodeModule.createNodeDispatchRuntimeHandlerDependencies();
     runtimeManager = dependencies.runtimeManager;
     dispatchOutputResolver = dependencies.outputResolver;
     standardDispatchRuntimeHandler = createDispatchRuntimeHandler(dependencies);

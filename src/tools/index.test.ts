@@ -29,10 +29,6 @@ describe('handleToolCall tool-result offloading', () => {
     const manager = new SettingsManager();
     await manager.updateRuntimeSettings({ implementer: 'claude', reviewer: 'codex' });
 
-    // RoutingTable.fromEnvOrDefault() still reads env vars for classification routing
-    process.env.SPEC_CONTEXT_IMPLEMENTER = 'claude';
-    process.env.SPEC_CONTEXT_REVIEWER = 'codex';
-
     testDir = join(tmpdir(), `tool-offload-test-${Date.now()}`);
     mkdirSync(join(testDir, '.spec-context', 'steering'), { recursive: true });
     writeFileSync(join(testDir, '.spec-context', 'steering', 'tech.md'), '# Tech\nTypeScript');
