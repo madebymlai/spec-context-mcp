@@ -1,6 +1,5 @@
 import { promises as fs } from 'fs';
 import { resolve } from 'path';
-import { randomUUID } from 'crypto';
 import {
   RuntimeEventStream,
   NodeRuntimeEventStorage,
@@ -196,9 +195,9 @@ ${DISPATCH_RESULT_MARKERS.end}`,
   }
 }
 
-class UuidDispatchRunIdFactory implements DispatchRunIdFactory {
+class DeterministicDispatchRunIdFactory implements DispatchRunIdFactory {
   create(specName: string, taskId: string): string {
-    return `${specName}:${taskId}:${randomUUID()}`;
+    return `${specName}:${taskId}`;
   }
 }
 
@@ -251,7 +250,7 @@ export async function createNodeDispatchRuntimeHandlerDependencies(): Promise<Di
       new KeywordFactRetriever(factStore),
       createNodeDispatchRuntimeManagerDependencies(),
     ),
-    runIdFactory: new UuidDispatchRunIdFactory(),
+    runIdFactory: new DeterministicDispatchRunIdFactory(),
     outputResolver: new NodeDispatchOutputResolver(),
     dispatchExecutor,
     fileContentCacheTelemetry: getSharedFileContentCacheTelemetry,

@@ -655,6 +655,81 @@ export function buildLedgerTaskPrompt(
   };
 }
 
+function formatReviewerIssue(issue: TaskLedgerIssue): string {
+  const prefix = `[${issue.severity}]`;
+  return issue.file ? `${prefix} ${issue.file}: ${issue.message}` : `${prefix} ${issue.message}`;
+}
+
+export function buildResumptionPrompt(args: {
+  taskLedger: TaskLedger;
+  snapshotProgressLedger: ProgressLedger;
+  freshProgressLedger: ProgressLedger;
+  snapshotStatus: 'running' | 'blocked' | 'done' | 'failed';
+}): string {
+  const sections: string[] = [];
+
+  if (args.snapshotProgressLedger.currentTask) {
+    sections.push(
+      'Task progress:\n' +
+        `${args.snapshotProgressLedger.totals.completed} of ${args.snapshotProgressLedger.totals.total} completed\n` +
+        `Current task: ${args.snapshotProgressLedger.currentTask.id} - ` +
+        args.snapshotProgressLedger.currentTask.description
+    );
+  }
+
+  const lastOutcomeLines: string[] = [];
+  if (args.taskLedger.reviewerAssessment) {
+    lastOutcomeLines.push(`Assessment: ${args.taskLedger.reviewerAssessment}`);
+  }
+  if (args.taskLedger.summary?.trim()) {
+    lastOutcomeLines.push(`Summary: ${args.taskLedger.summary.trim()}`);
+  }
+  if (args.snapshotStatus === 'blocked' || args.snapshotStatus === 'failed') {
+    lastOutcomeLines.push(`Snapshot status: ${args.snapshotStatus}`);
+  }
+  if (lastOutcomeLines.length > 0) {
+    sections.push(`Last outcome:\n${lastOutcomeLines.join('\n')}`);
+  }
+
+  if (
+    args.taskLedger.reviewerAssessment === 'needs_changes' ||
+    args.taskLedger.reviewerAssessment === 'blocked'
+  ) {
+    const feedbackSections: string[] = [];
+
+    if (args.taskLedger.reviewerIssues.length > 0) {
+      feedbackSections.push(args.taskLedger.reviewerIssues.map(formatReviewerIssue).join('\n'));
+    }
+    if (args.taskLedger.requiredFixes.length > 0) {
+      feedbackSections.push(`Required fixes:\n${args.taskLedger.requiredFixes.join('\n')}`);
+    }
+
+    if (feedbackSections.length > 0) {
+      sections.push(`Reviewer feedback:\n${feedbackSections.join('\n\n')}`);
+    }
+  }
+
+  if (
+    args.freshProgressLedger.sourceFingerprint.hash !==
+    args.snapshotProgressLedger.sourceFingerprint.hash
+  ) {
+    sections.push('Staleness warning:\ntasks.md has changed since last session');
+  }
+
+  if (args.taskLedger.reviewerAssessment === 'approved') {
+    sections.push('Suggested next action:\ndispatch implementer for next task');
+  } else if (args.taskLedger.reviewerAssessment === 'needs_changes') {
+    sections.push('Suggested next action:\ndispatch implementer to address feedback');
+  } else if (args.taskLedger.reviewerAssessment === 'blocked') {
+    const blockerDetails = args.taskLedger.blockers.length > 0
+      ? `:\n${args.taskLedger.blockers.join('\n')}`
+      : '';
+    sections.push(`Suggested next action:\nblocked - resolve blockers${blockerDetails}`);
+  }
+
+  return sections.join('\n\n');
+}
+
 export function buildFailureEvidence(ledger: TaskLedger): string | null {
   if (!ledger.reviewerAssessment || ledger.reviewerAssessment === 'approved') {
     return null;

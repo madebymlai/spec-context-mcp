@@ -7,6 +7,7 @@ import {
   buildFailureEvidence,
   buildLedgerDeltaPacket,
   buildLedgerTaskPrompt,
+  buildResumptionPrompt,
   extractProgressLedger,
   isProgressLedgerStale,
   progressLedgerFromFacts,
@@ -381,6 +382,147 @@ describe('dispatch-ledger', () => {
 
       const result4 = buildLedgerTaskPrompt(progressLedger, makeTaskLedger({ planVersion: 4 }));
       expect(result4.prompt).toContain('attempt #4');
+    });
+  });
+
+  describe('buildResumptionPrompt', () => {
+    function makeTaskLedger(overrides: Partial<TaskLedger> = {}): TaskLedger {
+      return {
+        runId: 'spec:2',
+        taskId: '2',
+        planVersion: 1,
+        reviewerIssues: [],
+        blockers: [],
+        requiredFixes: [],
+        stalled: { consecutiveNonProgress: 0, threshold: 3, flagged: false },
+        reviewLoop: { consecutiveSameNeedsChanges: 0, threshold: 3, flagged: false },
+        ...overrides,
+      };
+    }
+
+    const snapshotProgressLedger = {
+      specName: 'session-resumption-protocol',
+      taskId: '2',
+      sourcePath: '/tmp/tasks.md',
+      sourceFingerprint: { mtimeMs: 1, hash: 'snapshot-hash' },
+      totals: { total: 4, completed: 1, inProgress: 1, pending: 2 },
+      activeTaskId: '2',
+      currentTask: {
+        id: '2',
+        description: 'Add buildResumptionPrompt function with tests',
+        status: 'in-progress' as const,
+      },
+    };
+
+    it('includes task progress, last outcome, and approved next action for fresh ledgers', () => {
+      const prompt = buildResumptionPrompt({
+        taskLedger: makeTaskLedger({
+          reviewerAssessment: 'approved',
+          summary: 'Implementation accepted by reviewer',
+        }),
+        snapshotProgressLedger,
+        freshProgressLedger: {
+          ...snapshotProgressLedger,
+          sourceFingerprint: { ...snapshotProgressLedger.sourceFingerprint },
+        },
+        snapshotStatus: 'done',
+      });
+
+      expect(prompt).toContain('Task progress:');
+      expect(prompt).toContain('1 of 4 completed');
+      expect(prompt).toContain('Current task: 2 - Add buildResumptionPrompt function with tests');
+      expect(prompt).toContain('Last outcome:');
+      expect(prompt).toContain('Assessment: approved');
+      expect(prompt).toContain('Summary: Implementation accepted by reviewer');
+      expect(prompt).toContain('Suggested next action:');
+      expect(prompt).toContain('dispatch implementer for next task');
+      expect(prompt).not.toContain('Reviewer feedback:');
+      expect(prompt).not.toContain('Staleness warning:');
+    });
+
+    it('includes reviewer feedback and remediation guidance for needs_changes', () => {
+      const prompt = buildResumptionPrompt({
+        taskLedger: makeTaskLedger({
+          reviewerAssessment: 'needs_changes',
+          reviewerIssues: [
+            { severity: 'critical', file: 'src/tools/workflow/dispatch-runtime.ts', message: 'Missing parser branch' },
+            { severity: 'minor', message: 'Tighten assertion text' },
+          ],
+          requiredFixes: ['Add parser coverage', 'Update assertion text'],
+        }),
+        snapshotProgressLedger,
+        freshProgressLedger: {
+          ...snapshotProgressLedger,
+          sourceFingerprint: { ...snapshotProgressLedger.sourceFingerprint },
+        },
+        snapshotStatus: 'running',
+      });
+
+      expect(prompt).toContain('Reviewer feedback:');
+      expect(prompt).toContain('[critical] src/tools/workflow/dispatch-runtime.ts: Missing parser branch');
+      expect(prompt).toContain('[minor] Tighten assertion text');
+      expect(prompt).toContain('Required fixes:');
+      expect(prompt).toContain('Add parser coverage');
+      expect(prompt).toContain('Update assertion text');
+      expect(prompt).toContain('dispatch implementer to address feedback');
+    });
+
+    it('includes blocked action guidance and blocker details', () => {
+      const prompt = buildResumptionPrompt({
+        taskLedger: makeTaskLedger({
+          reviewerAssessment: 'blocked',
+          summary: 'Blocked by unavailable integration test fixture',
+          blockers: ['Integration fixture unavailable'],
+          reviewerIssues: [{ severity: 'important', message: 'Cannot validate resume_run flow' }],
+          requiredFixes: ['Provide deterministic fixture'],
+        }),
+        snapshotProgressLedger,
+        freshProgressLedger: {
+          ...snapshotProgressLedger,
+          sourceFingerprint: { ...snapshotProgressLedger.sourceFingerprint },
+        },
+        snapshotStatus: 'blocked',
+      });
+
+      expect(prompt).toContain('Reviewer feedback:');
+      expect(prompt).toContain('[important] Cannot validate resume_run flow');
+      expect(prompt).toContain('Suggested next action:');
+      expect(prompt).toContain('blocked - resolve blockers');
+      expect(prompt).toContain('Integration fixture unavailable');
+      expect(prompt).toContain('Snapshot status: blocked');
+    });
+
+    it('includes staleness warning when tasks fingerprint hash changed', () => {
+      const prompt = buildResumptionPrompt({
+        taskLedger: makeTaskLedger({ reviewerAssessment: 'approved' }),
+        snapshotProgressLedger,
+        freshProgressLedger: {
+          ...snapshotProgressLedger,
+          sourceFingerprint: { mtimeMs: 2, hash: 'fresh-hash' },
+        },
+        snapshotStatus: 'running',
+      });
+
+      expect(prompt).toContain('Staleness warning:');
+      expect(prompt).toContain('tasks.md has changed since last session');
+    });
+
+    it('omits empty sections for partial state', () => {
+      const prompt = buildResumptionPrompt({
+        taskLedger: makeTaskLedger(),
+        snapshotProgressLedger: {
+          ...snapshotProgressLedger,
+          currentTask: undefined,
+        },
+        freshProgressLedger: {
+          ...snapshotProgressLedger,
+          currentTask: undefined,
+          sourceFingerprint: { ...snapshotProgressLedger.sourceFingerprint },
+        },
+        snapshotStatus: 'running',
+      });
+
+      expect(prompt).toBe('');
     });
   });
 });

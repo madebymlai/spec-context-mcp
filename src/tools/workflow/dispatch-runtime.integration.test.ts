@@ -135,6 +135,26 @@ describe('dispatch-runtime integration (no mocks)', () => {
     }
   });
 
+  it('init_run derives deterministic runId when runId is omitted', async () => {
+    const projectPath = await createTempProject();
+    try {
+      const specName = 'feature-init-default-run-id';
+      const taskId = '1.2';
+      await ensureSpecTasks(projectPath, specName, taskId);
+
+      const init = await callDispatch(projectPath, {
+        action: 'init_run',
+        specName,
+        taskId,
+      });
+
+      expect(init.success).toBe(true);
+      expect(init.data?.runId).toBe(`${specName}:${taskId}`);
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
   it('get_snapshot and get_telemetry work after init_run', async () => {
     const projectPath = await createTempProject();
     try {

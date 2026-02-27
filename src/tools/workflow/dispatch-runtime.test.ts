@@ -2,6 +2,7 @@ import { mkdir, rm, writeFile } from 'fs/promises';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RoutingTable, type ITaskComplexityClassifier } from '../../core/routing/index.js';
 import {
@@ -24,6 +25,7 @@ const originalEnv = process.env;
 let workflowHomeDir: string;
 let dispatchRuntimeHandler: (args: Record<string, unknown>, context: any) => Promise<any>;
 let standardDispatchRuntimeHandler: (args: Record<string, unknown>, context: any) => Promise<any>;
+let dispatchRuntimeToolDefinition: Tool;
 let DispatchRuntimeManagerClass: typeof import('./dispatch-runtime.js').DispatchRuntimeManager;
 let createNodeDispatchRuntimeManagerDependencies: typeof import('./dispatch-runtime-node.js').createNodeDispatchRuntimeManagerDependencies;
 let createDispatchRuntimeHandler: typeof import('./dispatch-runtime.js').createDispatchRuntimeHandler;
@@ -76,6 +78,7 @@ describe('dispatch-runtime tool', () => {
       import('./dispatch-runtime-node.js'),
     ]);
     createDispatchRuntimeHandler = coreModule.createDispatchRuntimeHandler;
+    dispatchRuntimeToolDefinition = coreModule.dispatchRuntimeTool;
     DispatchRuntimeManagerClass = coreModule.DispatchRuntimeManager;
     createNodeDispatchRuntimeManagerDependencies = nodeModule.createNodeDispatchRuntimeManagerDependencies;
     const dependencies = await nodeModule.createNodeDispatchRuntimeHandlerDependencies();
@@ -331,6 +334,16 @@ describe('dispatch-runtime tool', () => {
     expect(String(compileResult.message)).toContain('action must be one of');
     expect(ingestResult.success).toBe(false);
     expect(String(ingestResult.message)).toContain('action must be one of');
+  });
+
+  it('tool schema includes resume_run and documents interrupted-session resumption', () => {
+    const inputSchema = dispatchRuntimeToolDefinition.inputSchema as {
+      properties?: { action?: { enum?: string[] } };
+    };
+    const actionEnum = inputSchema.properties?.action?.enum;
+
+    expect(actionEnum).toContain('resume_run');
+    expect(String(dispatchRuntimeToolDefinition.description)).toContain('resume interrupted sessions');
   });
 
   it('rejects compile_prompt when run is not initialized', async () => {
@@ -1088,6 +1101,116 @@ END_DISPATCH_RESULT`,
     expect(result.success).toBe(false);
     expect(result.message).toContain('dispatch_prompt_overflow_terminal');
     expect(result.data?.errorCode).toBe('dispatch_prompt_overflow_terminal');
+  });
+
+  it('resume_run returns run_not_found when snapshot is missing', async () => {
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'resume_run',
+        specName: SPEC_NAME,
+        taskId: '4.1',
+      },
+      context
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.data?.errorCode).toBe('run_not_found');
+  });
+
+  it('resume_run returns snapshot and resumption prompt for an initialized run', async () => {
+    const specName = 'resume-runtime-happy-path';
+    const taskId = '1';
+    const runId = `${specName}:${taskId}`;
+    const specDir = join(process.cwd(), '.spec-context', 'specs', specName);
+    await mkdir(specDir, { recursive: true });
+    await writeFile(
+      join(specDir, 'tasks.md'),
+      `# Tasks
+
+- [-] ${taskId}. Resume runtime happy path
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Validate resume_run success_`,
+      'utf8'
+    );
+
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        specName,
+        taskId,
+      },
+      context
+    );
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'resume_run',
+        specName,
+        taskId,
+      },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.message).toBe('Run resumed from snapshot');
+    expect(result.data?.runId).toBe(runId);
+    expect(result.data?.snapshot?.run_id).toBe(runId);
+    expect(result.data?.stale).toBe(false);
+    expect(String(result.data?.resumptionPrompt)).toContain('Task progress:');
+
+    await rm(specDir, { recursive: true, force: true });
+  });
+
+  it('resume_run marks stale when tasks.md changed since snapshot', async () => {
+    const specName = 'resume-runtime-stale-path';
+    const taskId = '1';
+    const runId = `${specName}:${taskId}`;
+    const specDir = join(process.cwd(), '.spec-context', 'specs', specName);
+    const tasksPath = join(specDir, 'tasks.md');
+    await mkdir(specDir, { recursive: true });
+    await writeFile(
+      tasksPath,
+      `# Tasks
+
+- [-] ${taskId}. Resume runtime stale path
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Validate resume_run stale detection_`,
+      'utf8'
+    );
+
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        specName,
+        taskId,
+      },
+      context
+    );
+
+    await writeFile(
+      tasksPath,
+      `# Tasks
+
+- [x] ${taskId}. Resume runtime stale path
+  - _Requirements: 1_
+  - _Prompt: Role: TypeScript Developer | Task: Validate resume_run stale detection_`,
+      'utf8'
+    );
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'resume_run',
+        specName,
+        taskId,
+      },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.runId).toBe(runId);
+    expect(result.data?.stale).toBe(true);
+
+    await rm(specDir, { recursive: true, force: true });
   });
 
   it('returns snapshot for existing run', async () => {

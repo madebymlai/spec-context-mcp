@@ -19,6 +19,7 @@ import {
   DispatchLedgerError,
   applyOutcomeToTaskLedger,
   assertCompleteProgressLedger,
+  buildResumptionPrompt,
   buildLedgerDeltaPacket,
   buildLedgerTaskPrompt,
   extractProgressLedger,
@@ -52,6 +53,7 @@ const DISPATCH_ACTIONS = [
   'dispatch_and_ingest',
   'get_snapshot',
   'get_telemetry',
+  'resume_run',
 ] as const;
 type DispatchAction = typeof DISPATCH_ACTIONS[number];
 const DISPATCH_ROLES = ['implementer', 'reviewer'] as const;
@@ -1499,6 +1501,7 @@ export interface DispatchRuntimeHandlerDependencies {
 type DispatchToolErrorCode =
   | DispatchRuntimeErrorCode
   | DispatchContractErrorCode
+  | 'run_not_found'
   | 'progress_ledger_missing_tasks'
   | 'progress_ledger_parse_failed'
   | 'progress_ledger_incomplete';
@@ -1537,6 +1540,14 @@ type GetTelemetryCommand = {
   action: 'get_telemetry';
 };
 
+type ResumeRunCommand = {
+  action: 'resume_run';
+  runId: string;
+  specName: string;
+  taskId: string;
+  projectPath: string;
+};
+
 type DispatchAndIngestCommand = {
   action: 'dispatch_and_ingest';
   runId: string;
@@ -1554,6 +1565,7 @@ type DispatchToolCommand =
   | InitRunCommand
   | GetSnapshotCommand
   | GetTelemetryCommand
+  | ResumeRunCommand
   | DispatchAndIngestCommand;
 
 type DispatchCommandParseResult =
@@ -1696,6 +1708,33 @@ async function parseDispatchAndIngestCommand(
   };
 }
 
+async function parseResumeRunCommand(
+  args: Record<string, unknown>,
+  context: ToolContext,
+): Promise<DispatchCommandParseResult> {
+  const specName = String(args.specName || '').trim();
+  const taskId = String(args.taskId || '').trim();
+  if (!specName || !taskId) {
+    return { ok: false, response: failure('resume_run requires specName and taskId') };
+  }
+
+  const projectPath = String(context.projectPath || '').trim();
+  if (!projectPath) {
+    return { ok: false, response: failure('resume_run requires projectPath in tool context') };
+  }
+
+  return {
+    ok: true,
+    command: {
+      action: 'resume_run',
+      runId: `${specName}:${taskId}`,
+      specName,
+      taskId,
+      projectPath,
+    },
+  };
+}
+
 type DispatchCommandParser = (
   args: Record<string, unknown>,
   context: ToolContext,
@@ -1709,6 +1748,7 @@ const DISPATCH_COMMAND_PARSERS: Record<DispatchAction, DispatchCommandParser> = 
     ok: true,
     command: { action: 'get_telemetry' },
   }),
+  resume_run: async (args, context) => parseResumeRunCommand(args, context),
   dispatch_and_ingest: async (args, context) => parseDispatchAndIngestCommand(args, context),
 };
 
@@ -1780,6 +1820,84 @@ const DISPATCH_COMMAND_EXECUTORS: DispatchCommandExecutorMap = {
       data: {
         ...dependencies.runtimeManager.getTelemetrySnapshot(),
         file_content_cache: dependencies.fileContentCacheTelemetry(),
+      },
+    };
+  },
+
+  async resume_run(command, dependencies) {
+    const snapshot = await dependencies.runtimeManager.getSnapshot(command.runId);
+    if (!snapshot) {
+      return {
+        success: false,
+        message: `No snapshot found for runId: ${command.runId}`,
+        data: {
+          runId: command.runId,
+          errorCode: 'run_not_found',
+        },
+      };
+    }
+
+    const taskLedger = taskLedgerFromFacts({
+      runId: command.runId,
+      taskId: command.taskId,
+      facts: snapshot.facts ?? [],
+      stalledThreshold: resolveDispatchStalledThresholdFromEnv(),
+      reviewLoopThreshold: resolveDispatchReviewLoopThresholdFromEnv(),
+    });
+    const snapshotProgressLedger = progressLedgerFromFacts(snapshot.facts ?? []);
+    if (!snapshotProgressLedger) {
+      return {
+        success: false,
+        message: 'progress_ledger_incomplete: Missing progress ledger facts in snapshot',
+        data: {
+          runId: command.runId,
+          taskId: command.taskId,
+          errorCode: 'progress_ledger_incomplete',
+          snapshot,
+        },
+      };
+    }
+
+    let freshProgressLedger = snapshotProgressLedger;
+    let progressLedgerError: { code: DispatchLedgerError['code']; message: string } | undefined;
+    try {
+      freshProgressLedger = await extractProgressLedger({
+        specName: command.specName,
+        taskId: command.taskId,
+        sourcePath: resolveTasksFilePath(command.projectPath, command.specName),
+      });
+    } catch (error) {
+      if (error instanceof DispatchLedgerError) {
+        progressLedgerError = {
+          code: error.code,
+          message: error.message,
+        };
+      } else {
+        throw error;
+      }
+    }
+
+    const staleBySnapshot = await isProgressLedgerStale(snapshotProgressLedger);
+    const staleByFingerprint =
+      freshProgressLedger.sourceFingerprint.hash !== snapshotProgressLedger.sourceFingerprint.hash;
+    const stale = staleBySnapshot || staleByFingerprint;
+
+    const resumptionPrompt = buildResumptionPrompt({
+      taskLedger,
+      snapshotProgressLedger,
+      freshProgressLedger,
+      snapshotStatus: snapshot.status,
+    });
+
+    return {
+      success: true,
+      message: 'Run resumed from snapshot',
+      data: {
+        runId: command.runId,
+        resumptionPrompt,
+        snapshot,
+        stale,
+        ...(progressLedgerError ? { progressLedgerError } : {}),
       },
     };
   },
@@ -1935,7 +2053,7 @@ async function parseDispatchCommand(
   if (!isDispatchAction(actionRaw)) {
     return {
       ok: false,
-      response: failure('action must be one of: init_run, dispatch_and_ingest, get_snapshot, get_telemetry'),
+      response: failure('action must be one of: init_run, dispatch_and_ingest, get_snapshot, get_telemetry, resume_run'),
     };
   }
   const parser = DISPATCH_COMMAND_PARSERS[actionRaw];
@@ -1960,13 +2078,14 @@ export const dispatchRuntimeTool: Tool = {
 Use this tool instead of reading raw logs for orchestration decisions.
 It validates implementer/reviewer structured output, compiles delta prompts with stable prefix hashes,
 updates runtime events/snapshots, enforces output token budgets, and returns deterministic next actions.
-Use action:"dispatch_and_ingest" as the only execution path for orchestrator dispatch.`,
+Use action:"dispatch_and_ingest" as the only execution path for orchestrator dispatch.
+Use action:"resume_run" to resume interrupted sessions from stored snapshots.`,
   inputSchema: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        enum: ['init_run', 'dispatch_and_ingest', 'get_snapshot', 'get_telemetry'],
+        enum: ['init_run', 'dispatch_and_ingest', 'get_snapshot', 'get_telemetry', 'resume_run'],
         description: 'Runtime action',
       },
       runId: {
