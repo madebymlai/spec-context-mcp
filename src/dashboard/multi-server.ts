@@ -38,6 +38,13 @@ import { SettingsManager } from './settings-manager.js';
 import { resolveRuntimeSettings } from '../config/runtime-settings.js';
 import { KNOWN_AGENTS } from '../config/discipline.js';
 import type { RuntimeSettings } from '../workflow-types.js';
+import { buildAnalyticsHistory } from './analytics-history.js';
+import { appendTaskTransitionEvent, readTaskTransitionEvents } from './analytics-task-events.js';
+import { buildTaskVelocityAnalytics } from './analytics-task-velocity.js';
+import { buildApprovalMetrics } from './analytics-approval-metrics.js';
+import { buildCodeMetrics } from './analytics-code-metrics.js';
+import { buildCycleTimeAnalytics } from './analytics-cycle-time.js';
+import { buildBurndownAnalytics } from './analytics-burndown.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -634,6 +641,145 @@ export class MultiProjectDashboardServer {
         steering: steeringStatus,
         version: this.packageVersion
       };
+    });
+
+    // Historical analytics for statistics page
+    this.app.get('/api/projects/:projectId/analytics/history', async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const { days } = request.query as { days?: string };
+      const project = this.projectManager.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      try {
+        const rawDays = days ? Number(days) : 30;
+        const [specs, archivedSpecs, approvals] = await Promise.all([
+          project.parser.getAllSpecs(),
+          project.parser.getAllArchivedSpecs(),
+          project.approvalStorage.getAllApprovals(),
+        ]);
+
+        return buildAnalyticsHistory({
+          specs,
+          archivedSpecs,
+          approvals,
+          windowDays: rawDays,
+        });
+      } catch (historyError: any) {
+        return reply.code(500).send({ error: historyError.message });
+      }
+    });
+
+    // Task velocity analytics
+    this.app.get('/api/projects/:projectId/analytics/task-velocity', async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const { days } = request.query as { days?: string };
+      const project = this.projectManager.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      try {
+        const rawDays = days ? Number(days) : 30;
+        const events = await readTaskTransitionEvents(project.projectPath);
+        return buildTaskVelocityAnalytics({
+          events,
+          windowDays: rawDays,
+        });
+      } catch (error: any) {
+        return reply.code(500).send({ error: error.message });
+      }
+    });
+
+    // Approval metrics analytics
+    this.app.get('/api/projects/:projectId/analytics/approval-metrics', async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const { days } = request.query as { days?: string };
+      const project = this.projectManager.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      try {
+        const rawDays = days ? Number(days) : 30;
+        const approvals = await project.approvalStorage.getAllApprovals();
+        return buildApprovalMetrics({
+          approvals,
+          windowDays: rawDays,
+        });
+      } catch (error: any) {
+        return reply.code(500).send({ error: error.message });
+      }
+    });
+
+    // Code metrics analytics
+    this.app.get('/api/projects/:projectId/analytics/code-metrics', async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const { days } = request.query as { days?: string };
+      const project = this.projectManager.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      try {
+        const rawDays = days ? Number(days) : 30;
+        return await buildCodeMetrics({
+          projectPath: project.projectPath,
+          windowDays: rawDays,
+        });
+      } catch (error: any) {
+        return reply.code(500).send({ error: error.message });
+      }
+    });
+
+    // Cycle time analytics
+    this.app.get('/api/projects/:projectId/analytics/cycle-time', async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const { days } = request.query as { days?: string };
+      const project = this.projectManager.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      try {
+        const rawDays = days ? Number(days) : 30;
+        const [events, specs, archivedSpecs] = await Promise.all([
+          readTaskTransitionEvents(project.projectPath),
+          project.parser.getAllSpecs(),
+          project.parser.getAllArchivedSpecs(),
+        ]);
+
+        return buildCycleTimeAnalytics({
+          events,
+          specs,
+          archivedSpecs,
+          windowDays: rawDays,
+        });
+      } catch (error: any) {
+        return reply.code(500).send({ error: error.message });
+      }
+    });
+
+    // Burndown analytics
+    this.app.get('/api/projects/:projectId/analytics/burndown', async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const { days } = request.query as { days?: string };
+      const project = this.projectManager.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      try {
+        const rawDays = days ? Number(days) : 30;
+        const events = await readTaskTransitionEvents(project.projectPath);
+        return buildBurndownAnalytics({
+          events,
+          windowDays: rawDays,
+        });
+      } catch (error: any) {
+        return reply.code(500).send({ error: error.message });
+      }
     });
 
     // Specs list
@@ -1520,13 +1666,32 @@ export class MultiProjectDashboardServer {
         }
 
         await fs.writeFile(tasksPath, updatedContent, 'utf-8');
+        const updatedParseResult = parseTasksFromMarkdown(updatedContent);
+        const updatedTask = updatedParseResult.tasks.find((parsedTask) => parsedTask.id === taskId);
+
+        try {
+          await appendTaskTransitionEvent(project.projectPath, {
+            timestamp: new Date().toISOString(),
+            specName: name,
+            taskId,
+            previousStatus: task.status,
+            nextStatus: status,
+            summaryAfter: {
+              total: updatedParseResult.summary.total,
+              completed: updatedParseResult.summary.completed,
+              pending: updatedParseResult.summary.pending,
+            },
+          });
+        } catch (eventWriteError) {
+          console.warn('Failed to append task transition analytics event:', eventWriteError);
+        }
 
         this.broadcastTaskUpdate(projectId, name);
 
         return {
           success: true,
           message: `Task ${taskId} status updated to ${status}`,
-          task: { ...task, status }
+          task: updatedTask ?? { ...task, status }
         };
       } catch (error: any) {
         return reply.code(500).send({ error: `Failed to update task status: ${error.message}` });

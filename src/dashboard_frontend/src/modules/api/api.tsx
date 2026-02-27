@@ -27,6 +27,101 @@ export type ProjectInfo = {
   version?: string;
 };
 
+export type AnalyticsHistoryPoint = {
+  date: string;
+  specsCreated: number;
+  specsModified: number;
+  approvalsCreated: number;
+  approvalsResolved: number;
+};
+
+export type AnalyticsHistoryResponse = {
+  windowDays: number;
+  startDate: string;
+  endDate: string;
+  points: AnalyticsHistoryPoint[];
+  totals: {
+    specsCreated: number;
+    specsModified: number;
+    approvalsCreated: number;
+    approvalsResolved: number;
+  };
+};
+
+type AnalyticsResponseBase = {
+  windowDays: number;
+  startDate: string;
+  endDate: string;
+  partialData: boolean;
+  dataCoverage: string[];
+};
+
+export type TaskVelocityResponse = AnalyticsResponseBase & {
+  points: Array<{
+    date: string;
+    completedTasks: number;
+  }>;
+  totals: {
+    completedTasks: number;
+  };
+};
+
+export type ApprovalMetricsResponse = AnalyticsResponseBase & {
+  countsByStatus: {
+    pending: number;
+    approved: number;
+    rejected: number;
+    needsRevision: number;
+  };
+  resolvedCount: number;
+  rejectionRate: number | null;
+  avgResolutionMs: number | null;
+  medianResolutionMs: number | null;
+  dailyLatency: Array<{
+    date: string;
+    count: number;
+    avgResolutionMs: number | null;
+  }>;
+};
+
+export type CodeMetricsResponse = AnalyticsResponseBase & {
+  source: 'git' | 'unavailable';
+  points: Array<{
+    date: string;
+    linesAdded: number;
+    linesDeleted: number;
+    filesChanged: number;
+  }>;
+  totals: {
+    linesAdded: number;
+    linesDeleted: number;
+    filesChanged: number;
+  };
+};
+
+export type CycleTimeResponse = AnalyticsResponseBase & {
+  taskCycle: {
+    count: number;
+    avgMs: number | null;
+    medianMs: number | null;
+    p90Ms?: number | null;
+  };
+  specCycle: {
+    count: number;
+    avgMs: number | null;
+    medianMs: number | null;
+  };
+};
+
+export type BurndownResponse = AnalyticsResponseBase & {
+  points: Array<{
+    date: string;
+    totalTasks: number;
+    completedTasks: number;
+    remainingTasks: number;
+  }>;
+};
+
 export interface DocumentSnapshot {
   id: string;
   approvalId: string;
@@ -116,6 +211,12 @@ type ApiActionsContextType = {
   addImplementationLog: (specName: string, logData: any) => Promise<{ ok: boolean; status: number; data?: any }>;
   getImplementationLogs: (specName: string, query?: { taskId?: string; search?: string }) => Promise<{ entries: ImplementationLogEntry[] }>;
   getImplementationLogStats: (specName: string, taskId: string) => Promise<any>;
+  getAnalyticsHistory: (days?: number) => Promise<AnalyticsHistoryResponse>;
+  getTaskVelocity: (days?: number) => Promise<TaskVelocityResponse>;
+  getApprovalMetrics: (days?: number) => Promise<ApprovalMetricsResponse>;
+  getCodeMetrics: (days?: number) => Promise<CodeMetricsResponse>;
+  getCycleTime: (days?: number) => Promise<CycleTimeResponse>;
+  getBurndown: (days?: number) => Promise<BurndownResponse>;
   getChangelog: (version: string) => Promise<{ content: string }>;
   aiReview: (approvalId: string, model: string) => Promise<{ success: boolean; model: string; suggestions: Array<{ quote?: string; comment: string }> }>;
 };
@@ -285,6 +386,87 @@ export function ApiProvider({ initial, projectId, children }: ApiProviderProps) 
         addImplementationLog: async () => ({ ok: false, status: 400 }),
         getImplementationLogs: async () => ({ entries: [] }),
         getImplementationLogStats: async () => ({}),
+        getAnalyticsHistory: async () => ({
+          windowDays: 30,
+          startDate: '',
+          endDate: '',
+          points: [],
+          totals: {
+            specsCreated: 0,
+            specsModified: 0,
+            approvalsCreated: 0,
+            approvalsResolved: 0,
+          },
+        }),
+        getTaskVelocity: async () => ({
+          windowDays: 30,
+          startDate: '',
+          endDate: '',
+          partialData: true,
+          dataCoverage: [],
+          points: [],
+          totals: {
+            completedTasks: 0,
+          },
+        }),
+        getApprovalMetrics: async () => ({
+          windowDays: 30,
+          startDate: '',
+          endDate: '',
+          partialData: true,
+          dataCoverage: [],
+          countsByStatus: {
+            pending: 0,
+            approved: 0,
+            rejected: 0,
+            needsRevision: 0,
+          },
+          resolvedCount: 0,
+          rejectionRate: null,
+          avgResolutionMs: null,
+          medianResolutionMs: null,
+          dailyLatency: [],
+        }),
+        getCodeMetrics: async () => ({
+          windowDays: 30,
+          startDate: '',
+          endDate: '',
+          partialData: true,
+          dataCoverage: [],
+          source: 'unavailable',
+          points: [],
+          totals: {
+            linesAdded: 0,
+            linesDeleted: 0,
+            filesChanged: 0,
+          },
+        }),
+        getCycleTime: async () => ({
+          windowDays: 30,
+          startDate: '',
+          endDate: '',
+          partialData: true,
+          dataCoverage: [],
+          taskCycle: {
+            count: 0,
+            avgMs: null,
+            medianMs: null,
+            p90Ms: null,
+          },
+          specCycle: {
+            count: 0,
+            avgMs: null,
+            medianMs: null,
+          },
+        }),
+        getBurndown: async () => ({
+          windowDays: 30,
+          startDate: '',
+          endDate: '',
+          partialData: true,
+          dataCoverage: [],
+          points: [],
+        }),
         getChangelog: async () => ({ content: '' }),
         aiReview: async () => ({ success: false, model: '', suggestions: [] }),
       };
@@ -326,6 +508,18 @@ export function ApiProvider({ initial, projectId, children }: ApiProviderProps) 
         return getJson(url);
       },
       getImplementationLogStats: (specName: string, taskId: string) => getJson(`${prefix}/specs/${encodeURIComponent(specName)}/implementation-log/task/${encodeURIComponent(taskId)}/stats`),
+      getAnalyticsHistory: (days: number = 30) =>
+        getJson<AnalyticsHistoryResponse>(`${prefix}/analytics/history?days=${encodeURIComponent(String(days))}`),
+      getTaskVelocity: (days: number = 30) =>
+        getJson<TaskVelocityResponse>(`${prefix}/analytics/task-velocity?days=${encodeURIComponent(String(days))}`),
+      getApprovalMetrics: (days: number = 30) =>
+        getJson<ApprovalMetricsResponse>(`${prefix}/analytics/approval-metrics?days=${encodeURIComponent(String(days))}`),
+      getCodeMetrics: (days: number = 30) =>
+        getJson<CodeMetricsResponse>(`${prefix}/analytics/code-metrics?days=${encodeURIComponent(String(days))}`),
+      getCycleTime: (days: number = 30) =>
+        getJson<CycleTimeResponse>(`${prefix}/analytics/cycle-time?days=${encodeURIComponent(String(days))}`),
+      getBurndown: (days: number = 30) =>
+        getJson<BurndownResponse>(`${prefix}/analytics/burndown?days=${encodeURIComponent(String(days))}`),
       getChangelog: (version: string) => getJson(`${prefix}/changelog/${encodeURIComponent(version)}`),
       aiReview: async (approvalId: string, model: string) => {
         const res = await fetch(`${prefix}/approvals/${encodeURIComponent(approvalId)}/ai-review`, {
@@ -372,5 +566,3 @@ export function useApi(): ApiDataContextType & ApiActionsContextType {
   const actions = useApiActions();
   return { ...data, ...actions };
 }
-
-
