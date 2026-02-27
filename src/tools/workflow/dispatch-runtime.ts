@@ -135,15 +135,10 @@ function extractStructuredJson(rawOutput: string): unknown {
     );
   }
 
-  if (!trimmed.startsWith(DISPATCH_RESULT_BEGIN)) {
-    throw new DispatchContractError('marker_missing', 'Dispatch result must start with BEGIN_DISPATCH_RESULT marker');
-  }
-  if (!trimmed.endsWith(DISPATCH_RESULT_END)) {
-    throw new DispatchContractError('marker_missing', 'Dispatch result must end with END_DISPATCH_RESULT marker');
-  }
-
+  const beginIndex = trimmed.indexOf(DISPATCH_RESULT_BEGIN);
+  const endIndex = trimmed.indexOf(DISPATCH_RESULT_END);
   const jsonBody = trimmed
-    .slice(DISPATCH_RESULT_BEGIN.length, trimmed.length - DISPATCH_RESULT_END.length)
+    .slice(beginIndex + DISPATCH_RESULT_BEGIN.length, endIndex)
     .trim();
 
   if (!jsonBody) {

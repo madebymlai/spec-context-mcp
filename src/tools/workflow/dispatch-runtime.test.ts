@@ -802,13 +802,13 @@ END_DISPATCH_RESULT`;
     expect(result.message).toContain('must reference a known provider');
   });
 
-  it('rejects extra prose outside dispatch contract markers', async () => {
+  it('accepts dispatch contract with preamble before begin marker', async () => {
     await dispatchRuntimeHandler(
       {
         action: 'init_run',
-        runId: 'test-run-prose-reject',
+        runId: 'test-run-prose-preamble',
         specName: SPEC_NAME,
-        taskId: '7.1',
+        taskId: '2.1',
       },
       context
     );
@@ -816,19 +816,137 @@ END_DISPATCH_RESULT`;
     const result = await dispatchRuntimeHandler(
       {
         action: 'ingest_output',
-        runId: 'test-run-prose-reject',
+        runId: 'test-run-prose-preamble',
         role: 'implementer',
-        taskId: '7.1',
+        taskId: '2.1',
         outputContent: `Some prose first
 BEGIN_DISPATCH_RESULT
-{"task_id":"7.1","status":"completed","summary":"Done","files_changed":[],"tests":[{"command":"npm test --run","passed":true}],"follow_up_actions":[]}
+{"task_id":"2.1","status":"completed","summary":"Done","files_changed":[],"tests":[{"command":"npm test --run","passed":true}],"follow_up_actions":[]}
+END_DISPATCH_RESULT`,
+      },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.result?.status).toBe('completed');
+    expect(result.data?.nextAction).toBe('dispatch_reviewer');
+  });
+
+  it('accepts dispatch contract with epilogue after end marker', async () => {
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-prose-epilogue',
+        specName: SPEC_NAME,
+        taskId: '2.1',
+      },
+      context
+    );
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId: 'test-run-prose-epilogue',
+        role: 'implementer',
+        taskId: '2.1',
+        outputContent: `BEGIN_DISPATCH_RESULT
+{"task_id":"2.1","status":"completed","summary":"Done","files_changed":[],"tests":[{"command":"npm test --run","passed":true}],"follow_up_actions":[]}
+END_DISPATCH_RESULT
+trailing prose`,
+      },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.result?.status).toBe('completed');
+    expect(result.data?.nextAction).toBe('dispatch_reviewer');
+  });
+
+  it('accepts dispatch contract with both preamble and epilogue text', async () => {
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-prose-both',
+        specName: SPEC_NAME,
+        taskId: '2.1',
+      },
+      context
+    );
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId: 'test-run-prose-both',
+        role: 'implementer',
+        taskId: '2.1',
+        outputContent: `Some prose first
+BEGIN_DISPATCH_RESULT
+{"task_id":"2.1","status":"completed","summary":"Done","files_changed":[],"tests":[{"command":"npm test --run","passed":true}],"follow_up_actions":[]}
+END_DISPATCH_RESULT
+trailing prose`,
+      },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.result?.status).toBe('completed');
+    expect(result.data?.nextAction).toBe('dispatch_reviewer');
+  });
+
+  it('fails with marker_missing when begin marker is missing', async () => {
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-marker-missing',
+        specName: SPEC_NAME,
+        taskId: '2.1',
+      },
+      context
+    );
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId: 'test-run-marker-missing',
+        role: 'implementer',
+        taskId: '2.1',
+        outputContent: `{"task_id":"2.1","status":"completed","summary":"Done","files_changed":[],"tests":[{"command":"npm test --run","passed":true}],"follow_up_actions":[]}
 END_DISPATCH_RESULT`,
       },
       context
     );
 
     expect(result.success).toBe(false);
-    expect(result.message).toContain('must start with BEGIN_DISPATCH_RESULT');
+    expect(result.data?.errorCode).toBe('marker_missing');
+  });
+
+  it('fails with marker_missing when marker count is duplicated', async () => {
+    await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'test-run-marker-duplicate',
+        specName: SPEC_NAME,
+        taskId: '2.1',
+      },
+      context
+    );
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'ingest_output',
+        runId: 'test-run-marker-duplicate',
+        role: 'implementer',
+        taskId: '2.1',
+        outputContent: `BEGIN_DISPATCH_RESULT
+BEGIN_DISPATCH_RESULT
+{"task_id":"2.1","status":"completed","summary":"Done","files_changed":[],"tests":[{"command":"npm test --run","passed":true}],"follow_up_actions":[]}
+END_DISPATCH_RESULT`,
+      },
+      context
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.data?.errorCode).toBe('marker_missing');
   });
 
   it('compiles dispatch prompt with stable hashes and delta packet', async () => {
