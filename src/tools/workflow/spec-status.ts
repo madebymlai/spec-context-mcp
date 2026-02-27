@@ -14,6 +14,17 @@ export interface SpecStatusReaderFactory {
   create(projectPath: string): SpecStatusReader;
 }
 
+export interface SpecStatusGraphStats {
+  totalFacts: number;
+  validFacts: number;
+  entities: number;
+  persistenceAvailable: boolean;
+}
+
+export interface SpecStatusGraphStatsProvider {
+  getStats(projectPath: string, specName: string): Promise<SpecStatusGraphStats | null>;
+}
+
 interface SpecStatusArgs {
   projectPath?: string;
   specName: string;
@@ -129,7 +140,8 @@ Call when resuming work on a spec or checking overall completion status. Shows w
 };
 
 export function createSpecStatusHandler(
-  specStatusReaderFactory: SpecStatusReaderFactory
+  specStatusReaderFactory: SpecStatusReaderFactory,
+  graphStatsProvider?: SpecStatusGraphStatsProvider,
 ): (args: unknown, context: ToolContext) => Promise<ToolResponse> {
   return async function specStatusHandler(args: unknown, context: ToolContext): Promise<ToolResponse> {
     const parsedArgs = args as SpecStatusArgs;
@@ -189,6 +201,7 @@ export function createSpecStatusHandler(
       const workflowState = resolveSpecWorkflowState(spec);
       const phaseDetails = buildPhaseDetails(spec);
       const nextSteps = buildNextSteps(workflowState.currentPhase, spec, specName);
+      const graphStats = await resolveGraphStats(graphStatsProvider, translatedPath, specName);
 
       return {
         success: true,
@@ -206,6 +219,7 @@ export function createSpecStatusHandler(
             completed: 0,
             pending: 0,
           },
+          ...(graphStats ? { graphStats } : {}),
         },
         nextSteps,
         projectContext: {
@@ -229,6 +243,27 @@ export function createSpecStatusHandler(
       };
     }
   };
+}
+
+async function resolveGraphStats(
+  graphStatsProvider: SpecStatusGraphStatsProvider | undefined,
+  projectPath: string,
+  specName: string,
+): Promise<SpecStatusGraphStats | null> {
+  if (!graphStatsProvider) {
+    return null;
+  }
+
+  try {
+    return await graphStatsProvider.getStats(projectPath, specName);
+  } catch {
+    return {
+      totalFacts: 0,
+      validFacts: 0,
+      entities: 0,
+      persistenceAvailable: false,
+    };
+  }
 }
 
 function resolveSpecWorkflowState(spec: SpecData): SpecWorkflowState {

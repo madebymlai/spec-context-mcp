@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -105,5 +105,60 @@ describe('dispatch-runtime-node initialization recovery', () => {
     );
     expect(second.success).toBe(true);
     expect(second.message).toBe('Dispatch runtime initialized');
+  });
+
+  it('initializes SQLite persistence in project .spec-context on first init_run', async () => {
+    const { dispatchRuntimeHandler } = await import('./dispatch-runtime-node.js');
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({
+      implementer: 'codex',
+      reviewer: 'codex',
+    });
+    await writeTasksFile('runtime-init-graph-store', '1');
+
+    const result = await dispatchRuntimeHandler(
+      {
+        action: 'init_run',
+        runId: 'runtime-init-graph-store',
+        specName: 'runtime-init-graph-store',
+        taskId: '1',
+      },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    const knowledgeGraphStat = await stat(join(projectPath, '.spec-context', 'knowledge-graph.db'));
+    expect(knowledgeGraphStat.isFile()).toBe(true);
+  });
+
+  it('falls back to in-memory session store when SQLite initialization fails', async () => {
+    const { dispatchRuntimeHandler } = await import('./dispatch-runtime-node.js');
+    const manager = new SettingsManager();
+    await manager.updateRuntimeSettings({
+      implementer: 'codex',
+      reviewer: 'codex',
+    });
+    await writeTasksFile('runtime-init-sqlite-fallback', '1');
+    await mkdir(join(projectPath, '.spec-context', 'knowledge-graph.db'), { recursive: true });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = await dispatchRuntimeHandler(
+        {
+          action: 'init_run',
+          runId: 'runtime-init-sqlite-fallback',
+          specName: 'runtime-init-sqlite-fallback',
+          taskId: '1',
+        },
+        context
+      );
+
+      expect(result.success).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('falling back to InMemorySessionFactStore')
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

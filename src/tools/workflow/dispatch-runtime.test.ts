@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RoutingTable, type ITaskComplexityClassifier } from '../../core/routing/index.js';
 import {
   InMemorySessionFactStore,
@@ -1352,6 +1352,73 @@ END_DISPATCH_RESULT`,
 
     expect(result.success).toBe(true);
     expect(result.data?.snapshot?.run_id).toBe('test-run-snapshot');
+  });
+
+  it('records graph retrieval telemetry fields in runtime snapshot', async () => {
+    const classifier: ITaskComplexityClassifier = {
+      classify: () => ({
+        level: 'complex',
+        confidence: 1,
+        features: [],
+        classifierId: 'test-classifier',
+      }),
+    };
+    const fakeStore = {
+      add: vi.fn(),
+      invalidate: vi.fn(),
+      getValid: vi.fn().mockReturnValue([]),
+      getValidByTags: vi.fn().mockReturnValue([]),
+      count: vi.fn().mockReturnValue(0),
+      compact: vi.fn(),
+      getStats: vi.fn().mockReturnValue({
+        totalFacts: 21,
+        validFacts: 8,
+        entities: 5,
+        persistenceAvailable: true,
+      }),
+    };
+    const fakeRetriever = {
+      retrieve: vi.fn().mockReturnValue([]),
+      getLastRetrievalMetrics: vi.fn().mockReturnValue({
+        factsRetrieved: 3,
+        graphHopsUsed: 2,
+        retrievalTimeMs: 4,
+        graphNodes: 5,
+        graphEdges: 8,
+        persistenceAvailable: true,
+      }),
+    };
+    const manager = new DispatchRuntimeManagerClass(
+      classifier,
+      new RoutingTable({
+        simple: 'codex',
+        complex: 'claude',
+      }),
+      fakeStore as any,
+      new RuleBasedFactExtractor(),
+      fakeRetriever as any,
+      createNodeDispatchRuntimeManagerDependencies(),
+    );
+    const runId = 'test-run-telemetry-graph';
+
+    await manager.initRun(runId, SPEC_NAME, '1.1', context.projectPath);
+    await manager.compilePrompt({
+      runId,
+      role: 'implementer',
+      taskId: '1.1',
+      projectPath: context.projectPath,
+      maxOutputTokens: 400,
+      taskPrompt: 'Implement task 1.1',
+    });
+
+    const telemetry = manager.getTelemetrySnapshot();
+
+    expect(telemetry.factsRetrieved).toBe(3);
+    expect(telemetry.graphHopsUsed).toBe(2);
+    expect(telemetry.retrievalTimeMs).toBe(4);
+    expect(telemetry.graphNodes).toBe(5);
+    expect(telemetry.graphEdges).toBe(8);
+    expect(telemetry.persistenceAvailable).toBe(true);
   });
 });
 

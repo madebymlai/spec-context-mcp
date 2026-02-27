@@ -1,6 +1,6 @@
 import { FactQuery, IFactRetriever, ISessionFactStore, SessionFact } from './types.js';
 
-const STOPWORDS = new Set<string>([
+export const KEYWORD_STOPWORDS = new Set<string>([
   'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
   'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'shall', 'should',
   'may', 'might', 'can', 'could', 'of', 'in', 'to', 'for', 'with', 'on',
@@ -16,7 +16,7 @@ function tokenize(value: string): Set<string> {
     .toLowerCase()
     .split(TOKEN_SPLIT_REGEX)
     .map(token => token.trim())
-    .filter(token => token.length > 0 && !STOPWORDS.has(token));
+    .filter(token => token.length > 0 && !KEYWORD_STOPWORDS.has(token));
   return new Set(tokens);
 }
 

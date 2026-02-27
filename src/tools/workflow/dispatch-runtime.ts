@@ -543,11 +543,21 @@ interface DispatchSchemaTelemetry {
   schema_version_counts: Record<string, number>;
 }
 
+interface DispatchGraphRetrievalTelemetry {
+  factsRetrieved: number;
+  graphHopsUsed: number;
+  retrievalTimeMs: number;
+  graphNodes: number;
+  graphEdges: number;
+  persistenceAvailable: boolean;
+}
+
 type DispatchTelemetrySnapshot =
   & DispatchCoreTelemetry
   & DispatchCompactionTelemetry
   & DispatchLedgerTelemetry
-  & DispatchSchemaTelemetry;
+  & DispatchSchemaTelemetry
+  & DispatchGraphRetrievalTelemetry;
 
 interface SnapshotStoreUpsertInput {
   runId: string;
@@ -664,6 +674,12 @@ export class DispatchRuntimeManager {
       schema_invalid: 0,
     },
     schema_version_counts: {},
+    factsRetrieved: 0,
+    graphHopsUsed: 0,
+    retrievalTimeMs: 0,
+    graphNodes: 0,
+    graphEdges: 0,
+    persistenceAvailable: false,
   };
 
   constructor(
@@ -1118,6 +1134,7 @@ export class DispatchRuntimeManager {
       maxTokens: 500,
       tokenCharsPerToken: this.compactionPolicy.tokenCharsPerToken,
     });
+    this.updateGraphRetrievalTelemetry(relevantFacts.length);
     const sessionContext = formatSessionFacts(relevantFacts);
 
     const promptBudget = this.resolvePromptInputBudget(args.role, args.maxOutputTokens);
@@ -1394,6 +1411,33 @@ export class DispatchRuntimeManager {
     if (approvalLoop) {
       this.telemetry.approval_loops += 1;
     }
+  }
+
+  private updateGraphRetrievalTelemetry(fallbackFactsRetrieved: number): void {
+    const retrieverWithMetrics = this.factRetriever as IFactRetriever & {
+      getLastRetrievalMetrics?: () => Partial<DispatchGraphRetrievalTelemetry>;
+    };
+    const storeWithStats = this.factStore as ISessionFactStore & {
+      getStats?: () => {
+        totalFacts: number;
+        validFacts: number;
+        entities: number;
+        persistenceAvailable: boolean;
+      };
+    };
+
+    const retrieverMetrics = retrieverWithMetrics.getLastRetrievalMetrics?.();
+    const storeStats = storeWithStats.getStats?.();
+    const graphMetricsAvailable = retrieverMetrics !== undefined || storeStats !== undefined;
+
+    this.telemetry.factsRetrieved = graphMetricsAvailable
+      ? (retrieverMetrics?.factsRetrieved ?? fallbackFactsRetrieved)
+      : 0;
+    this.telemetry.graphHopsUsed = retrieverMetrics?.graphHopsUsed ?? 0;
+    this.telemetry.retrievalTimeMs = retrieverMetrics?.retrievalTimeMs ?? 0;
+    this.telemetry.graphNodes = retrieverMetrics?.graphNodes ?? storeStats?.entities ?? 0;
+    this.telemetry.graphEdges = retrieverMetrics?.graphEdges ?? storeStats?.validFacts ?? 0;
+    this.telemetry.persistenceAvailable = retrieverMetrics?.persistenceAvailable ?? storeStats?.persistenceAvailable ?? false;
   }
 
   private bumpLedgerCompileTelemetry(mode: LedgerMode, baselineTokens: number, actualTokens: number): void {

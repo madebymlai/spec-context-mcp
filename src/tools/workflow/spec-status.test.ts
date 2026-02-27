@@ -16,8 +16,6 @@ const specStatusReaderFactory: SpecStatusReaderFactory = {
   },
 };
 
-const specStatusHandler = createSpecStatusHandler(specStatusReaderFactory);
-
 describe('spec-status cache integration', () => {
   const testDirs: string[] = [];
 
@@ -48,6 +46,7 @@ describe('spec-status cache integration', () => {
     const fileContentCache = new TestFileContentCache();
     const context = { projectPath, fileContentCache };
 
+    const specStatusHandler = createSpecStatusHandler(specStatusReaderFactory);
     const first = await specStatusHandler({ specName }, context);
     const second = await specStatusHandler({ specName }, context);
 
@@ -65,6 +64,7 @@ describe('spec-status cache integration', () => {
     const context = { projectPath, fileContentCache };
     const tasksPath = join(projectPath, '.spec-context', 'specs', specName, 'tasks.md');
 
+    const specStatusHandler = createSpecStatusHandler(specStatusReaderFactory);
     const first = await specStatusHandler({ specName }, context);
     expect(first.success).toBe(true);
     expect(first.data?.taskProgress?.completed).toBe(0);
@@ -86,6 +86,7 @@ describe('spec-status cache integration', () => {
     const context = { projectPath, fileContentCache };
     const specDir = join(projectPath, '.spec-context', 'specs', specName);
 
+    const specStatusHandler = createSpecStatusHandler(specStatusReaderFactory);
     const first = await specStatusHandler({ specName }, context);
     expect(first.success).toBe(true);
     const designBefore = (first.data?.phases ?? []).find((phase: { name: string; status: string }) => phase.name === 'Design');
@@ -98,5 +99,30 @@ describe('spec-status cache integration', () => {
     expect(second.success).toBe(true);
     const designAfter = (second.data?.phases ?? []).find((phase: { name: string; status: string }) => phase.name === 'Design');
     expect(designAfter?.status).toBe('created');
+  });
+
+  it('includes graph stats when a graph stats reader is available', async () => {
+    const specName = 'cache-graph-stats-spec';
+    const projectPath = await createProject(specName);
+    const fileContentCache = new TestFileContentCache();
+    const context = { projectPath, fileContentCache };
+    const specStatusHandler = createSpecStatusHandler(specStatusReaderFactory, {
+      getStats: async () => ({
+        totalFacts: 12,
+        validFacts: 5,
+        entities: 7,
+        persistenceAvailable: true,
+      }),
+    });
+
+    const result = await specStatusHandler({ specName }, context);
+
+    expect(result.success).toBe(true);
+    expect(result.data?.graphStats).toEqual({
+      totalFacts: 12,
+      validFacts: 5,
+      entities: 7,
+      persistenceAvailable: true,
+    });
   });
 });

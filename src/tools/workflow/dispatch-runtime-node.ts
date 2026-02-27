@@ -10,13 +10,22 @@ import {
   PromptTemplateRegistry,
   PromptPrefixCompiler,
 } from '../../core/llm/index.js';
-import type { RuntimeEventEnvelope } from '../../core/llm/index.js';
+import type { RuntimeEventEnvelope, StateSnapshot } from '../../core/llm/index.js';
 import { getSharedFileContentCacheTelemetry } from '../../core/cache/shared-file-content-cache.js';
 import { HeuristicComplexityClassifier, RoutingTable } from '../../core/routing/index.js';
 import {
+  GraphFactRetriever,
+  GraphSessionFactStore,
+  type GraphSessionFactStoreStats,
+  type IFactRetriever,
   InMemorySessionFactStore,
+  type ISessionFactStore,
   KeywordFactRetriever,
   RuleBasedFactExtractor,
+  type FactQuery,
+  type SessionFact,
+  type SessionFactTag,
+  SQLiteFactAdapter,
 } from '../../core/session/index.js';
 import {
   createDispatchRuntimeHandler,
@@ -37,6 +46,186 @@ import { NodeDispatchExecutor } from './dispatch-executor.js';
 import type { ToolContext, ToolResponse } from '../../workflow-types.js';
 
 const DEFAULT_TOKEN_CHARS_PER_TOKEN = 4;
+
+class LazySessionKnowledgeGraphRuntime {
+  private readonly fallbackStore = new InMemorySessionFactStore();
+  private readonly fallbackRetriever = new KeywordFactRetriever(this.fallbackStore);
+  private activeStore: ISessionFactStore = this.fallbackStore;
+  private activeRetriever: IFactRetriever = this.fallbackRetriever;
+  private initialized = false;
+
+  runWithFactStore<T>(operation: (store: ISessionFactStore) => T): T {
+    try {
+      return operation(this.activeStore);
+    } catch (error) {
+      this.fallbackToInMemory(
+        '[dispatch-runtime-node] Graph session store operation failed; falling back to InMemorySessionFactStore.',
+        error,
+      );
+      return operation(this.activeStore);
+    }
+  }
+
+  runWithFactRetriever<T>(operation: (retriever: IFactRetriever) => T): T {
+    try {
+      return operation(this.activeRetriever);
+    } catch (error) {
+      this.fallbackToInMemory(
+        '[dispatch-runtime-node] Graph fact retrieval failed; falling back to KeywordFactRetriever.',
+        error,
+      );
+      return operation(this.activeRetriever);
+    }
+  }
+
+  getFactStoreStats(): GraphSessionFactStoreStats | null {
+    const storeWithStats = this.activeStore as ISessionFactStore & {
+      getStats?: () => GraphSessionFactStoreStats;
+    };
+    return storeWithStats.getStats?.() ?? null;
+  }
+
+  getLastRetrievalMetrics(): {
+    factsRetrieved: number;
+    graphHopsUsed: number;
+    retrievalTimeMs: number;
+    graphNodes: number;
+    graphEdges: number;
+    persistenceAvailable: boolean;
+  } | null {
+    const retrieverWithMetrics = this.activeRetriever as IFactRetriever & {
+      getLastRetrievalMetrics?: () => {
+        factsRetrieved: number;
+        graphHopsUsed: number;
+        retrievalTimeMs: number;
+        graphNodes: number;
+        graphEdges: number;
+        persistenceAvailable: boolean;
+      };
+    };
+    return retrieverWithMetrics.getLastRetrievalMetrics?.() ?? null;
+  }
+
+  initialize(specName: string, projectPath: string): void {
+    if (this.initialized) {
+      return;
+    }
+
+    this.initialized = true;
+    const databasePath = resolve(projectPath, '.spec-context', 'knowledge-graph.db');
+    const adapter = new SQLiteFactAdapter(databasePath);
+    adapter.initialize();
+
+    if (!adapter.isPersistenceAvailable()) {
+      this.fallbackToInMemory(
+        `[dispatch-runtime-node] SQLite knowledge graph unavailable at "${databasePath}", falling back to InMemorySessionFactStore.`,
+      );
+      return;
+    }
+
+    try {
+      const graphStore = new GraphSessionFactStore(adapter, specName);
+      this.activeStore = graphStore;
+      this.activeRetriever = new GraphFactRetriever(graphStore);
+    } catch (error) {
+      adapter.close();
+      this.fallbackToInMemory(
+        '[dispatch-runtime-node] Graph session runtime initialization failed; falling back to InMemorySessionFactStore.',
+        error,
+      );
+    }
+  }
+
+  private fallbackToInMemory(message: string, error?: unknown): void {
+    this.activeStore = this.fallbackStore;
+    this.activeRetriever = this.fallbackRetriever;
+    if (error === undefined) {
+      console.warn(message);
+      return;
+    }
+    console.warn(message, error);
+  }
+}
+
+class DelegatingSessionFactStore implements ISessionFactStore {
+  constructor(private readonly runtime: LazySessionKnowledgeGraphRuntime) {}
+
+  add(facts: SessionFact[]): void {
+    this.runtime.runWithFactStore(store => store.add(facts));
+  }
+
+  invalidate(subject: string, relation: string): void {
+    this.runtime.runWithFactStore(store => store.invalidate(subject, relation));
+  }
+
+  getValid(): SessionFact[] {
+    return this.runtime.runWithFactStore(store => store.getValid());
+  }
+
+  getValidByTags(tags: SessionFactTag[]): SessionFact[] {
+    return this.runtime.runWithFactStore(store => store.getValidByTags(tags));
+  }
+
+  count(): number {
+    return this.runtime.runWithFactStore(store => store.count());
+  }
+
+  compact(maxFacts: number): void {
+    this.runtime.runWithFactStore(store => store.compact(maxFacts));
+  }
+
+  getStats(): GraphSessionFactStoreStats | null {
+    return this.runtime.getFactStoreStats();
+  }
+}
+
+class DelegatingFactRetriever implements IFactRetriever {
+  constructor(private readonly runtime: LazySessionKnowledgeGraphRuntime) {}
+
+  retrieve(query: FactQuery): SessionFact[] {
+    return this.runtime.runWithFactRetriever(retriever => retriever.retrieve(query));
+  }
+
+  getLastRetrievalMetrics(): {
+    factsRetrieved: number;
+    graphHopsUsed: number;
+    retrievalTimeMs: number;
+    graphNodes: number;
+    graphEdges: number;
+    persistenceAvailable: boolean;
+  } | null {
+    return this.runtime.getLastRetrievalMetrics();
+  }
+}
+
+class NodeDispatchRuntimeManager extends DispatchRuntimeManager {
+  constructor(
+    classifier: HeuristicComplexityClassifier,
+    routingTable: RoutingTable,
+    factExtractor: RuleBasedFactExtractor,
+    dependencies: DispatchRuntimeManagerDependencies,
+    private readonly runtime: LazySessionKnowledgeGraphRuntime,
+  ) {
+    super(
+      classifier,
+      routingTable,
+      new DelegatingSessionFactStore(runtime),
+      factExtractor,
+      new DelegatingFactRetriever(runtime),
+      dependencies,
+    );
+  }
+
+  override async initRun(
+    runId: string,
+    specName: string,
+    taskId: string,
+    projectPath: string,
+  ): Promise<StateSnapshot> {
+    this.runtime.initialize(specName, projectPath);
+    return super.initRun(runId, specName, taskId, projectPath);
+  }
+}
 
 function buildDispatchGuideInstruction(input: {
   role: 'implementer' | 'reviewer';
@@ -239,16 +428,15 @@ export function createNodeDispatchRuntimeManagerDependencies(): DispatchRuntimeM
 }
 
 export async function createNodeDispatchRuntimeHandlerDependencies(): Promise<DispatchRuntimeHandlerDependencies> {
-  const factStore = new InMemorySessionFactStore();
+  const sessionRuntime = new LazySessionKnowledgeGraphRuntime();
   const dispatchExecutor: IDispatchExecutor = new NodeDispatchExecutor();
   return {
-    runtimeManager: new DispatchRuntimeManager(
+    runtimeManager: new NodeDispatchRuntimeManager(
       new HeuristicComplexityClassifier(),
       await RoutingTable.fromSettings(),
-      factStore,
       new RuleBasedFactExtractor(),
-      new KeywordFactRetriever(factStore),
       createNodeDispatchRuntimeManagerDependencies(),
+      sessionRuntime,
     ),
     runIdFactory: new DeterministicDispatchRunIdFactory(),
     outputResolver: new NodeDispatchOutputResolver(),
