@@ -27,16 +27,9 @@ import LanguageDetector from 'i18next-browser-languagedetector';
  */
 // Static imports (default for backward compatibility)
 import enTranslation from './locales/en.json';
-import jaTranslation from './locales/ja.json';
-import zhTranslation from './locales/zh.json';
-import esTranslation from './locales/es.json';
-import ptTranslation from './locales/pt.json';
 import deTranslation from './locales/de.json';
-import frTranslation from './locales/fr.json';
 import ruTranslation from './locales/ru.json';
 import itTranslation from './locales/it.json';
-import koTranslation from './locales/ko.json';
-import arTranslation from './locales/ar.json';
 
 i18n
   .use(LanguageDetector)
@@ -46,35 +39,14 @@ i18n
       en: {
         translation: enTranslation,
       },
-      ja: {
-        translation: jaTranslation,
-      },
-      zh: {
-        translation: zhTranslation,
-      },
-      es: {
-        translation: esTranslation,
-      },
-      pt: {
-        translation: ptTranslation,
-      },
       de: {
         translation: deTranslation,
-      },
-      fr: {
-        translation: frTranslation,
       },
       ru: {
         translation: ruTranslation,
       },
       it: {
         translation: itTranslation,
-      },
-      ko: {
-        translation: koTranslation,
-      },
-      ar: {
-        translation: arTranslation,
       },
     },
     fallbackLng: 'en',

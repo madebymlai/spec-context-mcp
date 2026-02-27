@@ -24,7 +24,7 @@ const initI18n = async () => {
   const detector = new LanguageDetector();
   detector.init();
   const detectedLang = detector.detect() as string || 'en';
-  const initialLang = ['en', 'ja', 'zh'].includes(detectedLang) ? detectedLang : 'en';
+  const initialLang = ['en', 'de', 'ru', 'it'].includes(detectedLang) ? detectedLang : 'en';
   
   // Load initial translation
   const initialTranslation = await loadTranslation(initialLang);
