@@ -12,7 +12,7 @@ import { DEFAULT_DASHBOARD_PORT } from './constants.js';
 // Default security configuration (secure by default)
 // Note: allowedOrigins should be dynamically generated based on the actual port
 export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
-  rateLimitEnabled: true,
+  rateLimitEnabled: false,
   rateLimitPerMinute: 120, // 120 requests per minute per client
   auditLogEnabled: true,
   auditLogRetentionDays: 30,
