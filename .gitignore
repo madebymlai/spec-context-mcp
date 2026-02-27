@@ -36,3 +36,4 @@ coverage/
 .spec-context-mcp/
 .spec-context/
 .mcp.json
+.chunkhound/
