@@ -1,4 +1,5 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type {
@@ -203,6 +204,29 @@ function statusForReviewer(result: ReviewerResult): StateSnapshot['status'] {
 
 function estimateTokensFromChars(value: string, charsPerToken = 4): number {
   return Math.ceil(value.length / Math.max(1, charsPerToken));
+}
+
+export interface ComplianceEvidence {
+  acceptanceCriteria: string[];
+  taskOutcomes: string[];
+  filesChanged: string[];
+}
+
+export function extractAcceptanceCriteria(content: string): string[] {
+  return content
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => /^(?:\d+\.\s*)?(?:WHEN|IF)\b.*\bSHALL\b/i.test(line));
+}
+
+export function filterComplianceFacts(facts: StateSnapshotFact[]): { taskOutcomes: string[]; filesChanged: string[] } {
+  const taskOutcomes = facts
+    .filter(f => f.k.includes('completed_with') || f.k.includes('reviewed_as'))
+    .map(f => `${f.k}: ${f.v}`);
+  const filesChanged = facts
+    .filter(f => f.k.includes('modified_by'))
+    .map(f => `${f.k}: ${f.v}`);
+  return { taskOutcomes, filesChanged };
 }
 
 const DEFAULT_MAX_INPUT_TOKENS_IMPLEMENTER = 4800;
@@ -764,11 +788,13 @@ export class DispatchRuntimeManager {
     taskId: string;
     outputContent: string;
     maxOutputTokens?: number;
+    projectPath?: string;
   }): Promise<{
     result: ImplementerResult | ReviewerResult;
     snapshot: StateSnapshot;
     nextAction: string;
     outputTokens: number;
+    complianceEvidence?: ComplianceEvidence;
   }> {
     const snapshotBefore = await this.assertRunBinding(args.runId, args.taskId);
     const parsed = extractStructuredJson(args.outputContent);
@@ -785,6 +811,7 @@ export class DispatchRuntimeManager {
       snapshot: StateSnapshot;
       nextAction: string;
       outputTokens: number;
+      complianceEvidence?: ComplianceEvidence;
     }>> = {
       implementer: () => this.ingestImplementerOutput(args, snapshotBefore, parsed, outputTokens),
       reviewer: () => this.ingestReviewerOutput(args, snapshotBefore, parsed, outputTokens),
@@ -868,6 +895,7 @@ export class DispatchRuntimeManager {
       runId: string;
       role: DispatchRole;
       taskId: string;
+      projectPath?: string;
     },
     snapshotBefore: StateSnapshot,
     parsed: unknown,
@@ -877,6 +905,7 @@ export class DispatchRuntimeManager {
     snapshot: StateSnapshot;
     nextAction: string;
     outputTokens: number;
+    complianceEvidence?: ComplianceEvidence;
   }> {
     try {
       this.schemaRegistry.assert('dispatch.result.reviewer', parsed, DISPATCH_CONTRACT_SCHEMA_VERSION);
@@ -929,11 +958,35 @@ export class DispatchRuntimeManager {
     this.bumpDispatchTelemetry(outputTokens, result.assessment === 'needs_changes');
     const snapshot = await this.requireSnapshot(args.runId);
 
+    let nextAction = nextActionForReviewer(result, taskLedger.reviewLoop.flagged);
+    let complianceEvidence: ComplianceEvidence | undefined;
+
+    if (nextAction === 'advance_to_next_task' && args.projectPath) {
+      const progressLedger = progressLedgerFromFacts(snapshot.facts);
+      if (progressLedger && progressLedger.totals.completed + 1 >= progressLedger.totals.total) {
+        const specName = getFactValue(snapshot, 'spec_name');
+        if (specName) {
+          let acceptanceCriteria: string[] = [];
+          try {
+            const requirementsPath = join(args.projectPath, '.spec-context', 'specs', specName, 'requirements.md');
+            const content = await readFile(requirementsPath, 'utf-8');
+            acceptanceCriteria = extractAcceptanceCriteria(content);
+          } catch {
+            // requirements.md not found — empty criteria
+          }
+          const { taskOutcomes, filesChanged } = filterComplianceFacts(snapshot.facts);
+          complianceEvidence = { acceptanceCriteria, taskOutcomes, filesChanged };
+          nextAction = 'spec_completed';
+        }
+      }
+    }
+
     return {
       result,
       snapshot,
-      nextAction: nextActionForReviewer(result, taskLedger.reviewLoop.flagged),
+      nextAction,
       outputTokens,
+      complianceEvidence,
     };
   }
 
@@ -1948,6 +2001,7 @@ const DISPATCH_COMMAND_EXECUTORS: DispatchCommandExecutorMap = {
         taskId: command.taskId,
         outputContent,
         maxOutputTokens: command.maxOutputTokens,
+        projectPath: command.projectPath,
       });
 
       return {
@@ -1961,6 +2015,7 @@ const DISPATCH_COMMAND_EXECUTORS: DispatchCommandExecutorMap = {
           result: result.result,
           snapshot: result.snapshot,
           outputTokens: result.outputTokens,
+          complianceEvidence: result.complianceEvidence,
           prompt: {
             stablePrefixHash: compiled.stablePrefixHash,
             fullPromptHash: compiled.fullPromptHash,

@@ -1402,3 +1402,99 @@ describe('pruneDeltaPacket', () => {
     expect((result.ledger_summary as string).length).toBeLessThan(500);
   });
 });
+
+describe('extractAcceptanceCriteria', () => {
+  let extractAcceptanceCriteria: (content: string) => string[];
+
+  beforeAll(async () => {
+    const mod = await import('./dispatch-runtime.js');
+    extractAcceptanceCriteria = mod.extractAcceptanceCriteria;
+  });
+
+  it('extracts WHEN...SHALL lines from template format', () => {
+    const content = `## Requirements
+### Requirement 1
+#### Acceptance Criteria
+1. WHEN user logs in THEN system SHALL create session
+2. IF token expired THEN system SHALL redirect to login`;
+    const result = extractAcceptanceCriteria(content);
+    expect(result).toEqual([
+      '1. WHEN user logs in THEN system SHALL create session',
+      '2. IF token expired THEN system SHALL redirect to login',
+    ]);
+  });
+
+  it('extracts unnumbered criteria lines', () => {
+    const content = 'WHEN event fires THEN system SHALL respond';
+    expect(extractAcceptanceCriteria(content)).toEqual([
+      'WHEN event fires THEN system SHALL respond',
+    ]);
+  });
+
+  it('is case-insensitive', () => {
+    const content = 'when something happens then system shall do something';
+    expect(extractAcceptanceCriteria(content)).toHaveLength(1);
+  });
+
+  it('returns empty array for no matches', () => {
+    const content = `## Requirements
+Some description without acceptance criteria.
+- bullet point`;
+    expect(extractAcceptanceCriteria(content)).toEqual([]);
+  });
+
+  it('returns empty array for empty string', () => {
+    expect(extractAcceptanceCriteria('')).toEqual([]);
+  });
+
+  it('ignores lines with WHEN but no SHALL', () => {
+    const content = 'WHEN something happens THEN it does something';
+    expect(extractAcceptanceCriteria(content)).toEqual([]);
+  });
+});
+
+describe('filterComplianceFacts', () => {
+  let filterComplianceFacts: (facts: Array<{ k: string; v: string; confidence: number }>) => {
+    taskOutcomes: string[];
+    filesChanged: string[];
+  };
+
+  beforeAll(async () => {
+    const mod = await import('./dispatch-runtime.js');
+    filterComplianceFacts = mod.filterComplianceFacts;
+  });
+
+  it('filters task outcomes and file changes from mixed facts', () => {
+    const facts = [
+      { k: 'task:1 completed_with', v: 'approved', confidence: 1 },
+      { k: 'task:1 reviewed_as', v: 'approved', confidence: 1 },
+      { k: 'src/foo.ts modified_by', v: 'task:1', confidence: 1 },
+      { k: 'spec_name', v: 'test-spec', confidence: 1 },
+      { k: 'classification_level', v: 'complex', confidence: 0.8 },
+    ];
+    const result = filterComplianceFacts(facts);
+    expect(result.taskOutcomes).toEqual([
+      'task:1 completed_with: approved',
+      'task:1 reviewed_as: approved',
+    ]);
+    expect(result.filesChanged).toEqual([
+      'src/foo.ts modified_by: task:1',
+    ]);
+  });
+
+  it('returns empty arrays when no matching facts', () => {
+    const facts = [
+      { k: 'spec_name', v: 'test', confidence: 1 },
+      { k: 'task_id', v: '1', confidence: 1 },
+    ];
+    const result = filterComplianceFacts(facts);
+    expect(result.taskOutcomes).toEqual([]);
+    expect(result.filesChanged).toEqual([]);
+  });
+
+  it('returns empty arrays for empty input', () => {
+    const result = filterComplianceFacts([]);
+    expect(result.taskOutcomes).toEqual([]);
+    expect(result.filesChanged).toEqual([]);
+  });
+});
