@@ -1,5 +1,5 @@
 /**
- * Security utilities for rate limiting and audit logging
+ * Security utilities for audit logging
  * Implements security best practices for MCP servers
  */
 
@@ -12,8 +12,6 @@ import { DEFAULT_DASHBOARD_PORT } from './constants.js';
 // Default security configuration (secure by default)
 // Note: allowedOrigins should be dynamically generated based on the actual port
 export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
-  rateLimitEnabled: false,
-  rateLimitPerMinute: 120, // 120 requests per minute per client
   auditLogEnabled: true,
   auditLogRetentionDays: 30,
   corsEnabled: true,
@@ -59,93 +57,6 @@ export function getSecurityConfig(userConfig?: Partial<SecurityConfig>, port?: n
   };
 
   return config;
-}
-
-/**
- * Rate limiting implementation
- */
-export class RateLimiter {
-  private requests: Map<string, number[]> = new Map();
-  private config: SecurityConfig;
-
-  constructor(config: SecurityConfig) {
-    this.config = config;
-
-    // Clean up old entries every minute
-    setInterval(() => this.cleanup(), 60000);
-  }
-
-  /**
-   * Check if request should be rate limited
-   */
-  public checkLimit(clientId: string): { allowed: boolean; retryAfter?: number } {
-    if (!this.config.rateLimitEnabled) {
-      return { allowed: true };
-    }
-
-    const now = Date.now();
-    const windowMs = 60000; // 1 minute window
-    const maxRequests = this.config.rateLimitPerMinute;
-
-    // Get client request history
-    const requests = this.requests.get(clientId) || [];
-
-    // Filter to requests within the current window
-    const recentRequests = requests.filter(timestamp => now - timestamp < windowMs);
-
-    // Check if limit exceeded
-    if (recentRequests.length >= maxRequests) {
-      const oldestRequest = recentRequests[0];
-      const retryAfter = Math.ceil((oldestRequest + windowMs - now) / 1000);
-      return { allowed: false, retryAfter };
-    }
-
-    // Add current request
-    recentRequests.push(now);
-    this.requests.set(clientId, recentRequests);
-
-    return { allowed: true };
-  }
-
-  /**
-   * Create rate limiting middleware
-   */
-  public middleware() {
-    return async (request: FastifyRequest, reply: FastifyReply) => {
-      // Use IP address as client identifier
-      const clientId = request.ip || 'unknown';
-
-      const result = this.checkLimit(clientId);
-
-      if (!result.allowed) {
-        return reply
-          .code(429)
-          .header('Retry-After', String(result.retryAfter || 60))
-          .send({
-            error: 'Too Many Requests',
-            message: `Rate limit exceeded. Maximum ${this.config.rateLimitPerMinute} requests per minute.`,
-            retryAfter: result.retryAfter
-          });
-      }
-    };
-  }
-
-  /**
-   * Clean up old request records
-   */
-  private cleanup() {
-    const now = Date.now();
-    const windowMs = 60000;
-
-    for (const [clientId, requests] of this.requests.entries()) {
-      const recentRequests = requests.filter(timestamp => now - timestamp < windowMs);
-      if (recentRequests.length === 0) {
-        this.requests.delete(clientId);
-      } else {
-        this.requests.set(clientId, recentRequests);
-      }
-    }
-  }
 }
 
 /**

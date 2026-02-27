@@ -18,7 +18,6 @@ import { createNodeJobSchedulerForProjectManager } from './job-scheduler-node.js
 import { DashboardSessionManager } from '../core/workflow/dashboard-session.js';
 import {
   getSecurityConfig,
-  RateLimiter,
   AuditLogger,
   createSecurityHeadersMiddleware,
   getCorsConfig,
@@ -137,7 +136,6 @@ export class MultiProjectDashboardServer {
   private bindAddress: string;
   private allowExternalAccess: boolean;
   private securityConfig: SecurityConfig;
-  private rateLimiter?: RateLimiter;
   private auditLogger?: AuditLogger;
   private actualPort: number = 0;
   private clients: Set<WebSocketConnection> = new Set();
@@ -193,7 +191,6 @@ export class MultiProjectDashboardServer {
     // Display security status
     console.error('Security Configuration:');
     console.error(`   - Bind Address: ${this.bindAddress}`);
-    console.error(`   - Rate Limiting: ${this.securityConfig.rateLimitEnabled ? 'ENABLED' : 'DISABLED'}`);
     console.error(`   - Audit Logging: ${this.securityConfig.auditLogEnabled ? 'ENABLED' : 'DISABLED'}`);
     console.error(`   - CORS: ${this.securityConfig.corsEnabled ? 'ENABLED' : 'DISABLED'}`);
     console.error(`   - Allowed Origins: ${this.securityConfig.allowedOrigins.join(', ')}`);
@@ -241,10 +238,6 @@ export class MultiProjectDashboardServer {
     }
 
     // Initialize security components
-    if (this.securityConfig.rateLimitEnabled) {
-      this.rateLimiter = new RateLimiter(this.securityConfig);
-    }
-
     if (this.securityConfig.auditLogEnabled) {
       this.auditLogger = new AuditLogger(this.securityConfig);
       await this.auditLogger.initialize();
@@ -265,10 +258,6 @@ export class MultiProjectDashboardServer {
     // Register security middleware (apply to all routes)
     // Pass the actual port for CSP connect-src WebSocket configuration
     this.app.addHook('onRequest', createSecurityHeadersMiddleware(this.options.port));
-
-    if (this.rateLimiter) {
-      this.app.addHook('onRequest', this.rateLimiter.middleware());
-    }
 
     if (this.auditLogger) {
       this.app.addHook('onRequest', this.auditLogger.middleware());
