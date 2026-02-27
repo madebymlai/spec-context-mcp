@@ -61,7 +61,7 @@ ${scope ? `- Scope: ${scope}` : ''}
 ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 
 **Instructions:**
-1. Use your search tools (Grep, Glob, file reads) to understand the codebase structure before documenting
+1. Review project files to understand the codebase structure before documenting
 2. Use the injected template content below (server-provided canonical template)
 3. Do not search for or read local template files unless explicitly instructed by the user
 4. Check if steering docs exist at: .spec-context/steering/

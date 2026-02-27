@@ -197,7 +197,7 @@ For major architecture changes, create tasks that support progressive migration:
 This ensures the application remains functional throughout the transition.
 
 ## Implementation Steps
-1. Use your search tools (Grep, Glob, file reads) to verify completed tasks still match the actual code
+1. Review project files to verify completed tasks still match the actual code
 2. Read requirements.md and design.md carefully - these define what should exist
 3. Read current tasks.md and identify completed, in-progress, and pending tasks
 4. Perform Pass 1: Validate existing tasks against current spec

@@ -68,7 +68,7 @@ ${description ? `- Description: ${description}` : ''}
 ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 
 **Instructions:**
-1. Use your search tools (Grep, Glob, file reads) to discover existing code patterns to leverage
+1. Review relevant project files to discover existing code patterns to leverage
 2. Use the injected template content below (server-provided canonical template)
 3. Do not search for or read local template files unless explicitly instructed by the user
 4. Follow the template structure exactly - this ensures consistency across the project
@@ -93,7 +93,7 @@ ${documentType === 'tasks' ? `
 - For each task, generate a _Prompt field with structured AI guidance
 - Format: _Prompt: Role: [role] | Task: [description] | Restrictions: [constraints] | Success: [criteria]
 - Make prompts specific to the project context and requirements
-- Use your search tools to populate _Leverage fields with actual file paths
+- Populate _Leverage fields with actual file paths
 - Include _Requirements fields showing which requirements each task implements
 - Tasks should be atomic (1-3 files each) and in logical order
 ` : ''}

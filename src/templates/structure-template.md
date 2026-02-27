@@ -1,7 +1,5 @@
 # Project Structure
 
-> **Note:** Use the `search_code` tool to discover the actual codebase structure before documenting. This ensures the structure document reflects reality.
-
 ## Directory Organization
 
 ```

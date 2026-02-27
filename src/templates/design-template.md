@@ -14,8 +14,6 @@
 
 ## Code Reuse Analysis
 
-> **Note:** Use the `search_code` tool to find existing components for this section. Search for related functionality, similar patterns, and reusable utilities.
-
 [What existing code will be leveraged, extended, or integrated with this feature]
 
 ### Existing Components to Leverage

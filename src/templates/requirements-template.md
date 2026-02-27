@@ -31,8 +31,6 @@
 
 ## Non-Functional Requirements
 
-> **Note:** Use the `search_code` tool to understand existing patterns before defining NFRs. This ensures requirements align with the current codebase architecture.
-
 ### Code Architecture and Modularity
 - **Single Responsibility Principle**: Each file should have a single, well-defined purpose
 - **Modular Design**: Components, utilities, and services should be isolated and reusable

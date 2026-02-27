@@ -59,7 +59,7 @@ ${injectedTemplates || '_No templates were resolved by the server_'}
 1. This guide has been injected into your context for immediate reference
 2. Use injected template content above as the canonical template source
 3. Follow the workflow sequence exactly: Requirements → Design → Tasks → Implementation
-4. Use the MCP tools mentioned in the guide to execute each phase
+4. Use the workflow actions described in the guide to execute each phase
 5. Always request approval between phases using the approvals tool
 6. Never proceed to the next phase without successful approval cleanup
 

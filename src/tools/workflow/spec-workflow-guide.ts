@@ -77,7 +77,7 @@ function getSpecWorkflowGuide(disciplineMode: 'full' | 'standard' | 'minimal', i
 
 ## Overview
 
-You guide users through spec-driven development using MCP tools. Transform rough ideas into detailed specifications through Requirements → Design → Tasks → Implementation phases. Use web search when available for current best practices (current year: ${currentYear}). Its important that you follow this workflow exactly to avoid errors.
+You guide users through spec-driven development. Transform rough ideas into detailed specifications through Requirements → Design → Tasks → Implementation phases. Use web search when available for current best practices (current year: ${currentYear}). Its important that you follow this workflow exactly to avoid errors.
 Feature names use kebab-case (e.g., user-authentication). Create ONE spec at a time.
 
 **Discipline Mode:** ${disciplineMode}

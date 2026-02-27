@@ -1,7 +1,5 @@
 # Tasks Document
 
-> **Note:** Use the `search_code` tool to populate `_Leverage:` fields with actual file paths from the codebase.
-
 - [ ] 1. Create core interfaces in src/types/feature.ts
   - File: src/types/feature.ts
   - Define TypeScript interfaces for feature data structures
