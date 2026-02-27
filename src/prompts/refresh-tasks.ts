@@ -197,16 +197,13 @@ For major architecture changes, create tasks that support progressive migration:
 This ensures the application remains functional throughout the transition.
 
 ## Implementation Steps
-1. Use the \`search\` tool to verify completed tasks still match the actual code
-   - search type="semantic" query="..." for conceptual searches
-   - search type="regex" query="..." for exact patterns
-   - The codebase auto-indexes on first search and auto-syncs with file watching
-3. Read requirements.md and design.md carefully - these define what should exist
-4. Read current tasks.md and identify completed, in-progress, and pending tasks
-5. Perform Pass 1: Validate existing tasks against current spec
-6. Perform Pass 2: Identify gaps in task coverage
-7. Determine if changes are needed
-8. If changes needed, build updated task list with proper validation
+1. Use your search tools (Grep, Glob, file reads) to verify completed tasks still match the actual code
+2. Read requirements.md and design.md carefully - these define what should exist
+3. Read current tasks.md and identify completed, in-progress, and pending tasks
+4. Perform Pass 1: Validate existing tasks against current spec
+5. Perform Pass 2: Identify gaps in task coverage
+6. Determine if changes are needed
+7. If changes needed, build updated task list with proper validation
 9. Use create-spec-doc tool to save the updated tasks.md
 10. Report what changes were made and why
 

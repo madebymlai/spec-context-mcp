@@ -61,14 +61,13 @@ ${scope ? `- Scope: ${scope}` : ''}
 ${context.dashboardUrl ? `- Dashboard: ${context.dashboardUrl}` : ''}
 
 **Instructions:**
-1. First, check if codebase is indexed with \`get_indexing_status\`, run \`index_codebase\` if needed
-2. Use the \`search_code\` tool to understand the codebase structure before documenting
-3. Use the injected template content below (server-provided canonical template)
-4. Do not search for or read local template files unless explicitly instructed by the user
-5. Check if steering docs exist at: .spec-context/steering/
-6. Create comprehensive content following the template structure
-7. Create the document at: .spec-context/steering/${typedDocType}.md
-8. After creating, use approvals tool with action:'request' to get user approval
+1. Use your search tools (Grep, Glob, file reads) to understand the codebase structure before documenting
+2. Use the injected template content below (server-provided canonical template)
+3. Do not search for or read local template files unless explicitly instructed by the user
+4. Check if steering docs exist at: .spec-context/steering/
+5. Create comprehensive content following the template structure
+6. Create the document at: .spec-context/steering/${typedDocType}.md
+7. After creating, use approvals tool with action:'request' to get user approval
 
 **File Paths:**
 - Injected template: ${resolvedTemplate.path}
