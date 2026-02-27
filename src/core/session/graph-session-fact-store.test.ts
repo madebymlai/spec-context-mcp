@@ -128,6 +128,30 @@ describe('GraphSessionFactStore', () => {
     expect(store.getFactsForEntity('src/core/session/index.ts')).toEqual([replacement]);
   });
 
+  it('classifies global facts before persisting to sqlite', () => {
+    const adapter = createAdapterMock();
+    const store = new GraphSessionFactStore(adapter, 'session-knowledge-graph');
+
+    const dependencyFact = buildFact({
+      subject: 'package.json',
+      relation: 'depends_on',
+      object: 'graphology',
+      sourceTaskId: '11',
+      at: '2026-02-27T03:00:00.000Z',
+      tags: ['dependency'],
+    });
+
+    store.add([dependencyFact]);
+
+    expect(adapter.insertFacts).toHaveBeenCalledWith([
+      {
+        ...dependencyFact,
+        specName: 'session-knowledge-graph',
+        scope: 'global',
+      },
+    ]);
+  });
+
   it('invalidates subject+relation facts and removes graph edges', () => {
     const adapter = createAdapterMock({ localFacts: [localFact] });
     const store = new GraphSessionFactStore(adapter, 'session-knowledge-graph');

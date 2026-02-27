@@ -143,11 +143,24 @@ INSERT INTO facts (
   spec_name,
   scope
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  subject = excluded.subject,
+  relation = excluded.relation,
+  object = excluded.object,
+  tags_json = excluded.tags_json,
+  valid_from = excluded.valid_from,
+  valid_to = excluded.valid_to,
+  source_task_id = excluded.source_task_id,
+  source_role = excluded.source_role,
+  confidence = excluded.confidence,
+  spec_name = excluded.spec_name,
+  scope = excluded.scope`;
 
 export const SQL_INSERT_FACTS_FTS = `
 INSERT INTO facts_fts (fact_id, subject, relation, object, tags)
 VALUES (?, ?, ?, ?, ?)`;
+export const SQL_DELETE_FACTS_FTS_BY_ID = 'DELETE FROM facts_fts WHERE fact_id = ?';
 
 export const SQL_INVALIDATE_FACT = `
 UPDATE facts
@@ -323,6 +336,7 @@ export class SQLiteFactAdapter implements ISQLiteFactAdapter {
       const insertEntity = db.prepare(SQL_INSERT_ENTITY);
       const insertFact = db.prepare(SQL_INSERT_FACT);
       const insertFactFts = db.prepare(SQL_INSERT_FACTS_FTS);
+      const deleteFactFtsById = db.prepare(SQL_DELETE_FACTS_FTS_BY_ID);
 
       for (const fact of batch) {
         const row = toSQLiteFactRow(fact);
@@ -342,6 +356,7 @@ export class SQLiteFactAdapter implements ISQLiteFactAdapter {
           row.specName,
           row.scope,
         );
+        deleteFactFtsById.run(row.id);
         insertFactFts.run(row.id, row.subject, row.relation, row.object, row.tagsJson);
       }
     });

@@ -204,6 +204,50 @@ describe('SQLiteFactAdapter', () => {
     adapter.close();
   });
 
+  it('upserts when inserting an existing fact id instead of throwing unique constraint errors', () => {
+    const tempDir = createTempDir();
+    const dbPath = join(tempDir, 'knowledge-graph.db');
+    const adapter = new SQLiteFactAdapter(dbPath);
+    adapter.initialize();
+
+    const original = buildStoredFact({
+      subject: 'src/core/session/sqlite-fact-adapter.ts',
+      relation: 'modified_by',
+      object: 'task:2',
+      tags: ['file_change'],
+      sourceTaskId: '2',
+      validFrom: '2026-02-27T00:00:00.000Z',
+      specName: 'session-knowledge-graph',
+      scope: 'local',
+    });
+    const refreshed = {
+      ...original,
+      sourceTaskId: '99',
+      validFrom: new Date('2026-02-28T00:00:00.000Z'),
+      confidence: 0.7,
+    };
+
+    adapter.insertFacts([original]);
+    adapter.insertFacts([refreshed]);
+
+    const loaded = adapter.loadValidFacts('session-knowledge-graph');
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].id).toBe(original.id);
+    expect(loaded[0].sourceTaskId).toBe('99');
+    expect(loaded[0].confidence).toBe(0.7);
+
+    const db = new Database(dbPath);
+    try {
+      const ftsCount = db
+        .prepare<[string], { total: number }>('SELECT COUNT(*) AS total FROM facts_fts WHERE fact_id = ?')
+        .get(original.id);
+      expect(ftsCount?.total).toBe(1);
+    } finally {
+      db.close();
+      adapter.close();
+    }
+  });
+
   it('degrades gracefully when the database cannot be opened', () => {
     const tempDir = createTempDir();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

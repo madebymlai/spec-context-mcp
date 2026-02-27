@@ -4,6 +4,7 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsManager } from '../../dashboard/settings-manager.js';
 import { SPEC_WORKFLOW_HOME_ENV } from '../../core/workflow/global-dir.js';
+import { createFactId, type SessionFact } from '../../core/session/index.js';
 import type { ToolContext } from '../../workflow-types.js';
 
 const originalEnv = process.env;
@@ -160,5 +161,32 @@ describe('dispatch-runtime-node initialization recovery', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it('re-initializes session graph per spec and preserves spec isolation', async () => {
+    const { LazySessionKnowledgeGraphRuntime } = await import('./dispatch-runtime-node.js');
+    const runtime = new LazySessionKnowledgeGraphRuntime();
+    const fact: SessionFact = {
+      id: createFactId('src/spec-a.ts', 'modified_by', 'task:1'),
+      subject: 'src/spec-a.ts',
+      relation: 'modified_by',
+      object: 'task:1',
+      tags: ['file_change'],
+      validFrom: new Date('2026-02-27T00:00:00.000Z'),
+      validTo: undefined,
+      sourceTaskId: '1',
+      sourceRole: 'implementer',
+      confidence: 1,
+    };
+
+    runtime.initialize('runtime-spec-a', projectPath);
+    runtime.runWithFactStore(store => store.add([fact]));
+    expect(runtime.runWithFactStore(store => store.count())).toBe(1);
+
+    runtime.initialize('runtime-spec-b', projectPath);
+    expect(runtime.runWithFactStore(store => store.count())).toBe(0);
+
+    runtime.initialize('runtime-spec-a', projectPath);
+    expect(runtime.runWithFactStore(store => store.count())).toBe(1);
   });
 });

@@ -47,12 +47,13 @@ import type { ToolContext, ToolResponse } from '../../workflow-types.js';
 
 const DEFAULT_TOKEN_CHARS_PER_TOKEN = 4;
 
-class LazySessionKnowledgeGraphRuntime {
-  private readonly fallbackStore = new InMemorySessionFactStore();
-  private readonly fallbackRetriever = new KeywordFactRetriever(this.fallbackStore);
+export class LazySessionKnowledgeGraphRuntime {
+  private fallbackStore: ISessionFactStore = new InMemorySessionFactStore();
+  private fallbackRetriever: IFactRetriever = new KeywordFactRetriever(this.fallbackStore);
   private activeStore: ISessionFactStore = this.fallbackStore;
   private activeRetriever: IFactRetriever = this.fallbackRetriever;
-  private initialized = false;
+  private activeAdapter: SQLiteFactAdapter | null = null;
+  private runtimeKey: string | null = null;
 
   runWithFactStore<T>(operation: (store: ISessionFactStore) => T): T {
     try {
@@ -107,14 +108,17 @@ class LazySessionKnowledgeGraphRuntime {
   }
 
   initialize(specName: string, projectPath: string): void {
-    if (this.initialized) {
+    const runtimeKey = `${resolve(projectPath)}:${specName}`;
+    if (this.runtimeKey === runtimeKey && this.activeAdapter !== null) {
       return;
     }
 
-    this.initialized = true;
+    this.reset();
+    this.runtimeKey = runtimeKey;
     const databasePath = resolve(projectPath, '.spec-context', 'knowledge-graph.db');
     const adapter = new SQLiteFactAdapter(databasePath);
     adapter.initialize();
+    this.activeAdapter = adapter;
 
     if (!adapter.isPersistenceAvailable()) {
       this.fallbackToInMemory(
@@ -129,6 +133,7 @@ class LazySessionKnowledgeGraphRuntime {
       this.activeRetriever = new GraphFactRetriever(graphStore);
     } catch (error) {
       adapter.close();
+      this.activeAdapter = null;
       this.fallbackToInMemory(
         '[dispatch-runtime-node] Graph session runtime initialization failed; falling back to InMemorySessionFactStore.',
         error,
@@ -136,7 +141,18 @@ class LazySessionKnowledgeGraphRuntime {
     }
   }
 
+  private reset(): void {
+    this.activeAdapter?.close();
+    this.activeAdapter = null;
+    this.fallbackStore = new InMemorySessionFactStore();
+    this.fallbackRetriever = new KeywordFactRetriever(this.fallbackStore);
+    this.activeStore = this.fallbackStore;
+    this.activeRetriever = this.fallbackRetriever;
+  }
+
   private fallbackToInMemory(message: string, error?: unknown): void {
+    this.activeAdapter?.close();
+    this.activeAdapter = null;
     this.activeStore = this.fallbackStore;
     this.activeRetriever = this.fallbackRetriever;
     if (error === undefined) {

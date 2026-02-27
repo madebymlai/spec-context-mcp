@@ -1,6 +1,7 @@
 import { DirectedGraph } from 'graphology';
 import type { ISQLiteFactAdapter, StoredSessionFact } from './sqlite-fact-adapter.js';
-import type { EntityType, FactScope } from './sqlite-fact-adapter.js';
+import type { EntityType } from './sqlite-fact-adapter.js';
+import { ScopeClassifier, type IScopeClassifier } from './scope-classifier.js';
 import type { ISessionFactStore, SessionFact, SessionFactTag } from './types.js';
 
 interface EntityNodeAttributes {
@@ -32,15 +33,15 @@ function inferEntityType(entityKey: string): EntityType {
   return 'concept';
 }
 
-function inferFactScope(_fact: SessionFact): FactScope {
-  return 'local';
-}
-
-function toStoredFact(fact: SessionFact, specName: string): StoredSessionFact {
+function toStoredFact(
+  fact: SessionFact,
+  specName: string,
+  scopeClassifier: IScopeClassifier,
+): StoredSessionFact {
   return {
     ...fact,
     specName,
-    scope: inferFactScope(fact),
+    scope: scopeClassifier.classify(fact),
   };
 }
 
@@ -52,6 +53,7 @@ export class GraphSessionFactStore implements ISessionFactStore {
   constructor(
     private readonly adapter: ISQLiteFactAdapter,
     private readonly specName: string,
+    private readonly scopeClassifier: IScopeClassifier = new ScopeClassifier(),
   ) {
     const adapterStats = this.adapter.getStats();
     this.totalFacts = adapterStats.totalFacts;
@@ -69,7 +71,7 @@ export class GraphSessionFactStore implements ISessionFactStore {
       this.upsertEntityNode(fact.subject, fact.validFrom);
       this.upsertEntityNode(fact.object, fact.validFrom);
       this.upsertEdge(fact);
-      insertedFacts.push(toStoredFact(fact, this.specName));
+      insertedFacts.push(toStoredFact(fact, this.specName, this.scopeClassifier));
     }
 
     this.adapter.insertFacts(insertedFacts);
