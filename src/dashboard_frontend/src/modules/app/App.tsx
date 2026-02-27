@@ -65,16 +65,6 @@ function Header({ toggleSidebar }: { toggleSidebar: () => void }) {
             {/* Project Dropdown */}
             <ProjectDropdown />
 
-            {/* Version Badge */}
-            {info?.version && (
-              <button
-                onClick={() => setShowChangelog(true)}
-                className="hidden lg:inline text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors cursor-pointer"
-                title={t('changelog.viewChangelog', 'View changelog')}
-              >
-                v{info.version}
-              </button>
-            )}
           </div>
 
           <div className="flex items-center gap-3">
@@ -288,4 +278,3 @@ export default function App() {
     </I18nErrorBoundary>
   );
 }
-
