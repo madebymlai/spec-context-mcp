@@ -1,13 +1,12 @@
 # spec-context-mcp
 
-Unified MCP server combining semantic code search with spec-driven development workflow.
+MCP server for spec-driven development workflow.
 
 ## Features
 
-- **Semantic Code Search**: Index your codebase and search using natural language via ChunkHound (local index)
 - **Spec Workflow**: Requirements → Design → Tasks → Implementation with approval gates
 - **Dashboard UI**: Web interface for managing specs, approvals, and implementation logs
-- **Multi-Project Support**: Each project gets its own ChunkHound index and spec directory
+- **Multi-Project Support**: Each project gets its own spec directory
 
 ## Installation
 
@@ -21,43 +20,6 @@ Or run directly with npx:
 npx spec-context-mcp
 ```
 
-## Python Setup (Required for Semantic Search)
-
-ChunkHound requires Python 3.10+ for semantic code search. Run the setup command:
-
-```bash
-npx spec-context-mcp setup
-```
-
-This will:
-- Detect Python 3.10+ on your system
-- Create a virtual environment in the package directory
-- Install ChunkHound and dependencies
-- Verify the installation
-
-**Manual Setup** (if automatic setup fails):
-
-```bash
-# macOS
-brew install cmake ninja swig python@3.11
-
-# Ubuntu/Debian
-sudo apt install cmake ninja-build swig python3.11 python3.11-venv
-
-# Fedora
-sudo dnf install cmake ninja-build swig python3.11
-
-# Then install manually
-cd $(npm root -g)/spec-context-mcp
-python3 -m venv .venv
-.venv/bin/pip install -e .
-
-# Optionally set CHUNKHOUND_PYTHON in your environment
-export CHUNKHOUND_PYTHON=$(npm root -g)/spec-context-mcp/.venv/bin/python
-```
-
-Run `npx spec-context-mcp doctor` to verify your setup.
-
 ## Configuration
 
 `spec-context-mcp` loads `.env` from the server package directory on startup.
@@ -66,7 +28,7 @@ If you run from source or a local clone, start from `.env.example`:
 
 ```bash
 cp .env.example .env
-# edit .env and set required keys (for example EMBEDDING_API_KEY)
+# edit .env and set required keys
 ```
 
 Then use a minimal MCP config (`.mcp.json` in your project):
@@ -91,9 +53,6 @@ If you run via `npx` / global install, you can pass env directly in `.mcp.json` 
       "command": "npx",
       "args": ["spec-context-mcp"],
       "env": {
-        "EMBEDDING_PROVIDER": "voyageai",
-        "EMBEDDING_API_KEY": "sk-embed-xxx",
-        "EMBEDDING_MODEL": "voyage-code-3",
         "DASHBOARD_URL": "http://localhost:3000"
       }
     }
@@ -105,25 +64,9 @@ If you run via `npx` / global install, you can pass env directly in `.mcp.json` 
 
 | Variable              | Required | Description                                               |
 |-----------------------|----------|-----------------------------------------------------------|
-| `EMBEDDING_PROVIDER`  | No       | Embedding provider for ChunkHound (default: `voyageai`)                  |
-| `EMBEDDING_API_KEY`   | Conditional | API key for embedding provider (required for hosted providers)       |
-| `EMBEDDING_MODEL`     | No       | Embedding model name (provider-specific)                               |
-| `EMBEDDING_BASE_URL`  | No       | Base URL for embedding API (e.g., OpenAI-compatible endpoints)         |
-| `EMBEDDING_RERANK_MODEL` | No    | Reranking model name (enables multi-hop search)                        |
-| `EMBEDDING_RERANK_URL` | No     | Rerank endpoint URL (absolute or relative to base URL)                 |
-| `EMBEDDING_RERANK_FORMAT` | No  | Reranking API format (`auto`, `cohere`, `tei`)                         |
-| `EMBEDDING_RERANK_BATCH_SIZE` | No | Max docs per rerank batch                                            |
-| `EMBEDDING_DIMENSION` | No       | Optional; currently ignored (model defines dimensions)                 |
-| `VOYAGEAI_API_KEY`    | No       | Alias for `EMBEDDING_API_KEY` when provider is `voyageai`              |
-| `CHUNKHOUND_PYTHON`   | No       | Python executable for ChunkHound (default: auto-detect `.venv/bin/python`, else `python3`) |
 | `DASHBOARD_URL`       | No       | Dashboard URL shown in prompts (default: `http://localhost:3000`) |
-| `OPENROUTER_API_KEY`  | No       | Required for ChunkHound deep research and dashboard AI review |
-| `CHUNKHOUND_LLM_MODEL` | No      | OpenRouter model for deep research (default: `google/gemini-2.5-flash`) |
+| `OPENROUTER_API_KEY`  | No       | Required for dashboard AI review |
 | `SPEC_CONTEXT_DISABLE_VERSION_CHECK` | No | Disable dashboard startup version check (default: `false`) |
-| `CHUNKHOUND_EMBED_SWEEP_SECONDS` | No | Periodic safety sweep for missing embeddings (default: `300`) |
-| `CHUNKHOUND_EMBED_SWEEP_BACKOFF_SECONDS` | No | Skip sweep if recent per-file embeds occurred (default: `30`) |
-| `CHUNKHOUND_FILE_QUEUE_MAXSIZE` | No | Max realtime file queue size (default: `2000`, 0 = unbounded) |
-| `CHUNKHOUND_FILE_QUEUE_DRAIN_SECONDS` | No | Interval to drain overflowed file queue entries (default: `1.0`) |
 | `SPEC_CONTEXT_DISCIPLINE` | No | Discipline mode: `full` (TDD+reviews), `standard` (reviews), `minimal` (verification only). Default: `full` |
 | `SPEC_CONTEXT_IMPLEMENTER` | No | CLI command for implementer dispatch (shortcuts: `claude`, `codex`, `gemini`, `opencode`) |
 | `SPEC_CONTEXT_REVIEWER` | No | CLI command for reviewer dispatch |
@@ -139,16 +82,6 @@ Control development rigor via `SPEC_CONTEXT_DISCIPLINE`:
 | `minimal` | No | No | Yes |
 
 ## Tools
-
-### Code Search
-
-| Tool                 | Description                                  |
-|----------------------|----------------------------------------------|
-| `index_codebase`     | Index a codebase for semantic search         |
-| `search_code`        | Search code using natural language           |
-| `sync_index`         | Incrementally update index with changed files|
-| `get_indexing_status`| Check if codebase is indexed                 |
-| `clear_index`        | Remove codebase from index                   |
 
 ### Spec Workflow
 
@@ -216,21 +149,6 @@ Each phase requires approval before proceeding. Documents are stored in:
     └── principles.md
 ```
 
-## Semantic Search Setup
-
-ChunkHound runs locally and stores its index in your project. No external vector
-database is required. To enable semantic search, set `EMBEDDING_PROVIDER` and
-`EMBEDDING_API_KEY` (or `VOYAGEAI_API_KEY`). If no embedding
-API key is set, regex search and workflow tools still work.
-
-You may also need Python 3.10+ available as `python3` (or set `CHUNKHOUND_PYTHON`).
-The default embedding provider is `voyageai`; set `EMBEDDING_PROVIDER=openai` and
-`EMBEDDING_BASE_URL` for OpenAI-compatible endpoints.
-
-Note: ChunkHound's YAML parser uses `rapidyaml`/`ryml` (requires `rapidyaml>=0.10.0`).
-PyPI currently ships an older `rapidyaml` build; install from the git tag `v0.10.0`
-if you're managing the Python environment yourself.
-
 ## Development
 
 ```bash
@@ -241,7 +159,7 @@ npm run dev          # Run in development mode
 
 ## Doctor
 
-Run a preflight check for Python, ChunkHound, embeddings, and dashboard connectivity:
+Run a preflight check for dashboard connectivity:
 
 ```bash
 npx spec-context-mcp doctor

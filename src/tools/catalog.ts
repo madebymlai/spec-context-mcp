@@ -1,6 +1,4 @@
 export const TOOL_CATALOG_ORDER = [
-  'search',
-  'code_research',
   'spec-workflow-guide',
   'steering-guide',
   'spec-status',
@@ -51,8 +49,6 @@ export const TOOL_TIERS_BY_MODE = {
       'approvals',
       'wait-for-approval',
       'dispatch-runtime',
-      'search',
-      'code_research',
     ],
     2: [
       'spec-workflow-guide',
@@ -62,8 +58,6 @@ export const TOOL_TIERS_BY_MODE = {
       'approvals',
       'wait-for-approval',
       'dispatch-runtime',
-      'search',
-      'code_research',
     ],
     3: TOOL_CATALOG_ORDER,
   },
@@ -71,25 +65,19 @@ export const TOOL_TIERS_BY_MODE = {
     1: [
       'get-implementer-guide',
       'spec-status',
-      'search',
     ],
     2: [
       'get-implementer-guide',
       'spec-status',
-      'search',
-      'code_research',
     ],
     3: TOOL_CATALOG_ORDER,
   },
   reviewer: {
     1: [
       'get-reviewer-guide',
-      'search',
     ],
     2: [
       'get-reviewer-guide',
-      'search',
-      'code_research',
       'spec-status',
     ],
     3: TOOL_CATALOG_ORDER,

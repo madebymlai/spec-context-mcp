@@ -23,7 +23,6 @@ async function withSession(): Promise<ActiveSession> {
     name: 'spec-context-mcp-test',
     version: '1.0.0',
     dashboardUrl: 'http://localhost:5111',
-    chunkhoundPython: 'python3',
   });
 
   const client = new Client(
@@ -85,15 +84,15 @@ describe('SpecContextServer integration (in-memory MCP transport)', () => {
       const initialTools = await client.listTools();
       const initialNames = (initialTools.tools ?? []).map(tool => tool.name);
       expect(initialNames).toContain('get-implementer-guide');
-      expect(initialNames).not.toContain('search');
-      expect(initialNames).not.toContain('code_research');
+      expect(initialNames).not.toContain('approvals');
+      expect(initialNames).not.toContain('dispatch-runtime');
 
-      const blockedSearch = await client.callTool({
-        name: 'search',
-        arguments: { type: 'regex', query: 'foo', projectPath },
+      const blockedDispatch = await client.callTool({
+        name: 'dispatch-runtime',
+        arguments: { projectPath },
       });
-      const blockedPayload = decodeToolText(blockedSearch as any);
-      expect(blockedSearch.isError).toBe(true);
+      const blockedPayload = decodeToolText(blockedDispatch as any);
+      expect(blockedDispatch.isError).toBe(true);
       expect(blockedPayload.success).toBe(false);
 
       const guide = await client.callTool({
@@ -108,8 +107,7 @@ describe('SpecContextServer integration (in-memory MCP transport)', () => {
       const afterTools = await client.listTools();
       const afterNames = (afterTools.tools ?? []).map(tool => tool.name);
       expect(afterNames).toContain('get-implementer-guide');
-      expect(afterNames).toContain('search');
-      expect(afterNames).toContain('code_research');
+      expect(afterNames).toContain('spec-status');
       expect(afterNames).not.toContain('approvals');
     } finally {
       await rm(projectPath, { recursive: true, force: true });
@@ -137,7 +135,7 @@ describe('SpecContextServer integration (in-memory MCP transport)', () => {
       const visible = await client.listTools();
       const names = (visible.tools ?? []).map(tool => tool.name);
       expect(names).toContain('get-implementer-guide');
-      expect(names).toContain('search');
+      expect(names).toContain('spec-status');
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }

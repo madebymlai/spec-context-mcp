@@ -1,1 +1,0 @@
-"""ChunkHound test package."""

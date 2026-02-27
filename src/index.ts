@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { validateConfig, createConfig } from './config.js';
+import { createConfig } from './config.js';
 import { SpecContextServer } from './server.js';
 
 async function main(): Promise<void> {
@@ -9,29 +9,21 @@ async function main(): Promise<void> {
     // Check for help flag
     if (args.includes('--help') || args.includes('-h')) {
         console.log(`
-spec-context-mcp - Unified MCP server for semantic code search
+spec-context-mcp - MCP server for spec-driven development
 
 Usage: spec-context-mcp [options]
        spec-context-mcp doctor
-       spec-context-mcp setup
 
 Options:
   --help, -h    Show this help message
   --doctor      Run preflight checks (alias: doctor)
-  setup         Set up Python environment for ChunkHound
 
 Environment Variables:
-  EMBEDDING_PROVIDER  Embedding provider (default: voyageai)
-  EMBEDDING_API_KEY   API key for embedding provider (required for hosted providers)
-  EMBEDDING_MODEL     Embedding model name (provider-specific)
-  EMBEDDING_BASE_URL  Base URL for embedding API (optional)
-  VOYAGEAI_API_KEY    Alias for EMBEDDING_API_KEY when provider=voyageai
-  CHUNKHOUND_PYTHON   Python executable for ChunkHound (default: python3)
   DASHBOARD_URL       Dashboard URL shown in prompts (default: http://localhost:3000)
-  OPENROUTER_API_KEY  Required for ChunkHound deep research and dashboard AI review
+  OPENROUTER_API_KEY  Required for dashboard AI review
 
 Example:
-  EMBEDDING_PROVIDER=voyageai EMBEDDING_API_KEY=sk-embed-xxx spec-context-mcp
+  spec-context-mcp
 
 For Claude Desktop, add to your config:
   {
@@ -40,10 +32,6 @@ For Claude Desktop, add to your config:
         "command": "npx",
         "args": ["spec-context-mcp"],
         "env": {
-          "EMBEDDING_PROVIDER": "voyageai",
-          "EMBEDDING_API_KEY": "sk-embed-xxx",
-          "EMBEDDING_MODEL": "voyage-code-3",
-          "CHUNKHOUND_PYTHON": "python3",
           "DASHBOARD_URL": "http://localhost:3000"
         }
       }
@@ -58,15 +46,6 @@ For Claude Desktop, add to your config:
         const exitCode = await runDoctor();
         process.exit(exitCode);
     }
-
-    if (args.includes('setup')) {
-        const { runSetup } = await import('./setup.js');
-        const exitCode = await runSetup();
-        process.exit(exitCode);
-    }
-
-    // Validate configuration
-    validateConfig();
 
     // Create config and server
     const config = createConfig();

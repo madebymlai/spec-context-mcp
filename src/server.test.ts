@@ -37,11 +37,6 @@ vi.mock('./prompts/index.js', () => ({
   handlePromptGet: vi.fn(async () => ({ messages: [] })),
 }));
 
-vi.mock('./bridge/chunkhound-bridge.js', () => ({
-  initChunkHoundBridge: vi.fn(),
-  resetChunkHoundBridge: vi.fn(),
-}));
-
 vi.mock('./core/workflow/dashboard-url.js', () => ({
   resolveDashboardUrl: vi.fn(async () => 'http://localhost:5111'),
 }));
@@ -62,7 +57,6 @@ describe('SpecContextServer tool visibility gate', () => {
       name: 'spec-context-mcp-test',
       version: '1.0.0',
       dashboardUrl: 'http://localhost:5111',
-      chunkhoundPython: 'python3',
     });
 
     const callHandler = handlerMap.get(CallToolRequestSchema);
@@ -76,7 +70,7 @@ describe('SpecContextServer tool visibility gate', () => {
 
     const response = await callHandler({
       params: {
-        name: 'search',
+        name: 'dispatch-runtime',
         arguments: {},
       },
     });

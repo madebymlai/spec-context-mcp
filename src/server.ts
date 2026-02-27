@@ -13,7 +13,6 @@ import type { ToolResponse, MCPToolResponse } from './workflow-types.js';
 import { getTools, handleToolCall } from './tools/node-runtime.js';
 import { processToolCall, isToolVisible, getVisibilityTier, ensureTierAtLeast } from './tools/registry.js';
 import { handlePromptList, handlePromptGet } from './prompts/index.js';
-import { initChunkHoundBridge, resetChunkHoundBridge } from './bridge/chunkhound-bridge.js';
 import { resolveDashboardUrlForNode } from './core/workflow/node-dashboard-url-default.js';
 import { DEFAULT_DASHBOARD_URL } from './core/workflow/constants.js';
 import { toMCPResponse } from './workflow-types.js';
@@ -145,9 +144,8 @@ export class SpecContextServer {
         process.on('SIGINT', () => this.shutdown());
         process.on('SIGTERM', () => this.shutdown());
 
-        // Fire-and-forget: warm up ChunkHound and dashboard registration without
-        // blocking MCP startup (clients like Codex enforce short startup timeouts).
-        void initChunkHoundBridge(process.cwd());
+        // Fire-and-forget: register with dashboard without blocking MCP startup
+        // (clients like Codex enforce short startup timeouts).
         void this.registerWithDashboard();
     }
 
@@ -156,13 +154,11 @@ export class SpecContextServer {
     }
 
     async closeTransport(): Promise<void> {
-        resetChunkHoundBridge();
         await this.server.close();
     }
 
     private shutdown(): void {
         console.error(`[${this.config.name}] Shutting down...`);
-        resetChunkHoundBridge();
         this.server.close().finally(() => process.exit(0));
     }
 

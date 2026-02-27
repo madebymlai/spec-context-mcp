@@ -7,7 +7,7 @@
  *
  * Tier model (inspired by "Less-is-More", arXiv:2411.15399):
  *   L1 (strict):   Tight role-specific set — default after mode lock.
- *   L2 (extended):  Role tools + commonly needed extras (code_research).
+ *   L2 (extended):  Role tools + commonly needed extras.
  *   L3 (all):       Full tool set — safety-net fallback.
  *
  * Escalation triggers:
