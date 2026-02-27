@@ -4,6 +4,8 @@ import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import {
   applyOutcomeToTaskLedger,
+  buildFailureEvidence,
+  buildLedgerDeltaPacket,
   buildLedgerTaskPrompt,
   extractProgressLedger,
   isProgressLedgerStale,
@@ -13,6 +15,7 @@ import {
   taskLedgerFromFacts,
   taskLedgerToFacts,
 } from './dispatch-ledger.js';
+import type { TaskLedger } from './dispatch-ledger.js';
 
 const TASKS_CONTENT = `# Tasks\n\n- [x] 1. Completed setup\n- [-] 1.2 Implement ledger support\n  - _Requirements: 1, 2_\n  - _Prompt: Role: TypeScript Developer | Task: Build ledger context_\n- [ ] 2. Follow-up task\n`;
 
@@ -182,5 +185,202 @@ describe('dispatch-ledger', () => {
     });
 
     expect(result.missing).toContain('missing_task_prompt');
+  });
+
+  describe('buildFailureEvidence', () => {
+    function makeTaskLedger(overrides: Partial<TaskLedger> = {}): TaskLedger {
+      return {
+        runId: 'run-1',
+        taskId: '1',
+        planVersion: 1,
+        reviewerIssues: [],
+        blockers: [],
+        requiredFixes: [],
+        stalled: { consecutiveNonProgress: 0, threshold: 3, flagged: false },
+        reviewLoop: { consecutiveSameNeedsChanges: 0, threshold: 3, flagged: false },
+        ...overrides,
+      };
+    }
+
+    it('returns null when assessment is approved', () => {
+      expect(buildFailureEvidence(makeTaskLedger({ reviewerAssessment: 'approved' }))).toBeNull();
+    });
+
+    it('returns null when assessment is absent', () => {
+      expect(buildFailureEvidence(makeTaskLedger())).toBeNull();
+    });
+
+    it('includes summary when present', () => {
+      const result = buildFailureEvidence(makeTaskLedger({
+        reviewerAssessment: 'needs_changes',
+        summary: 'Tried approach A',
+      }));
+      expect(result).toContain('Previous attempt summary:');
+      expect(result).toContain('Tried approach A');
+    });
+
+    it('formats issues with severity and file', () => {
+      const result = buildFailureEvidence(makeTaskLedger({
+        reviewerAssessment: 'needs_changes',
+        reviewerIssues: [
+          { severity: 'critical', message: 'Missing validation', file: 'src/api.ts' },
+          { severity: 'minor', message: 'Style issue' },
+        ],
+      }));
+      expect(result).toContain('[critical] src/api.ts: Missing validation');
+      expect(result).toContain('[minor] Style issue');
+    });
+
+    it('includes required fixes', () => {
+      const result = buildFailureEvidence(makeTaskLedger({
+        reviewerAssessment: 'blocked',
+        requiredFixes: ['Add tests', 'Fix linting'],
+      }));
+      expect(result).toContain('Required fixes:');
+      expect(result).toContain('Add tests');
+      expect(result).toContain('Fix linting');
+    });
+
+    it('includes blockers as constraints', () => {
+      const result = buildFailureEvidence(makeTaskLedger({
+        reviewerAssessment: 'blocked',
+        blockers: ['API unavailable'],
+      }));
+      expect(result).toContain('Constraints/blockers:');
+      expect(result).toContain('API unavailable');
+    });
+
+    it('handles empty issues/fixes/blockers gracefully', () => {
+      const result = buildFailureEvidence(makeTaskLedger({
+        reviewerAssessment: 'needs_changes',
+        summary: 'Attempted fix',
+      }));
+      expect(result).toContain('Previous attempt summary:');
+      expect(result).not.toContain('Rejection reasons:');
+      expect(result).not.toContain('Required fixes:');
+      expect(result).not.toContain('Constraints/blockers:');
+    });
+  });
+
+  describe('buildLedgerDeltaPacket', () => {
+    function makeTaskLedger(overrides: Partial<TaskLedger> = {}): TaskLedger {
+      return {
+        runId: 'run-1',
+        taskId: '1',
+        planVersion: 1,
+        summary: 'test summary',
+        reviewerIssues: [],
+        blockers: [],
+        requiredFixes: [],
+        stalled: { consecutiveNonProgress: 0, threshold: 3, flagged: false },
+        reviewLoop: { consecutiveSameNeedsChanges: 0, threshold: 3, flagged: false },
+        ...overrides,
+      };
+    }
+
+    const baseArgs = {
+      taskId: '1',
+      guideMode: 'full' as const,
+      guideCacheKey: 'impl:run-1',
+      progressLedger: {
+        specName: 'test',
+        taskId: '1',
+        sourcePath: '/tmp/tasks.md',
+        sourceFingerprint: { mtimeMs: 1, hash: 'abc' },
+        totals: { total: 1, completed: 0, inProgress: 1, pending: 0 },
+        activeTaskId: '1',
+      },
+    };
+
+    it('includes full reviewer issues array instead of count', () => {
+      const issues = [
+        { severity: 'critical' as const, message: 'Missing validation', file: 'src/api.ts' },
+        { severity: 'minor' as const, message: 'Style issue' },
+      ];
+      const packet = buildLedgerDeltaPacket({
+        ...baseArgs,
+        taskLedger: makeTaskLedger({ reviewerIssues: issues }),
+      });
+      expect(packet.ledger_reviewer_issues).toEqual(issues);
+      expect(packet).not.toHaveProperty('ledger_reviewer_issue_count');
+    });
+
+    it('includes failure evidence when reviewer rejected', () => {
+      const packet = buildLedgerDeltaPacket({
+        ...baseArgs,
+        taskLedger: makeTaskLedger({
+          reviewerAssessment: 'needs_changes',
+          summary: 'Tried approach A',
+          reviewerIssues: [{ severity: 'important', message: 'Wrong approach' }],
+        }),
+      });
+      expect(packet.ledger_failure_evidence).toContain('Previous attempt summary:');
+      expect(packet.ledger_failure_evidence).toContain('Wrong approach');
+    });
+
+    it('failure evidence is null on first attempt', () => {
+      const packet = buildLedgerDeltaPacket({
+        ...baseArgs,
+        taskLedger: makeTaskLedger(),
+      });
+      expect(packet.ledger_failure_evidence).toBeNull();
+    });
+  });
+
+  describe('buildLedgerTaskPrompt retry framing', () => {
+    function makeTaskLedger(overrides: Partial<TaskLedger> = {}): TaskLedger {
+      return {
+        runId: 'run-1',
+        taskId: '1',
+        planVersion: 1,
+        reviewerIssues: [],
+        blockers: [],
+        requiredFixes: [],
+        stalled: { consecutiveNonProgress: 0, threshold: 3, flagged: false },
+        reviewLoop: { consecutiveSameNeedsChanges: 0, threshold: 3, flagged: false },
+        ...overrides,
+      };
+    }
+
+    const progressLedger = {
+      specName: 'test',
+      taskId: '1',
+      sourcePath: '/tmp/tasks.md',
+      sourceFingerprint: { mtimeMs: 1, hash: 'abc' },
+      totals: { total: 1, completed: 0, inProgress: 1, pending: 0 },
+      activeTaskId: '1',
+      currentTask: {
+        id: '1',
+        description: 'Test task',
+        status: 'in-progress' as const,
+        prompt: 'Do the thing',
+      },
+    };
+
+    it('no retry framing when taskLedger not provided (backward compat)', () => {
+      const result = buildLedgerTaskPrompt(progressLedger);
+      expect(result.prompt).not.toContain('Retry guidance');
+    });
+
+    it('no retry framing when planVersion is 1', () => {
+      const result = buildLedgerTaskPrompt(progressLedger, makeTaskLedger({ planVersion: 1 }));
+      expect(result.prompt).not.toContain('Retry guidance');
+    });
+
+    it('includes focus-on-feedback framing at planVersion 2', () => {
+      const result = buildLedgerTaskPrompt(progressLedger, makeTaskLedger({ planVersion: 2 }));
+      expect(result.prompt).toContain('Retry guidance');
+      expect(result.prompt).toContain('second attempt');
+      expect(result.prompt).toContain('reviewer feedback');
+    });
+
+    it('includes different-approach framing at planVersion 3+', () => {
+      const result = buildLedgerTaskPrompt(progressLedger, makeTaskLedger({ planVersion: 3 }));
+      expect(result.prompt).toContain('Retry guidance');
+      expect(result.prompt).toContain('fundamentally different approach');
+
+      const result4 = buildLedgerTaskPrompt(progressLedger, makeTaskLedger({ planVersion: 4 }));
+      expect(result4.prompt).toContain('attempt #4');
+    });
   });
 });

@@ -606,7 +606,10 @@ export function applyOutcomeToTaskLedger(
   return nextLedger;
 }
 
-export function buildLedgerTaskPrompt(progressLedger: ProgressLedger | null): {
+export function buildLedgerTaskPrompt(
+  progressLedger: ProgressLedger | null,
+  taskLedger?: TaskLedger | null,
+): {
   prompt: string;
   missing: string[];
 } {
@@ -632,10 +635,54 @@ export function buildLedgerTaskPrompt(progressLedger: ProgressLedger | null): {
     sections.push(`Task requirements: ${currentTask.requirements.join(', ')}`);
   }
 
+  if (taskLedger && taskLedger.planVersion > 1) {
+    if (taskLedger.planVersion === 2) {
+      sections.push(
+        'Retry guidance: This is your second attempt. Focus on the reviewer feedback in the delta context and address the reported issues directly. Do not start from scratch — fix what was flagged.',
+      );
+    } else {
+      sections.push(
+        'Retry guidance: This is attempt #' +
+          taskLedger.planVersion +
+          '. Previous approaches have been rejected multiple times. Consider a fundamentally different approach. List alternative strategies before implementing and choose one that avoids the patterns that failed previously.',
+      );
+    }
+  }
+
   return {
     prompt: sections.join('\n\n'),
     missing,
   };
+}
+
+export function buildFailureEvidence(ledger: TaskLedger): string | null {
+  if (!ledger.reviewerAssessment || ledger.reviewerAssessment === 'approved') {
+    return null;
+  }
+
+  const sections: string[] = [];
+
+  if (ledger.summary?.trim()) {
+    sections.push(`Previous attempt summary:\n${ledger.summary.trim()}`);
+  }
+
+  if (ledger.reviewerIssues.length > 0) {
+    const formatted = ledger.reviewerIssues.map((issue) => {
+      const prefix = `[${issue.severity}]`;
+      return issue.file ? `${prefix} ${issue.file}: ${issue.message}` : `${prefix} ${issue.message}`;
+    });
+    sections.push(`Rejection reasons:\n${formatted.join('\n')}`);
+  }
+
+  if (ledger.requiredFixes.length > 0) {
+    sections.push(`Required fixes:\n${ledger.requiredFixes.join('\n')}`);
+  }
+
+  if (ledger.blockers.length > 0) {
+    sections.push(`Constraints/blockers:\n${ledger.blockers.join('\n')}`);
+  }
+
+  return sections.length > 0 ? sections.join('\n\n') : null;
 }
 
 export function buildLedgerDeltaPacket(args: {
@@ -653,7 +700,8 @@ export function buildLedgerDeltaPacket(args: {
     ledger_task_totals: args.progressLedger.totals,
     ledger_summary: args.taskLedger.summary ?? null,
     ledger_reviewer_assessment: args.taskLedger.reviewerAssessment ?? null,
-    ledger_reviewer_issue_count: args.taskLedger.reviewerIssues.length,
+    ledger_reviewer_issues: args.taskLedger.reviewerIssues,
+    ledger_failure_evidence: buildFailureEvidence(args.taskLedger),
     ledger_required_fixes: args.taskLedger.requiredFixes,
     ledger_blockers: args.taskLedger.blockers,
     ledger_stalled_count: args.taskLedger.stalled.consecutiveNonProgress,

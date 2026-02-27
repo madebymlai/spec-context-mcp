@@ -1113,3 +1113,51 @@ END_DISPATCH_RESULT`,
     expect(result.data?.snapshot?.run_id).toBe('test-run-snapshot');
   });
 });
+
+describe('pruneDeltaPacket', () => {
+  let pruneDeltaPacket: (deltaPacket: Record<string, unknown>) => Record<string, unknown>;
+
+  beforeAll(async () => {
+    const mod = await import('./dispatch-runtime.js');
+    pruneDeltaPacket = mod.pruneDeltaPacket;
+  });
+
+  it('preserves ledger_reviewer_issues through compaction', () => {
+    const issues = [
+      { severity: 'critical', message: 'Missing validation', file: 'src/api.ts' },
+    ];
+    const result = pruneDeltaPacket({
+      task_id: 'test',
+      ledger_reviewer_issues: issues,
+    });
+    expect(result.ledger_reviewer_issues).toEqual(issues);
+  });
+
+  it('preserves ledger_required_fixes through compaction', () => {
+    const fixes = ['Add tests', 'Fix linting'];
+    const result = pruneDeltaPacket({
+      task_id: 'test',
+      ledger_required_fixes: fixes,
+    });
+    expect(result.ledger_required_fixes).toEqual(fixes);
+  });
+
+  it('preserves ledger_failure_evidence through compaction without clipping', () => {
+    const longEvidence = 'A'.repeat(500);
+    const result = pruneDeltaPacket({
+      task_id: 'test',
+      ledger_failure_evidence: longEvidence,
+    });
+    expect(result.ledger_failure_evidence).toBe(longEvidence);
+    expect((result.ledger_failure_evidence as string).length).toBe(500);
+  });
+
+  it('clips regular string fields to MAX_DELTA_VALUE_CHARS', () => {
+    const longSummary = 'B'.repeat(500);
+    const result = pruneDeltaPacket({
+      task_id: 'test',
+      ledger_summary: longSummary,
+    });
+    expect((result.ledger_summary as string).length).toBeLessThan(500);
+  });
+});

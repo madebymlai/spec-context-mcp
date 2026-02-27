@@ -417,7 +417,7 @@ function compactTaskPromptStageC(input: {
   return sections.join('\n');
 }
 
-function pruneDeltaPacket(deltaPacket: Record<string, unknown>): Record<string, unknown> {
+export function pruneDeltaPacket(deltaPacket: Record<string, unknown>): Record<string, unknown> {
   const allowedKeys = [
     'task_id',
     'guide_mode',
@@ -425,11 +425,14 @@ function pruneDeltaPacket(deltaPacket: Record<string, unknown>): Record<string, 
     'ledger_active_task_id',
     'ledger_summary',
     'ledger_reviewer_assessment',
-    'ledger_reviewer_issue_count',
+    'ledger_reviewer_issues',
+    'ledger_required_fixes',
+    'ledger_failure_evidence',
     'ledger_stalled_count',
     'ledger_stalled_flagged',
     'ledger_replan_hint',
   ];
+  const protectedFromClipping = new Set(['ledger_failure_evidence']);
   const compacted: Record<string, unknown> = {};
 
   for (const key of allowedKeys) {
@@ -440,7 +443,7 @@ function pruneDeltaPacket(deltaPacket: Record<string, unknown>): Record<string, 
     if (value === null || value === undefined || value === '') {
       continue;
     }
-    if (typeof value === 'string') {
+    if (typeof value === 'string' && !protectedFromClipping.has(key)) {
       compacted[key] = clipText(normalizeLine(value), MAX_DELTA_VALUE_CHARS);
       continue;
     }
@@ -1030,7 +1033,14 @@ export class DispatchRuntimeManager {
     }
 
     const ensuredProgressLedger = assertCompleteProgressLedger(progressLedger);
-    const ledgerPrompt = buildLedgerTaskPrompt(ensuredProgressLedger);
+    const taskLedger = taskLedgerFromFacts({
+      runId: args.runId,
+      taskId: args.taskId,
+      facts: snapshot.facts ?? [],
+      stalledThreshold: this.stalledThreshold,
+      reviewLoopThreshold: this.reviewLoopThreshold,
+    });
+    const ledgerPrompt = buildLedgerTaskPrompt(ensuredProgressLedger, taskLedger);
     if (ledgerPrompt.missing.length > 0) {
       throw new DispatchLedgerError(
         'progress_ledger_incomplete',
@@ -1040,13 +1050,6 @@ export class DispatchRuntimeManager {
 
     const guideMode = this.nextGuideMode(args.runId, args.role);
     const guideCacheKey = `${args.role}:${args.runId}`;
-    const taskLedger = taskLedgerFromFacts({
-      runId: args.runId,
-      taskId: args.taskId,
-      facts: snapshot.facts ?? [],
-      stalledThreshold: this.stalledThreshold,
-      reviewLoopThreshold: this.reviewLoopThreshold,
-    });
     let deltaPacket: Record<string, unknown> = buildLedgerDeltaPacket({
       taskId: args.taskId,
       guideMode,
