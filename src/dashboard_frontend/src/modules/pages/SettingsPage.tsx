@@ -13,6 +13,15 @@ import {
   type RuntimeSettingsFieldKey,
   type RuntimeSettingsResponse,
 } from './settings-runtime-config';
+import { getModelSuggestion } from './settings-model-suggestions';
+import {
+  applyModelFieldUpdate,
+  applyProviderSwitch,
+  buildRuntimeProviderModelMemory,
+  createEmptyRuntimeProviderModelMemory,
+  type RuntimeProviderRole,
+  type RuntimeProviderModelMemory,
+} from './settings-provider-model-memory';
 
 interface JobUIState {
   id: string;
@@ -43,6 +52,9 @@ function Content() {
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettingsResponse | null>(null);
   const [runtimeDraft, setRuntimeDraft] = useState<RuntimeSettingsDraft>(createEmptyRuntimeSettingsDraft());
   const [initialRuntimeDraft, setInitialRuntimeDraft] = useState<RuntimeSettingsDraft>(createEmptyRuntimeSettingsDraft());
+  const [runtimeProviderModelMemory, setRuntimeProviderModelMemory] = useState<RuntimeProviderModelMemory>(
+    createEmptyRuntimeProviderModelMemory()
+  );
   const [runtimeLoading, setRuntimeLoading] = useState(true);
   const [runtimeSaving, setRuntimeSaving] = useState(false);
 
@@ -86,6 +98,7 @@ function Content() {
       setRuntimeSettings(resolved);
       setRuntimeDraft(draft);
       setInitialRuntimeDraft(draft);
+      setRuntimeProviderModelMemory(buildRuntimeProviderModelMemory(draft));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load runtime settings');
@@ -251,7 +264,49 @@ function Content() {
     }));
   };
 
+  const handleRuntimeProviderChange = (role: RuntimeProviderRole, nextProvider: string | null) => {
+    const nextState = applyProviderSwitch({
+      draft: runtimeDraft,
+      memory: runtimeProviderModelMemory,
+      role,
+      nextProvider,
+    });
+    setRuntimeDraft(nextState.draft);
+    setRuntimeProviderModelMemory(nextState.memory);
+  };
+
+  const handleRuntimeModelFieldChange = (field: RuntimeSettingsFieldKey, value: string | null) => {
+    const nextState = applyModelFieldUpdate({
+      draft: runtimeDraft,
+      memory: runtimeProviderModelMemory,
+      field,
+      value,
+    });
+    setRuntimeDraft(nextState.draft);
+    setRuntimeProviderModelMemory(nextState.memory);
+  };
+
   const handleRuntimeFieldClear = (field: RuntimeSettingsFieldKey) => {
+    if (field === 'implementer') {
+      handleRuntimeProviderChange('implementer', null);
+      return;
+    }
+
+    if (field === 'reviewer') {
+      handleRuntimeProviderChange('reviewer', null);
+      return;
+    }
+
+    if (
+      field === 'implementerModelSimple'
+      || field === 'implementerModelComplex'
+      || field === 'reviewerModelSimple'
+      || field === 'reviewerModelComplex'
+    ) {
+      handleRuntimeModelFieldChange(field, null);
+      return;
+    }
+
     setRuntimeDraft((currentDraft) => ({
       ...currentDraft,
       [field]: null,
@@ -259,6 +314,10 @@ function Content() {
   };
 
   const hasRuntimeChanges = hasRuntimeSettingsChanges(initialRuntimeDraft, runtimeDraft);
+  const implementerModelSimplePlaceholder = getModelSuggestion(runtimeDraft.implementer, 'simple');
+  const implementerModelComplexPlaceholder = getModelSuggestion(runtimeDraft.implementer, 'complex');
+  const reviewerModelSimplePlaceholder = getModelSuggestion(runtimeDraft.reviewer, 'simple');
+  const reviewerModelComplexPlaceholder = getModelSuggestion(runtimeDraft.reviewer, 'complex');
 
   const saveRuntimeSettings = async () => {
     const updates = buildRuntimeSettingsUpdatePayload(initialRuntimeDraft, runtimeDraft);
@@ -287,6 +346,7 @@ function Content() {
       setRuntimeSettings(resolved);
       setRuntimeDraft(draft);
       setInitialRuntimeDraft(draft);
+      setRuntimeProviderModelMemory(buildRuntimeProviderModelMemory(draft));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save runtime settings');
@@ -388,7 +448,7 @@ function Content() {
                       <div className="flex items-center gap-2">
                         <select
                           value={runtimeDraft.implementer ?? ''}
-                          onChange={(event) => handleRuntimeFieldChange('implementer', event.target.value)}
+                          onChange={(event) => handleRuntimeProviderChange('implementer', event.target.value || null)}
                           className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
                         >
                           <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
@@ -415,7 +475,7 @@ function Content() {
                       <div className="flex items-center gap-2">
                         <select
                           value={runtimeDraft.reviewer ?? ''}
-                          onChange={(event) => handleRuntimeFieldChange('reviewer', event.target.value)}
+                          onChange={(event) => handleRuntimeProviderChange('reviewer', event.target.value || null)}
                           className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
                         >
                           <option value="">{t('settings.runtime.noneOption', 'empty')}</option>
@@ -446,8 +506,8 @@ function Content() {
                         <input
                           type="text"
                           value={runtimeDraft.implementerModelSimple ?? ''}
-                          onChange={(event) => handleRuntimeFieldChange('implementerModelSimple', event.target.value)}
-                          placeholder=""
+                          onChange={(event) => handleRuntimeModelFieldChange('implementerModelSimple', event.target.value || null)}
+                          placeholder={implementerModelSimplePlaceholder}
                           className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                         />
                         <button
@@ -469,8 +529,8 @@ function Content() {
                         <input
                           type="text"
                           value={runtimeDraft.reviewerModelSimple ?? ''}
-                          onChange={(event) => handleRuntimeFieldChange('reviewerModelSimple', event.target.value)}
-                          placeholder=""
+                          onChange={(event) => handleRuntimeModelFieldChange('reviewerModelSimple', event.target.value || null)}
+                          placeholder={reviewerModelSimplePlaceholder}
                           className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                         />
                         <button
@@ -495,8 +555,8 @@ function Content() {
                         <input
                           type="text"
                           value={runtimeDraft.implementerModelComplex ?? ''}
-                          onChange={(event) => handleRuntimeFieldChange('implementerModelComplex', event.target.value)}
-                          placeholder=""
+                          onChange={(event) => handleRuntimeModelFieldChange('implementerModelComplex', event.target.value || null)}
+                          placeholder={implementerModelComplexPlaceholder}
                           className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                         />
                         <button
@@ -518,8 +578,8 @@ function Content() {
                         <input
                           type="text"
                           value={runtimeDraft.reviewerModelComplex ?? ''}
-                          onChange={(event) => handleRuntimeFieldChange('reviewerModelComplex', event.target.value)}
-                          placeholder=""
+                          onChange={(event) => handleRuntimeModelFieldChange('reviewerModelComplex', event.target.value || null)}
+                          placeholder={reviewerModelComplexPlaceholder}
                           className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                         />
                         <button

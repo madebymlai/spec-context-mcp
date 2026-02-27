@@ -268,9 +268,18 @@ async function getRuntimeHandler(): Promise<(args: Record<string, unknown>, cont
   }
   if (!runtimeHandlerPromise) {
     runtimeHandlerPromise = (async () => {
-      nodeDispatchRuntimeDependencies = await createNodeDispatchRuntimeHandlerDependencies();
-      runtimeHandler = createDispatchRuntimeHandler(nodeDispatchRuntimeDependencies);
-      return runtimeHandler;
+      try {
+        nodeDispatchRuntimeDependencies = await createNodeDispatchRuntimeHandlerDependencies();
+        runtimeHandler = createDispatchRuntimeHandler(nodeDispatchRuntimeDependencies);
+        return runtimeHandler;
+      } catch (error) {
+        // Clear cached promise on bootstrap failure so a later retry can recover
+        // after settings are fixed without restarting the process.
+        nodeDispatchRuntimeDependencies = null;
+        runtimeHandler = null;
+        runtimeHandlerPromise = null;
+        throw error;
+      }
     })();
   }
   return runtimeHandlerPromise;
@@ -280,6 +289,17 @@ export async function dispatchRuntimeHandler(
   args: Record<string, unknown>,
   context: ToolContext,
 ): Promise<ToolResponse> {
-  const handler = await getRuntimeHandler();
-  return handler(args, context);
+  try {
+    const handler = await getRuntimeHandler();
+    return handler(args, context);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      success: false,
+      message: `dispatch-runtime initialization failed: ${message}`,
+      data: {
+        errorCode: 'dispatch_runtime_init_failed',
+      },
+    };
+  }
 }
