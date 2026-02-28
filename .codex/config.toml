@@ -1,0 +1,20 @@
+
+model_reasoning_effort = "xhigh"
+[projects."/home/laimk"]
+trust_level = "trusted"
+full-auto = true
+
+[projects."/home/laimk/git/aegis-trader"]
+trust_level = "trusted"
+full-auto = true
+[features]
+unified_exec = true
+steer = true
+
+[notice]
+hide_full_access_warning = true
+hide_rate_limit_model_nudge = true
+[mcp_servers.spec-context]
+command = "node"
+args = ["/home/laimk/git/spec-context-mcp/dist/index.js"]
+env_vars = ["OPENROUTER_API_KEY"]

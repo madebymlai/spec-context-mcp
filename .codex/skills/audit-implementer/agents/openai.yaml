@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Implementer"
+  short_description: "Implement audit fixes/refactors with principles and plans"
+  default_prompt: "Implement and validate the referenced docs/audit fix or refactor using principles.md, track tasks with update_plan, rename the artifact to *_OK.md, and commit."

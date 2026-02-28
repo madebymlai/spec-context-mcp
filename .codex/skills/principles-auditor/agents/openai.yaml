@@ -1,0 +1,4 @@
+interface:
+  display_name: "Key Principles Auditor"
+  short_description: "key-principles audit artifacts"
+  default_prompt: "Follow docs/audit/AGENTS.md to audit key-principles compliance and correctness; journal continuously; write one best-fix/refactor markdown per confirmed finding under docs/audit/."

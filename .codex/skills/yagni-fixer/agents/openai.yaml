@@ -1,0 +1,4 @@
+interface:
+  display_name: "YAGNI Fixer"
+  short_description: "Implement non-YAGNI principles fixes now"
+  default_prompt: "Audit active code paths for principles violations, pick one high-value non-YAGNI fix, implement it immediately with tests, and report tradeoffs."
