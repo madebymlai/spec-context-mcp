@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RoutingTable, type ITaskComplexityClassifier } from '../../core/routing/index.js';
+import { type ITaskComplexityClassifier } from '../../core/routing/index.js';
 import {
   InMemorySessionFactStore,
   KeywordFactRetriever,
@@ -530,10 +530,10 @@ END_DISPATCH_RESULT`,
 
     expect(result.success).toBe(true);
     expect(result.data?.classification_level).toBe('simple');
-    expect(result.data?.selected_provider).toBe('codex');
+    expect(result.data?.selected_provider).toBe('claude');
     const facts = (result.data?.snapshot?.facts ?? []) as Array<{ k: string; v: string }>;
     expect(facts.find(fact => fact.k === 'classification_level')?.v).toBe('simple');
-    expect(facts.find(fact => fact.k === 'selected_provider')?.v).toBe('codex');
+    expect(facts.find(fact => fact.k === 'selected_provider')?.v).toBe('claude');
     expect(facts.find(fact => fact.k === 'dispatch_cli')?.v).toContain('--model sonnet-4.5');
     expect(facts.find(fact => fact.k === 'classification_features')?.v).toContain('keyword_match');
   });
@@ -547,10 +547,6 @@ END_DISPATCH_RESULT`,
     const factStore = new InMemorySessionFactStore();
     const manager = new DispatchRuntimeManagerClass(
       classifier,
-      new RoutingTable({
-        simple: 'codex',
-        complex: 'claude',
-      }),
       factStore,
       new RuleBasedFactExtractor(),
       new KeywordFactRetriever(factStore),
@@ -1390,10 +1386,6 @@ END_DISPATCH_RESULT`,
     };
     const manager = new DispatchRuntimeManagerClass(
       classifier,
-      new RoutingTable({
-        simple: 'codex',
-        complex: 'claude',
-      }),
       fakeStore as any,
       new RuleBasedFactExtractor(),
       fakeRetriever as any,

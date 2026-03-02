@@ -64,9 +64,8 @@ describe('dispatch-runtime-node initialization recovery', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.message).toContain('dispatch-runtime initialization failed');
-    expect(result.message).toContain('set reviewer in dashboard settings');
-    expect(result.data?.errorCode).toBe('dispatch_runtime_init_failed');
+    expect(result.message).toContain('No implementer configured');
+    expect(result.data?.errorCode).toBe('implementer_not_configured');
   });
 
   it('recovers after initial bootstrap failure once settings are fixed', async () => {
@@ -88,7 +87,7 @@ describe('dispatch-runtime-node initialization recovery', () => {
       context
     );
     expect(first.success).toBe(false);
-    expect(first.message).toContain('dispatch-runtime initialization failed');
+    expect(first.message).toContain('No implementer configured');
 
     await manager.updateRuntimeSettings({
       implementer: 'codex',

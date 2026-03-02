@@ -12,7 +12,6 @@ import { ToolContext, ToolResponse } from '../../workflow-types.js';
 import type { DispatchRole } from '../../config/discipline.js';
 import {
   getDispatchCommandForComplexity,
-  resolveDispatchCommandForProvider,
   type DispatchExecutionCommand,
 } from '../../config/dispatch-cli-resolver.js';
 import {
@@ -39,7 +38,6 @@ import {
 } from './dispatch-contract-schemas.js';
 import {
   type ComplexityLevel,
-  type IRoutingTable,
   type ITaskComplexityClassifier,
 } from '../../core/routing/index.js';
 import {
@@ -109,6 +107,8 @@ class DispatchContractError extends Error {
 type DispatchRuntimeErrorCode =
   | 'run_not_initialized'
   | 'run_task_mismatch'
+  | 'implementer_not_configured'
+  | 'reviewer_not_configured'
   | 'dispatch_prompt_overflow_terminal'
   | 'output_token_budget_exceeded'
   | 'dispatch_execution_failed'
@@ -684,7 +684,6 @@ export class DispatchRuntimeManager {
 
   constructor(
     private readonly classifier: ITaskComplexityClassifier,
-    private readonly routingTable: IRoutingTable,
     private readonly factStore: ISessionFactStore,
     private readonly factExtractor: IFactExtractor,
     private readonly factRetriever: IFactRetriever,
@@ -727,13 +726,13 @@ export class DispatchRuntimeManager {
       taskId,
       specName,
     });
-    const routingEntry = this.routingTable.resolve(classification.level, 'implementer');
-    const dispatchCommand = (await getDispatchCommandForComplexity('implementer', classification.level))
-      ?? await resolveDispatchCommandForProvider({
-        provider: routingEntry.provider,
-        role: 'implementer',
-        complexity: classification.level,
-      });
+    const dispatchCommand = await getDispatchCommandForComplexity('implementer', classification.level);
+    if (!dispatchCommand) {
+      throw new DispatchRuntimeError(
+        'implementer_not_configured',
+        'No implementer configured. Configure the implementer provider in the dashboard settings before dispatching.'
+      );
+    }
 
     const initEvent = await this.publishEvent({
       partition_key: runId,
@@ -748,7 +747,7 @@ export class DispatchRuntimeManager {
         ledger_progress_totals: progressLedger.totals,
         ledger_progress_active_task_id: progressLedger.activeTaskId,
         classification_level: classification.level,
-        selected_provider: routingEntry.provider,
+        selected_provider: dispatchCommand.provider,
         dispatch_cli: dispatchCommand.display,
       },
     });
@@ -761,7 +760,7 @@ export class DispatchRuntimeManager {
         { k: 'spec_name', v: specName, confidence: 1 },
         { k: 'task_id', v: taskId, confidence: 1 },
         { k: DISPATCH_CLASSIFICATION_FACT_KEYS.level, v: classification.level, confidence: classification.confidence },
-        { k: DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider, v: routingEntry.provider, confidence: 1 },
+        { k: DISPATCH_CLASSIFICATION_FACT_KEYS.selectedProvider, v: dispatchCommand.provider, confidence: 1 },
         { k: DISPATCH_CLASSIFICATION_FACT_KEYS.dispatchCli, v: dispatchCommand.display, confidence: 1 },
         {
           k: DISPATCH_CLASSIFICATION_FACT_KEYS.features,
@@ -1045,13 +1044,13 @@ export class DispatchRuntimeManager {
     const dispatchComplexity = normalizeDispatchComplexity(
       snapshotFactMap.get(DISPATCH_CLASSIFICATION_FACT_KEYS.level)
     );
-    const routingEntry = this.routingTable.resolve(dispatchComplexity, args.role);
-    const dispatchCommand = (await getDispatchCommandForComplexity(args.role, dispatchComplexity))
-      ?? await resolveDispatchCommandForProvider({
-        provider: routingEntry.provider,
-        role: args.role,
-        complexity: dispatchComplexity,
-      });
+    const dispatchCommand = await getDispatchCommandForComplexity(args.role, dispatchComplexity);
+    if (!dispatchCommand) {
+      throw new DispatchRuntimeError(
+        `${args.role}_not_configured`,
+        `No ${args.role} configured. Configure the ${args.role} provider in the dashboard settings before dispatching.`
+      );
+    }
     let progressLedger = progressLedgerFromFacts(snapshot.facts ?? []);
     const missingProgressLedger = !progressLedger;
     const staleProgressLedger = progressLedger ? await isProgressLedgerStale(progressLedger) : false;

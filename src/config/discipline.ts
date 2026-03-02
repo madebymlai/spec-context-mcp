@@ -135,7 +135,7 @@ export async function getDisciplineMode(): Promise<DisciplineMode> {
 }
 
 /**
- * Resolve an env var value to a full CLI command for the given role.
+ * Resolve a provider value to a full CLI command for the given role.
  * Only known providers are accepted.
  */
 export function resolveAgentCli(value: string, role: DispatchRole): string {

@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { resolve } from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { RoutingTable } from '../../core/routing/index.js';
+
 import {
   InMemorySessionFactStore,
   KeywordFactRetriever,
@@ -75,7 +75,6 @@ function createHandler(executor: IDispatchExecutor) {
         };
       }
     })(),
-    new RoutingTable({ simple: 'codex', complex: 'claude' }),
     factStore,
     new RuleBasedFactExtractor(),
     new KeywordFactRetriever(factStore),

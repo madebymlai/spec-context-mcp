@@ -75,20 +75,6 @@ function appendModelArgs(args: {
   };
 }
 
-export async function resolveDispatchCommandForProvider(args: {
-  provider: CanonicalProvider;
-  role: DispatchRole;
-  complexity: ComplexityLevel;
-}): Promise<DispatchExecutionCommand> {
-  const runtimeSettings = await resolveRuntimeSettings();
-  return appendModelArgs({
-    provider: args.provider,
-    modelOverride: getModelOverride({ role: args.role, complexity: args.complexity, runtimeSettings }),
-    role: args.role,
-    baseTemplate: getProviderCommandTemplate(args.provider, args.role),
-  });
-}
-
 export async function getDispatchCommandForComplexity(
   role: DispatchRole,
   complexity: ComplexityLevel

@@ -37,7 +37,7 @@ export const getImplementerGuideTool: Tool = {
   name: 'get-implementer-guide',
   description: `Load implementation rules for a dispatched implementer agent. FOR IMPLEMENTER SUB-AGENTS ONLY.
 
-DO NOT call this tool unless you are an implementer agent dispatched via SPEC_CONTEXT_IMPLEMENTER to work on a specific spec task. If you are the orchestrator managing the spec workflow, do NOT call this tool — dispatch it to the implementer agent instead.
+DO NOT call this tool unless you are an implementer agent dispatched by the orchestrator to work on a specific spec task. If you are the orchestrator managing the spec workflow, do NOT call this tool — dispatch it to the implementer agent instead.
 
 Returns (based on discipline mode):
 - TDD rules (full mode only)

@@ -12,7 +12,7 @@ import {
 } from '../../core/llm/index.js';
 import type { RuntimeEventEnvelope, StateSnapshot } from '../../core/llm/index.js';
 import { getSharedFileContentCacheTelemetry } from '../../core/cache/shared-file-content-cache.js';
-import { HeuristicComplexityClassifier, RoutingTable } from '../../core/routing/index.js';
+import { HeuristicComplexityClassifier } from '../../core/routing/index.js';
 import {
   GraphFactRetriever,
   GraphSessionFactStore,
@@ -217,14 +217,12 @@ class DelegatingFactRetriever implements IFactRetriever {
 class NodeDispatchRuntimeManager extends DispatchRuntimeManager {
   constructor(
     classifier: HeuristicComplexityClassifier,
-    routingTable: RoutingTable,
     factExtractor: RuleBasedFactExtractor,
     dependencies: DispatchRuntimeManagerDependencies,
     private readonly runtime: LazySessionKnowledgeGraphRuntime,
   ) {
     super(
       classifier,
-      routingTable,
       new DelegatingSessionFactStore(runtime),
       factExtractor,
       new DelegatingFactRetriever(runtime),
@@ -449,7 +447,6 @@ export async function createNodeDispatchRuntimeHandlerDependencies(): Promise<Di
   return {
     runtimeManager: new NodeDispatchRuntimeManager(
       new HeuristicComplexityClassifier(),
-      await RoutingTable.fromSettings(),
       new RuleBasedFactExtractor(),
       createNodeDispatchRuntimeManagerDependencies(),
       sessionRuntime,

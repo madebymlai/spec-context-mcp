@@ -67,13 +67,20 @@ If you run via `npx` / global install, you can pass env directly in `.mcp.json` 
 | `DASHBOARD_URL`       | No       | Dashboard URL shown in prompts (default: `http://localhost:3000`) |
 | `OPENROUTER_API_KEY`  | No       | Required for dashboard AI review |
 | `SPEC_CONTEXT_DISABLE_VERSION_CHECK` | No | Disable dashboard startup version check (default: `false`) |
-| `SPEC_CONTEXT_DISCIPLINE` | No | Discipline mode: `full` (TDD+reviews), `standard` (reviews), `minimal` (verification only). Default: `full` |
-| `SPEC_CONTEXT_IMPLEMENTER` | No | CLI command for implementer dispatch (shortcuts: `claude`, `codex`, `gemini`, `opencode`) |
-| `SPEC_CONTEXT_REVIEWER` | No | CLI command for reviewer dispatch |
+
+### Dashboard Settings
+
+Configure these in the dashboard settings page (or `.spec-context/settings.json`):
+
+| Setting | Description |
+|---------|-------------|
+| `discipline` | Discipline mode: `full` (TDD+reviews), `standard` (reviews), `minimal` (verification only). Default: `full` |
+| `implementer` | Implementer provider for dispatch (supported: `claude`, `codex`, `gemini`, `opencode`) |
+| `reviewer` | Reviewer provider for dispatch |
 
 ### Discipline Modes
 
-Control development rigor via `SPEC_CONTEXT_DISCIPLINE`:
+Control development rigor via the dashboard discipline setting:
 
 | Mode | TDD | Code Reviews | Verification |
 |------|-----|--------------|--------------|

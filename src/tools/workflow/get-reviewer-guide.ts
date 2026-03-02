@@ -37,7 +37,7 @@ export const getReviewerGuideTool: Tool = {
   name: 'get-reviewer-guide',
   description: `Load code review checklist for a dispatched reviewer agent. FOR REVIEWER SUB-AGENTS ONLY.
 
-DO NOT call this tool unless you are a reviewer agent dispatched via SPEC_CONTEXT_REVIEWER to review a specific task, OR you are the orchestrator and no SPEC_CONTEXT_REVIEWER is configured. If a reviewer CLI is configured, dispatch the review to that agent instead.
+DO NOT call this tool unless you are a reviewer agent dispatched by the orchestrator to review a specific task, OR you are the orchestrator and no reviewer is configured. If a reviewer CLI is configured, dispatch the review to that agent instead.
 
 Returns:
 - Review checklist with severity levels

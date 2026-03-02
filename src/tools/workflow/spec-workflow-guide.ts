@@ -248,13 +248,7 @@ flowchart TD
 
 ### Phase 4: Implementation
 ${!implementerCli ? `
-**⛔ BLOCKED: SPEC_CONTEXT_IMPLEMENTER is not set.**
-
-Implementation requires a dispatch CLI. Set the \`SPEC_CONTEXT_IMPLEMENTER\` environment variable to the CLI command for your implementer agent (supported shortcuts: \`claude\`, \`codex\`, \`gemini\`, \`opencode\`).
-
-Example: \`SPEC_CONTEXT_IMPLEMENTER=claude\`
-
-Do NOT implement tasks yourself. STOP and ask the user to configure the env var.
+**No implementer configured.** Ask the user to set the implementer provider in the dashboard settings before proceeding.
 ` : `**Purpose**: Execute tasks ONE AT A TIME with ${disciplineMode === 'full' ? 'TDD, ' : ''}verification${disciplineMode !== 'minimal' ? ', and review' : ''}.
 
 **Agent Dispatch:**
