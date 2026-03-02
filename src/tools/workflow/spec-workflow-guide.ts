@@ -45,7 +45,7 @@ export async function specWorkflowGuideHandler(args: any, context: ToolContext):
 
   return {
     success: true,
-    message: 'Complete spec workflow guide loaded - follow this workflow exactly',
+    message: 'You are the orchestrator. Read the full guide carefully before taking any action.',
     data: {
       guide: getSpecWorkflowGuide(disciplineMode, implementerCli, reviewerCli),
       steering: steeringContent,
@@ -77,7 +77,7 @@ function getSpecWorkflowGuide(disciplineMode: 'full' | 'standard' | 'minimal', i
 
 ## Overview
 
-You guide users through spec-driven development. Transform rough ideas into detailed specifications through Requirements → Design → Tasks → Implementation phases. Use web search when available for current best practices (current year: ${currentYear}). Its important that you follow this workflow exactly to avoid errors.
+You guide users through spec-driven development. Transform rough ideas into detailed specifications through Requirements → Design → Tasks → Implementation phases. Follow this workflow exactly to avoid errors.
 Feature names use kebab-case (e.g., user-authentication). Create ONE spec at a time.
 
 **Discipline Mode:** ${disciplineMode}

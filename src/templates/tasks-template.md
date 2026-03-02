@@ -10,7 +10,7 @@ Each task MUST follow this exact format. The approval validator will reject task
       {Description lines}
       _Leverage: {files to use}_
       _Requirements: {requirement IDs}_
-      _Prompt: Role: {role} | Task: {what to do} | Restrictions: {constraints} | Success: {done criteria} | Instructions: ..._
+      _Prompt: Role: {role} | Task: {what to do} | Restrictions: {constraints} | Success: {done criteria}_
 
 Where CHECKBOX is `- [ ]` (pending), `- [-]` (in-progress), or `- [x]` (completed).
 
