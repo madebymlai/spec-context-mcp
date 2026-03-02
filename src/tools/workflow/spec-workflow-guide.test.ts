@@ -35,22 +35,19 @@ describe('spec-workflow-guide', () => {
     await fs.rm(workflowHomeDir, { recursive: true, force: true });
   });
 
-  it('uses ledger-backed compile_prompt guidance and keeps reviewer git diff steps explicit', async () => {
+  it('includes dispatch-runtime instructions when implementer is configured', async () => {
     const result = await specWorkflowGuideHandler({}, createContext());
     expect(result.success).toBe(true);
 
     const guide = String(result.data?.guide ?? '');
-    expect(guide).toContain('Omit `taskPrompt` to use runtime ledger task prompt (fail fast if missing).');
-    expect(guide).toContain('Reviewer context remains explicit here: use base SHA and run `git diff {base-sha}..HEAD` before/while reviewing.');
-    expect(guide).toContain('`action: "dispatch_and_ingest"`');
-    expect(guide).toContain('Runtime compiles prompt, executes provider, validates strict contract, ingests output, and returns `nextAction`.');
-    expect(guide).not.toContain('Reviews are disabled in minimal mode.');
-    expect(guide).not.toContain('`taskPrompt: "{task prompt content}"`');
-    expect(guide).not.toContain('`taskPrompt: "{review prompt + base SHA + diff scope}"`');
-    expect(guide).not.toContain('{dispatch_cli from reviewer compile_prompt}');
+    expect(guide).toContain('dispatch-runtime');
+    expect(guide).toContain('dispatch_and_ingest');
+    expect(guide).toContain('init_run');
+    expect(guide).toContain('You do not write code');
+    expect(guide).not.toContain('Reviews are disabled in minimal mode');
   });
 
-  it('uses runtime reviewer dispatch_and_ingest guidance when reviewer is not configured', async () => {
+  it('includes dispatch instructions even when reviewer is not configured', async () => {
     const manager = new SettingsManager();
     await manager.updateRuntimeSettings({ reviewer: null as any });
 
@@ -58,12 +55,11 @@ describe('spec-workflow-guide', () => {
     expect(result.success).toBe(true);
 
     const guide = String(result.data?.guide ?? '');
-    expect(guide).toContain('`action: "dispatch_and_ingest"`');
-    expect(guide).not.toContain('Review implementation<br/>directly');
+    expect(guide).toContain('dispatch_and_ingest');
     expect(guide).not.toContain('review yourself');
   });
 
-  it('shows review-disabled copy only in minimal mode', async () => {
+  it('shows review-disabled text only in minimal mode', async () => {
     const manager = new SettingsManager();
     await manager.updateRuntimeSettings({ discipline: 'minimal' });
 
@@ -71,8 +67,7 @@ describe('spec-workflow-guide', () => {
     expect(result.success).toBe(true);
 
     const guide = String(result.data?.guide ?? '');
-    expect(guide).toContain('Reviews are disabled in minimal mode.');
-    expect(guide).toContain('Review dispatch is skipped in minimal mode');
-    expect(guide).not.toContain('You DISPATCH reviews through \\`dispatch-runtime\\` single-action orchestration.');
+    expect(guide).toContain('Reviews are disabled in minimal mode');
+    expect(guide).not.toContain('role:`reviewer`');
   });
 });

@@ -75,332 +75,68 @@ function getSpecWorkflowGuide(disciplineMode: 'full' | 'standard' | 'minimal', i
   const reviewsRequired = disciplineMode !== 'minimal';
   return `# Spec Development Workflow
 
-## Overview
+You are the orchestrator. You write spec documents, not code. Phases run in order: Requirements → Design → Tasks → Implementation. One spec at a time, kebab-case names.
 
-You guide users through spec-driven development. Transform rough ideas into detailed specifications through Requirements → Design → Tasks → Implementation phases. Follow this workflow exactly to avoid errors.
-Feature names use kebab-case (e.g., user-authentication). Create ONE spec at a time.
-
-**Discipline Mode:** ${disciplineMode}
-${disciplineMode === 'full' ? '- TDD required, code reviews enabled' : disciplineMode === 'standard' ? '- Code reviews enabled (no TDD requirement)' : '- Verification only (no reviews)'}
+**Discipline:** ${disciplineMode} — ${disciplineMode === 'full' ? 'TDD + code reviews' : disciplineMode === 'standard' ? 'code reviews (no TDD)' : 'verification only'}
 
 ## Before Starting
 
-**Recap your understanding** of what the user wants to build, then ask:
-> "Clear enough for spec, or brainstorm first?"
+Recap your understanding, then ask: "Clear enough for spec, or brainstorm first?"
+If the idea needs refinement, use \`get-brainstorm-guide\` first.
 
-If the idea needs refinement, use \`get-brainstorm-guide\` to explore before formal spec creation.
+## Phases 1-3: Spec Documents
 
-## Workflow Diagram
-\`\`\`mermaid
-flowchart TD
-    Start([Start: User requests feature]) --> CheckSteering{Steering docs exist?}
-    CheckSteering -->|Yes| P1_Load[Read steering docs:<br/>.spec-context/steering/*.md]
-    CheckSteering -->|No| P1_Template
+Each phase follows the same pattern:
+1. Use the injected template from \`data.templates.{phase}\` (requirements, design, or tasks)
+2. If template is missing, stop and ask user to retry
+3. Read steering docs from \`.spec-context/steering/\` if they exist
+4. Create the document at \`.spec-context/specs/{spec-name}/{phase}.md\`
+5. Request approval: call \`approvals\` with action:\`request\`, filePath only (never content)
+6. Call \`wait-for-approval\` with the approvalId — blocks until resolved
+7. On approved: proceed to next phase. On needs-revision: update and re-request. On rejected: stop.
 
-    %% Phase 1: Requirements
-    P1_Load --> P1_Template[Use injected server template:<br/>requirements-template.md]
-    P1_Template --> P1_Research[Web search if available]
-    P1_Research --> P1_Create[Create file:<br/>.spec-context/specs/{name}/<br/>requirements.md]
-    P1_Create --> P1_Approve[approvals<br/>action: request<br/>filePath only]
-    P1_Approve --> P1_Wait[wait-for-approval<br/>blocks until resolved<br/>auto-deletes]
-    P1_Wait --> P1_Check{Status?}
-    P1_Check -->|needs-revision| P1_Update[Update document using user comments as guidance]
-    P1_Update --> P1_Approve
-    P1_Check -->|rejected| P1_Stop[Ask user for guidance]
+Verbal approval is never accepted — only dashboard approval via \`wait-for-approval\`.
 
-    %% Phase 2: Design
-    P1_Check -->|approved| P2_Template[Use injected server template:<br/>design-template.md]
-    P2_Template --> P2_Analyze[Analyze codebase patterns]
-    P2_Analyze --> P2_Create[Create file:<br/>.spec-context/specs/{name}/<br/>design.md]
-    P2_Create --> P2_Approve[approvals<br/>action: request<br/>filePath only]
-    P2_Approve --> P2_Wait[wait-for-approval<br/>blocks until resolved<br/>auto-deletes]
-    P2_Wait --> P2_Check{Status?}
-    P2_Check -->|needs-revision| P2_Update[Update document using user comments as guidance]
-    P2_Update --> P2_Approve
-    P2_Check -->|rejected| P2_Stop[Ask user for guidance]
+### Phase-specific notes
 
-    %% Phase 3: Tasks
-    P2_Check -->|approved| P3_Template[Use injected server template:<br/>tasks-template.md]
-    P3_Template --> P3_Break[Convert design to tasks]
-    P3_Break --> P3_Create[Create file:<br/>.spec-context/specs/{name}/<br/>tasks.md]
-    P3_Create --> P3_Approve[approvals<br/>action: request<br/>filePath only]
-    P3_Approve --> P3_Wait[wait-for-approval<br/>blocks until resolved<br/>auto-deletes]
-    P3_Wait --> P3_Check{Status?}
-    P3_Check -->|needs-revision| P3_Update[Update document using user comments as guidance]
-    P3_Update --> P3_Approve
-    P3_Check -->|rejected| P3_Stop[Ask user for guidance]
+**Requirements**: Research market/user expectations if web search is available (current year: ${currentYear}). Write requirements as user stories with EARS acceptance criteria.
 
-    %% Phase 4: Implementation (ONE task at a time)
-    P3_Check -->|approved| P4_Ready[Spec complete.<br/>Ready to implement?]
-    P4_Ready -->|Yes| P4_Pick[Pick ONE next pending task<br/>NEVER multiple]
-    P4_Pick --> P4_Dispatch[Dispatch to implementer:<br/>${implementerCli}]
-    P4_Dispatch --> P4_Verify[Verify: task marked [x],<br/>tests pass]
-    P4_Verify --> P4_Review{Reviews enabled?}
-    P4_Review -->|Yes| P4_DoReview[Dispatch reviewer via<br/>dispatch-runtime dispatch_and_ingest]
-    P4_DoReview --> P4_ReviewResult{Review result?}
-    P4_ReviewResult -->|Issues found| P4_Fix[Dispatch implementer<br/>to fix issues]
-    P4_Fix --> P4_DoReview
-    P4_ReviewResult -->|Approved| P4_More{More tasks?}
-    P4_Review -->|No minimal mode| P4_More
-    P4_More -->|Yes| P4_Pick
-    P4_More -->|No| End([Implementation Complete])
+**Design**: Analyze codebase for patterns to reuse. Research technology choices if web search is available (current year: ${currentYear}).
 
-    style Start fill:#e1f5e1
-    style End fill:#e1f5e1
-    style P1_Check fill:#ffe6e6
-    style P2_Check fill:#ffe6e6
-    style P3_Check fill:#ffe6e6
-    style P1_Wait fill:#e3f2fd
-    style P2_Wait fill:#e3f2fd
-    style P3_Wait fill:#e3f2fd
-    style CheckSteering fill:#fff4e6
-    style P4_More fill:#fff4e6
-\`\`\`
+**Tasks**: Follow the format rules in the tasks template exactly — the approval validator enforces them. Each task needs a numeric ID, \`_Prompt:\` with Role/Task/Restrictions/Success sections, \`_Requirements:\` references, and \`_Leverage:\` file paths. After tasks are approved, ask: "Spec complete. Ready to implement?"
 
-## Spec Workflow
-
-### Phase 1: Requirements
-**Purpose**: Define what to build based on user needs.
-
-**File Operations**:
-- Use injected template payload from this tool response first: \`data.templates.requirements\`
-- Read steering docs: \`.spec-context/steering/*.md\` (if they exist)
-- Use server template: \`requirements-template.md\` from injected payload
-- Create document: \`.spec-context/specs/{spec-name}/requirements.md\`
-
-**Tools**:
-- approvals: Create approval requests (action: request)
-- wait-for-approval: Block until user responds, auto-cleans up
-
-**Process**:
-1. Check if \`.spec-context/steering/\` exists (if yes, read product.md, tech.md, structure.md, principles.md)
-2. Use \`data.templates.requirements.content\` from this tool response when available (includes resolved source + path)
-3. If \`data.templates.requirements\` is missing, stop and ask user to retry tool loading (no local template fallback)
-4. Research market/user expectations (if web search available, current year: ${currentYear})
-5. Generate requirements as user stories with EARS criteria
-6. Create \`requirements.md\` at \`.spec-context/specs/{spec-name}/requirements.md\`
-7. Request approval using approvals tool with action:'request' (filePath only, never content)
-8. Call wait-for-approval with the approvalId - this blocks until user responds and auto-deletes
-9. Handle result:
-   - approved: proceed to Phase 2
-   - needs-revision: update document with feedback, create NEW approval request, wait again
-   - rejected: STOP, ask user for guidance
-
-### Phase 2: Design
-**Purpose**: Create technical design addressing all requirements.
-
-**File Operations**:
-- Use injected template payload from this tool response first: \`data.templates.design\`
-- Use server template: \`design-template.md\` from injected payload
-- Create document: \`.spec-context/specs/{spec-name}/design.md\`
-
-**Tools**:
-- approvals: Create approval requests (action: request)
-- wait-for-approval: Block until user responds, auto-cleans up
-
-**Process**:
-1. Use \`data.templates.design.content\` from this tool response when available (includes resolved source + path)
-2. If \`data.templates.design\` is missing, stop and ask user to retry tool loading (no local template fallback)
-3. Analyze codebase for patterns to reuse
-4. Research technology choices (if web search available, current year: ${currentYear})
-5. Generate design with all template sections
-6. Create \`design.md\` at \`.spec-context/specs/{spec-name}/design.md\`
-7. Request approval using approvals tool with action:'request'
-8. Call wait-for-approval with the approvalId - this blocks until user responds and auto-deletes
-9. Handle result:
-   - approved: proceed to Phase 3
-   - needs-revision: update document with feedback, create NEW approval request, wait again
-   - rejected: STOP, ask user for guidance
-
-### Phase 3: Tasks
-**Purpose**: Break design into atomic implementation tasks.
-
-**File Operations**:
-- Use injected template payload from this tool response first: \`data.templates.tasks\`
-- Use server template: \`tasks-template.md\` from injected payload
-- Create document: \`.spec-context/specs/{spec-name}/tasks.md\`
-
-**Tools**:
-- approvals: Create approval requests (action: request)
-- wait-for-approval: Block until user responds, auto-cleans up
-
-**Process**:
-1. Use \`data.templates.tasks.content\` from this tool response when available (includes resolved source + path)
-2. If \`data.templates.tasks\` is missing, stop and ask user to retry tool loading (no local template fallback)
-3. Convert design into atomic tasks (1-3 files each)
-4. Include file paths and requirement references
-5. **IMPORTANT**: Generate a _Prompt field for each task with:
-   - Role: specialized developer role for the task
-   - Task: clear description with context references
-   - Restrictions: what not to do, constraints to follow
-   - _Leverage: files/utilities to use
-   - _Requirements: requirements that the task implements
-   - Success: specific completion criteria
-   - Instructions: "Mark this ONE task as [-] in tasks.md before starting. Follow the loaded implementer guide rules (${disciplineMode === 'full' ? 'TDD required' : 'verification required'}). When done, mark [x] in tasks.md.${disciplineMode !== 'minimal' ? ' Then perform code review using the loaded reviewer guide.' : ''}"
-   - Start the prompt with "Implement the task for spec {spec-name}, first call get-implementer-guide to load implementation rules then implement the task:"
-6. Create \`tasks.md\` at \`.spec-context/specs/{spec-name}/tasks.md\`
-7. Request approval using approvals tool with action:'request'
-8. Call wait-for-approval with the approvalId - this blocks until user responds and auto-deletes
-9. Handle result:
-   - approved: "Spec complete. Ready to implement?"
-   - needs-revision: update document with feedback, create NEW approval request, wait again
-   - rejected: STOP, ask user for guidance
-
-### Phase 4: Implementation
+## Phase 4: Implementation
 ${!implementerCli ? `
-**No implementer configured.** Ask the user to set the implementer provider in the dashboard settings before proceeding.
-` : `**Purpose**: Execute tasks ONE AT A TIME with ${disciplineMode === 'full' ? 'TDD, ' : ''}verification${disciplineMode !== 'minimal' ? ', and review' : ''}.
-
-**Agent Dispatch:**
-- Implementer CLI: \`${implementerCli}\`
-${reviewsRequired
-  ? '- Reviewer dispatch: runtime-owned via `dispatch-runtime` (`dispatch_and_ingest`)'
-  : '- Reviewer dispatch: not required in minimal mode'}
-- You are the ORCHESTRATOR. You do NOT implement tasks yourself.
-- You DISPATCH each task through \`dispatch-runtime\` single-action orchestration.
-${reviewsRequired ? '- You DISPATCH reviews through \`dispatch-runtime\` single-action orchestration.' : '- Reviews are disabled in minimal mode.'}
-
-**File Operations**:
-- Read tasks.md to check status and pick next task
-- Edit tasks.md to update status:
-  - \`- [ ]\` = Pending task
-  - \`- [-]\` = In-progress task (ONLY ONE at a time)
-  - \`- [x]\` = Completed task
-
-**Tools**:
-- spec-status: Check overall progress
-- dispatch-runtime: Validate/ingest structured agent output and read runtime snapshot state
-- Direct editing: Mark tasks as in-progress [-] or complete [x] in tasks.md
-- Bash: Capture base SHA and inspect git diff
-${reviewsRequired
-  ? '- dispatch-runtime: Dispatch reviewer using `dispatch_and_ingest`'
-  : '- Review dispatch is skipped in minimal mode'}
-
-\`\`\`
-╔══════════════════════════════════════════════════════════════╗
-║  CRITICAL: ONE TASK AT A TIME                               ║
-║                                                              ║
-║  - NEVER mark multiple tasks as [-] in-progress              ║
-║  - NEVER start task N+1 before task N is [x] AND reviewed    ║
-║  - NEVER batch tasks together                                ║
-║  - Each task = implement → verify → review → THEN next       ║
-╚══════════════════════════════════════════════════════════════╝
-\`\`\`
-
-**Process:**
-
-**Repeat for EACH task, sequentially:**
-
-1. **Pick ONE task**: Check spec-status, read tasks.md, identify the next pending \`[ ]\` task
-2. **Capture base SHA** (for reviewer later):
-   \`\`\`bash
-   git rev-parse HEAD
-   \`\`\`
-   Save this SHA — you'll pass it to the reviewer.
-3. **Build the task prompt**: Read the _Prompt field. Combine with:
-   - The spec name and task ID
-   - File paths from _Leverage fields
-   - Requirements from _Requirements fields
-   - Instructions to mark [-] before starting and [x] when done
-4. **Initialize runtime state for this task**:
-   - Call \`dispatch-runtime\` with:
-     - \`action: "init_run"\`
-     - \`specName: "{spec-name}"\`
-     - \`taskId: "{taskId}"\`
-   - Save \`runId\` for subsequent runtime actions.
-5. **Dispatch implementer and ingest result in one action:**
-   - Call \`dispatch-runtime\` with:
-     - \`action: "dispatch_and_ingest"\`
-     - \`runId: "{runId}"\`
-     - \`role: "implementer"\`
-     - \`taskId: "{taskId}"\`
-     - \`maxOutputTokens: 1200\`
-   - Use this single runtime action for dispatch execution and result ingestion.
-   - Omit \`taskPrompt\` to use runtime ledger task prompt (fail fast if missing).
-   - Runtime compiles prompt, executes provider, validates strict contract, ingests output, and returns \`nextAction\`.
-   - Use returned \`execution.contractOutputPath\` and \`execution.debugOutputPath\` for diagnostics.
-6. **Verify task completion**:
-   - Check tasks.md — task should now be [x].
-   - Get the diff (this is all you need to see):
-     \`\`\`bash
-     git diff {base-sha}..HEAD
-     \`\`\`
-7. **Review**${disciplineMode !== 'minimal' ? '' : ' (skipped in minimal mode)'}:
-   ${disciplineMode === 'minimal'
-      ? '   - Skip review in minimal mode.'
-      : `   - Call \`dispatch-runtime\` with:
-     - \`action: "dispatch_and_ingest"\`
-     - \`runId: "{runId}"\`
-     - \`role: "reviewer"\`
-     - \`taskId: "{taskId}"\`
-     - \`maxOutputTokens: 1200\`
-   - Omit \`taskPrompt\` to use runtime ledger task prompt (fail fast if missing).
-   - Reviewer context remains explicit here: use base SHA and run \`git diff {base-sha}..HEAD\` before/while reviewing.
-   - Runtime executes reviewer dispatch and ingests strict contract in one action.`}
-   - If issues found: dispatch implementer again to fix, then re-review
-   - If approved: proceed to next task
-8. **Repeat from step 1** for the next pending task
-
-**CRITICAL rules:**
-- NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`
-- NEVER dispatch multiple tasks at once — wait for each to complete
-- NEVER skip the review step
-- NEVER branch orchestration state from raw logs; only use \`dispatch-runtime\` validated output
-- If the implementer agent fails or produces bad output, dispatch it again with clearer instructions`}
-
-## Workflow Rules
-
-- Create documents directly at specified file paths
-- Use server-injected template payloads from this tool response
-- Follow exact template structures
-- Get explicit user approval between phases using: approvals action:'request' → wait-for-approval
-- Complete phases in sequence (no skipping)
-- One spec at a time
-- Use kebab-case for spec names
-- Approval requests: provide filePath only, never content
-- wait-for-approval handles blocking AND cleanup automatically
-- CRITICAL: Verbal approval is NEVER accepted - dashboard only
-- NEVER proceed on user saying "approved" - use wait-for-approval tool
-- Steering docs are optional - only create when explicitly requested
-- **CRITICAL: ONE task at a time during implementation — never batch, never parallelize**
-- **CRITICAL: NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`**
-${reviewsRequired ? '- **CRITICAL: NEVER review tasks yourself — always dispatch to reviewer via `dispatch-runtime` `dispatch_and_ingest`**' : ''}
-
-## Implementation Review Workflow
-${disciplineMode === 'minimal' ? `
-Reviews are disabled in minimal mode. Focus on verification before completion.
-**Still enforce: ONE task at a time. Complete and verify before starting next.**
+No implementer configured. Ask the user to set the implementer provider in dashboard settings before proceeding.
 ` : `
-**MANDATORY after EACH task** (${disciplineMode === 'full' ? 'TDD + ' : ''}verification + review):
+You do not write code. You dispatch each task to \`${implementerCli}\` via \`dispatch-runtime\`.
+${reviewsRequired ? `After each task completes, dispatch a reviewer via \`dispatch-runtime\`.` : 'Reviews are disabled in minimal mode.'}
 
-For EACH task:
-1. **Implement**: Dispatch using \`dispatch-runtime\` \`dispatch_and_ingest\` (role=\`implementer\`) — agent calls \`get-implementer-guide\`, follows ${disciplineMode === 'full' ? 'TDD' : 'verification'} rules, marks [x]
-   - Guide policy: call \`get-implementer-guide\` in \`mode:"full"\` once per run, then \`mode:"compact"\` on later tasks
-2. **Review**: Dispatch reviewer via \`dispatch-runtime\` \`dispatch_and_ingest\` (role=\`reviewer\`) — check spec compliance, code quality, principles
-3. **Handle feedback:**
-   - If issues found: dispatch implementer again to fix, re-verify, dispatch reviewer again
-   - If same issue appears twice: runtime returns \`halt_and_escalate\`; orchestrator takes over
-   - If approved: START the next task (go back to step 1)
+**For each task, sequentially:**
 
-**NEVER start the next task before the current task is reviewed and approved.**
-**NEVER have more than one task marked [-] in-progress at any time.**
-**NEVER implement tasks yourself — always dispatch to \`${implementerCli}\`.**
-**NEVER review tasks yourself — always dispatch to reviewer via \`dispatch-runtime\` \`dispatch_and_ingest\`.**
-`}
+1. Read tasks.md, pick the next \`[ ]\` task. Only one \`[-]\` at a time.
+2. Capture base SHA: \`git rev-parse HEAD\`
+3. Call \`dispatch-runtime\` action:\`init_run\` with specName and taskId. Save the returned runId.
+4. Call \`dispatch-runtime\` action:\`dispatch_and_ingest\` with runId, role:\`implementer\`, taskId, maxOutputTokens:1200. Omit taskPrompt to use the ledger prompt. Follow the returned nextAction.
+5. Verify: task should be \`[x]\`, check \`git diff {base-sha}..HEAD\`.
+${reviewsRequired ? `6. Call \`dispatch-runtime\` action:\`dispatch_and_ingest\` with runId, role:\`reviewer\`, taskId, maxOutputTokens:1200. If issues: re-dispatch implementer to fix, then re-review. If same issue twice: runtime returns halt_and_escalate.` : ''}
+${reviewsRequired ? '7' : '6'}. Proceed to the next task.
+
+Only use \`dispatch-runtime\` results for orchestration decisions — never raw logs.
+If the implementer fails or produces bad output, re-dispatch with clearer instructions.`}
+
 ## File Structure
+
 \`\`\`
 .spec-context/
-├── specs/
-│   └── {spec-name}/
-│       ├── requirements.md
-│       ├── design.md
-│       └── tasks.md
-└── steering/
+├── specs/{spec-name}/
+│   ├── requirements.md
+│   ├── design.md
+│   └── tasks.md
+└── steering/  (optional)
     ├── product.md
     ├── tech.md
     ├── structure.md
     └── principles.md
-\`\`\`
-
-Template files are server-bundled and injected into this tool response.`;
+\`\`\``;
 }
